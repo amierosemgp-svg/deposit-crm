@@ -7,7 +7,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -73,7 +72,10 @@ export function TopNav() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => injectLiveDeposit()}
+            onClick={() => {
+              injectLiveDeposit();
+              router.push("/deposits");
+            }}
             title="Simulate a new bot-detected deposit"
           >
             <Play className="h-3.5 w-3.5" />
@@ -96,7 +98,7 @@ export function TopNav() {
               )}
             />
             <DropdownMenuContent align="end" className="w-80">
-              <DropdownMenuLabel className="flex items-center justify-between">
+              <div className="flex items-center justify-between px-1.5 py-1 text-xs font-medium text-muted-foreground">
                 <span>Notifications</span>
                 {notifications.length > 0 && (
                   <button
@@ -106,7 +108,7 @@ export function TopNav() {
                     Clear all
                   </button>
                 )}
-              </DropdownMenuLabel>
+              </div>
               <DropdownMenuSeparator />
               {notifications.length === 0 ? (
                 <div className="px-3 py-4 text-center text-xs text-muted-foreground">
@@ -157,12 +159,12 @@ export function TopNav() {
               )}
             />
             <DropdownMenuContent align="end" className="w-52">
-              <DropdownMenuLabel>
-                <div className="text-sm">{CURRENT_USER.full_name}</div>
-                <div className="text-[11px] font-normal text-muted-foreground">
+              <div className="px-1.5 py-1.5">
+                <div className="text-sm font-medium">{CURRENT_USER.full_name}</div>
+                <div className="text-[11px] text-muted-foreground">
                   {CURRENT_USER.email}
                 </div>
-              </DropdownMenuLabel>
+              </div>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => router.push("/login")}>
                 <LogOut className="h-4 w-4" />
