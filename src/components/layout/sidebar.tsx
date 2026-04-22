@@ -11,7 +11,6 @@ import {
   History,
   BarChart3,
   Settings,
-  Network,
   Landmark,
   KeyRound,
 } from "lucide-react";
@@ -19,7 +18,6 @@ import { cn } from "@/lib/utils";
 import { useStore } from "@/lib/store";
 
 const NAV = [
-  { href: "/hierarchy", label: "Hierarchy", icon: Network },
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/deposits", label: "Deposits", icon: Wallet, badge: "pending_deposits" as const },
   { href: "/players", label: "Players", icon: Users },
