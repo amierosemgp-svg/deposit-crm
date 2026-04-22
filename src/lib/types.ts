@@ -61,6 +61,8 @@ export type Deposit = {
   player_username: string;
   deposit_amount: number;
   bank_name: BankName;
+  bank_account_number: string;
+  bank_account_holder: string;
   bonus_percentage: number;
   bonus_amount: number;
   total_amount: number;

@@ -161,6 +161,8 @@ export const useStore = create<Store>((set, get) => ({
       player_username: pick.player_username,
       deposit_amount: pick.deposit_amount,
       bank_name: pick.bank_name,
+      bank_account_number: pick.bank_account_number,
+      bank_account_holder: pick.bank_account_holder,
       bonus_percentage: 0,
       bonus_amount: 0,
       total_amount: pick.deposit_amount,

@@ -159,6 +159,12 @@ export default function DepositsPage() {
                         <span className="inline-flex items-center rounded-md border bg-card px-1.5 py-0.5 text-[11px]">
                           {d.bank_name}
                         </span>
+                        <div className="mt-1 text-[12px] leading-tight">
+                          {d.bank_account_holder}
+                        </div>
+                        <div className="text-[10px] font-mono text-muted-foreground">
+                          {d.bank_account_number}
+                        </div>
                       </td>
                       <td className="px-3 py-2">
                         {editable ? (
