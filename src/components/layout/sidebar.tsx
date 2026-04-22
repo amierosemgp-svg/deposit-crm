@@ -12,6 +12,7 @@ import {
   BarChart3,
   Settings,
   Network,
+  Landmark,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useStore } from "@/lib/store";
@@ -22,6 +23,7 @@ const NAV = [
   { href: "/deposits", label: "Deposits", icon: Wallet, badge: "pending_deposits" as const },
   { href: "/players", label: "Players", icon: Users },
   { href: "/withdrawals", label: "Withdrawals", icon: Banknote, badge: "pending_withdrawals" as const },
+  { href: "/bank-accounts", label: "Bank Accounts", icon: Landmark },
   { href: "/game-transfer", label: "Game Credit Transfer", icon: ArrowLeftRight },
   { href: "/history", label: "Transaction History", icon: History },
   { href: "/reports", label: "Reports", icon: BarChart3 },

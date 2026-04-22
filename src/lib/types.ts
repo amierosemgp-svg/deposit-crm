@@ -127,4 +127,30 @@ export type GameCredit = {
   last_updated_at: string;
 };
 
+export type CompanyBankAccount = {
+  account_id: number;
+  company_id: number;
+  bank_name: BankName;
+  account_number: string;
+  account_holder: string;
+  label?: string;
+  current_balance: number;
+  status: "active" | "inactive";
+  created_at: string;
+};
+
+export type BankTransferStatus = "completed" | "failed";
+
+export type BankTransfer = {
+  transfer_id: number;
+  from_account_id: number;
+  to_account_id: number;
+  amount: number;
+  reference?: string;
+  notes?: string;
+  handled_by_user_id: number;
+  status: BankTransferStatus;
+  created_at: string;
+};
+
 export const BONUS_OPTIONS = [0, 5, 10, 20, 30, 50, 100] as const;

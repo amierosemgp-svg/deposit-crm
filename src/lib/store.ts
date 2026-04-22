@@ -2,6 +2,8 @@
 
 import { create } from "zustand";
 import type {
+  BankTransfer,
+  CompanyBankAccount,
   Deposit,
   GameCredit,
   GameName,
@@ -10,6 +12,8 @@ import type {
   Withdrawal,
 } from "./types";
 import {
+  BANK_TRANSFERS,
+  COMPANY_BANK_ACCOUNTS,
   DEPOSITS,
   GAME_CREDITS,
   GAME_TRANSFERS,
@@ -30,12 +34,19 @@ export type ImportedPlayerInput = Omit<
   "player_id" | "registration_date" | "status" | "total_deposits" | "total_withdrawals"
 >;
 
+export type CompanyBankAccountInput = Omit<
+  CompanyBankAccount,
+  "account_id" | "created_at"
+>;
+
 type Store = {
   deposits: Deposit[];
   withdrawals: Withdrawal[];
   gameCredits: GameCredit[];
   gameTransfers: GameTransfer[];
   importedPlayers: Player[];
+  companyBankAccounts: CompanyBankAccount[];
+  bankTransfers: BankTransfer[];
   notifications: Notification[];
 
   // Derived helpers
@@ -43,6 +54,22 @@ type Store = {
 
   // Player import
   importPlayers: (rows: ImportedPlayerInput[]) => Player[];
+
+  // Company bank account CRUD
+  addCompanyBankAccount: (input: CompanyBankAccountInput) => CompanyBankAccount;
+  updateCompanyBankAccount: (
+    accountId: number,
+    patch: Partial<CompanyBankAccountInput>,
+  ) => void;
+  deleteCompanyBankAccount: (accountId: number) => void;
+  transferBetweenCompanyAccounts: (input: {
+    fromAccountId: number;
+    toAccountId: number;
+    amount: number;
+    reference?: string;
+    notes?: string;
+    handledByUserId: number;
+  }) => BankTransfer | null;
 
   // Deposit actions
   updateDepositDraft: (
@@ -79,6 +106,8 @@ export const useStore = create<Store>((set, get) => ({
   gameCredits: GAME_CREDITS,
   gameTransfers: GAME_TRANSFERS,
   importedPlayers: [],
+  companyBankAccounts: COMPANY_BANK_ACCOUNTS,
+  bankTransfers: BANK_TRANSFERS,
   notifications: [],
 
   getCreditBalance: (playerId, game) => {
@@ -109,6 +138,91 @@ export const useStore = create<Store>((set, get) => ({
       message: `Imported ${created.length} new player${created.length === 1 ? "" : "s"}`,
     });
     return created;
+  },
+
+  addCompanyBankAccount: (input) => {
+    const maxId = Math.max(
+      8000,
+      ...get().companyBankAccounts.map((a) => a.account_id),
+    );
+    const account: CompanyBankAccount = {
+      ...input,
+      account_id: maxId + 1,
+      created_at: new Date().toISOString(),
+    };
+    set((s) => ({
+      companyBankAccounts: [account, ...s.companyBankAccounts],
+    }));
+    return account;
+  },
+
+  updateCompanyBankAccount: (accountId, patch) => {
+    set((s) => ({
+      companyBankAccounts: s.companyBankAccounts.map((a) =>
+        a.account_id === accountId ? { ...a, ...patch } : a,
+      ),
+    }));
+  },
+
+  deleteCompanyBankAccount: (accountId) => {
+    set((s) => ({
+      companyBankAccounts: s.companyBankAccounts.filter(
+        (a) => a.account_id !== accountId,
+      ),
+    }));
+  },
+
+  transferBetweenCompanyAccounts: ({
+    fromAccountId,
+    toAccountId,
+    amount,
+    reference,
+    notes,
+    handledByUserId,
+  }) => {
+    if (fromAccountId === toAccountId || amount <= 0) return null;
+    const accounts = get().companyBankAccounts;
+    const from = accounts.find((a) => a.account_id === fromAccountId);
+    const to = accounts.find((a) => a.account_id === toAccountId);
+    if (!from || !to) return null;
+    if (amount > from.current_balance) return null;
+
+    const transfer: BankTransfer = {
+      transfer_id: Math.max(11000, ...get().bankTransfers.map((t) => t.transfer_id)) + 1,
+      from_account_id: fromAccountId,
+      to_account_id: toAccountId,
+      amount,
+      reference: reference?.trim() || undefined,
+      notes: notes?.trim() || undefined,
+      handled_by_user_id: handledByUserId,
+      status: "completed",
+      created_at: new Date().toISOString(),
+    };
+
+    set((s) => ({
+      companyBankAccounts: s.companyBankAccounts.map((a) => {
+        if (a.account_id === fromAccountId) {
+          return {
+            ...a,
+            current_balance: +(a.current_balance - amount).toFixed(2),
+          };
+        }
+        if (a.account_id === toAccountId) {
+          return {
+            ...a,
+            current_balance: +(a.current_balance + amount).toFixed(2),
+          };
+        }
+        return a;
+      }),
+      bankTransfers: [transfer, ...s.bankTransfers],
+    }));
+
+    get().pushNotification({
+      kind: "topup",
+      message: `Transferred RM ${amount.toFixed(2)} from ${from.bank_name} ${from.account_number.slice(-4)} → ${to.bank_name} ${to.account_number.slice(-4)}`,
+    });
+    return transfer;
   },
 
   updateDepositDraft: (depositId, patch) => {

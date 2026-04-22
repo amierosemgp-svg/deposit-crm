@@ -1,5 +1,7 @@
 import type {
+  BankTransfer,
   Company,
+  CompanyBankAccount,
   Deposit,
   GameCredit,
   GameTransfer,
@@ -670,6 +672,27 @@ export const GAME_TRANSFERS: GameTransfer[] = [
     handled_by_user_id: 101,
     created_at: iso(900),
   },
+];
+
+// Company bank accounts (the operator's receiving accounts where players deposit to)
+export const COMPANY_BANK_ACCOUNTS: CompanyBankAccount[] = [
+  { account_id: 8001, company_id: 1, bank_name: "Maybank", account_number: "5145 8800 1122", account_holder: "Leader Alpha Sdn Bhd", label: "Main", current_balance: 24850.5, status: "active", created_at: iso(60 * 24 * 200) },
+  { account_id: 8002, company_id: 1, bank_name: "CIMB", account_number: "7066 4422 9911", account_holder: "Leader Alpha Sdn Bhd", label: "Backup", current_balance: 7320.0, status: "active", created_at: iso(60 * 24 * 180) },
+  { account_id: 8003, company_id: 1, bank_name: "Public Bank", account_number: "4-9011-2233-44", account_holder: "Leader Alpha Sdn Bhd", label: "Payouts", current_balance: 12100.75, status: "active", created_at: iso(60 * 24 * 150) },
+  { account_id: 8004, company_id: 2, bank_name: "Maybank", account_number: "5145 7700 8866", account_holder: "Leader Bravo Sdn Bhd", label: "Main", current_balance: 18420.0, status: "active", created_at: iso(60 * 24 * 175) },
+  { account_id: 8005, company_id: 2, bank_name: "Hong Leong", account_number: "381 4400 9988", account_holder: "Leader Bravo Sdn Bhd", current_balance: 5640.25, status: "active", created_at: iso(60 * 24 * 140) },
+  { account_id: 8006, company_id: 3, bank_name: "CIMB", account_number: "7022 6655 1100", account_holder: "Leader Charlie Sdn Bhd", label: "Main", current_balance: 31200.0, status: "active", created_at: iso(60 * 24 * 160) },
+  { account_id: 8007, company_id: 4, bank_name: "Public Bank", account_number: "4-9920-1144-77", account_holder: "Leader Delta Sdn Bhd", label: "Main", current_balance: 9870.5, status: "active", created_at: iso(60 * 24 * 130) },
+  { account_id: 8008, company_id: 5, bank_name: "Maybank", account_number: "5145 9911 4422", account_holder: "Leader Echo Sdn Bhd", label: "Main", current_balance: 14250.0, status: "active", created_at: iso(60 * 24 * 120) },
+  { account_id: 8009, company_id: 5, bank_name: "Hong Leong", account_number: "381 7733 5511", account_holder: "Leader Echo Sdn Bhd", label: "Backup", current_balance: 0, status: "inactive", created_at: iso(60 * 24 * 90) },
+];
+
+export const BANK_TRANSFERS: BankTransfer[] = [
+  { transfer_id: 11001, from_account_id: 8001, to_account_id: 8003, amount: 5000, reference: "TRF-MBB-PBB-770291", notes: "Top up payouts account", handled_by_user_id: 11, status: "completed", created_at: iso(120) },
+  { transfer_id: 11002, from_account_id: 8004, to_account_id: 8005, amount: 2500, reference: "TRF-MBB-HLB-882104", handled_by_user_id: 12, status: "completed", created_at: iso(60 * 6) },
+  { transfer_id: 11003, from_account_id: 8002, to_account_id: 8001, amount: 3000, reference: "TRF-CIMB-MBB-558720", notes: "Consolidate to main", handled_by_user_id: 11, status: "completed", created_at: iso(60 * 18) },
+  { transfer_id: 11004, from_account_id: 8006, to_account_id: 8007, amount: 4500, reference: "TRF-CIMB-PBB-219007", notes: "Cross-company settlement", handled_by_user_id: 1, status: "completed", created_at: iso(60 * 26) },
+  { transfer_id: 11005, from_account_id: 8008, to_account_id: 8009, amount: 1200, reference: "TRF-MBB-HLB-991204", handled_by_user_id: 15, status: "failed", created_at: iso(60 * 40) },
 ];
 
 // Pool of simulated "new" deposits that can be auto-injected for live-feed demo
