@@ -15,6 +15,15 @@ export function formatDateTime(iso: string): string {
   return `${day} ${month} ${year}, ${hh}:${mm}`;
 }
 
+export function formatShortDateTime(iso: string): string {
+  const d = new Date(iso);
+  const day = String(d.getDate()).padStart(2, "0");
+  const month = d.toLocaleString("en-US", { month: "short" });
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${day} ${month}, ${hh}:${mm}`;
+}
+
 export function formatRelative(iso: string): string {
   const d = new Date(iso).getTime();
   const now = Date.now();

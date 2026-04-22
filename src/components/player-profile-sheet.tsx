@@ -2,7 +2,7 @@
 
 import { useStore } from "@/lib/store";
 import { PLAYERS, COMPANIES } from "@/lib/mock-data";
-import { formatRM, formatDateTime, formatRelative, initialsOf } from "@/lib/format";
+import { formatRM, formatShortDateTime, formatRelative, initialsOf } from "@/lib/format";
 import { GAMES } from "@/lib/types";
 import {
   Sheet,
@@ -144,26 +144,26 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
                   <p className="text-xs text-muted-foreground">No deposits yet.</p>
                 ) : (
                   <div className="rounded-md border overflow-hidden">
-                    <table className="w-full text-xs">
+                    <table className="w-full text-xs table-fixed">
                       <thead className="bg-muted/50 text-muted-foreground">
                         <tr>
-                          <th className="px-2.5 py-1.5 text-left font-medium">Date</th>
-                          <th className="px-2.5 py-1.5 text-right font-medium">Amount</th>
-                          <th className="px-2.5 py-1.5 text-left font-medium">Game</th>
-                          <th className="px-2.5 py-1.5 text-left font-medium">Status</th>
+                          <th className="px-2 py-1.5 text-left font-medium w-[34%]">Date</th>
+                          <th className="px-2 py-1.5 text-right font-medium w-[22%]">Amount</th>
+                          <th className="px-2 py-1.5 text-left font-medium w-[20%]">Game</th>
+                          <th className="px-2 py-1.5 text-right font-medium w-[24%]">Status</th>
                         </tr>
                       </thead>
                       <tbody>
                         {playerDeposits.map((d) => (
                           <tr key={d.deposit_id} className="border-t">
-                            <td className="px-2.5 py-1.5 whitespace-nowrap">
-                              {formatDateTime(d.deposit_date)}
+                            <td className="px-2 py-1.5 whitespace-nowrap">
+                              {formatShortDateTime(d.deposit_date)}
                             </td>
-                            <td className="px-2.5 py-1.5 text-right whitespace-nowrap">
+                            <td className="px-2 py-1.5 text-right whitespace-nowrap">
                               {formatRM(d.total_amount)}
                             </td>
-                            <td className="px-2.5 py-1.5">{d.selected_game ?? "—"}</td>
-                            <td className="px-2.5 py-1.5">
+                            <td className="px-2 py-1.5 whitespace-nowrap">{d.selected_game ?? "—"}</td>
+                            <td className="px-2 py-1.5 text-right whitespace-nowrap">
                               <StatusBadge status={d.status} />
                             </td>
                           </tr>
@@ -182,26 +182,26 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
                   <p className="text-xs text-muted-foreground">No withdrawals yet.</p>
                 ) : (
                   <div className="rounded-md border overflow-hidden">
-                    <table className="w-full text-xs">
+                    <table className="w-full text-xs table-fixed">
                       <thead className="bg-muted/50 text-muted-foreground">
                         <tr>
-                          <th className="px-2.5 py-1.5 text-left font-medium">Date</th>
-                          <th className="px-2.5 py-1.5 text-right font-medium">Amount</th>
-                          <th className="px-2.5 py-1.5 text-left font-medium">Game</th>
-                          <th className="px-2.5 py-1.5 text-left font-medium">Status</th>
+                          <th className="px-2 py-1.5 text-left font-medium w-[30%]">Date</th>
+                          <th className="px-2 py-1.5 text-right font-medium w-[20%]">Amount</th>
+                          <th className="px-2 py-1.5 text-left font-medium w-[20%]">Game</th>
+                          <th className="px-2 py-1.5 text-right font-medium w-[30%]">Status</th>
                         </tr>
                       </thead>
                       <tbody>
                         {playerWithdrawals.map((w) => (
                           <tr key={w.withdrawal_id} className="border-t">
-                            <td className="px-2.5 py-1.5 whitespace-nowrap">
-                              {formatDateTime(w.created_at)}
+                            <td className="px-2 py-1.5 whitespace-nowrap">
+                              {formatShortDateTime(w.created_at)}
                             </td>
-                            <td className="px-2.5 py-1.5 text-right whitespace-nowrap">
+                            <td className="px-2 py-1.5 text-right whitespace-nowrap">
                               {formatRM(w.requested_amount)}
                             </td>
-                            <td className="px-2.5 py-1.5">{w.game_name}</td>
-                            <td className="px-2.5 py-1.5">
+                            <td className="px-2 py-1.5 whitespace-nowrap">{w.game_name}</td>
+                            <td className="px-2 py-1.5 text-right whitespace-nowrap">
                               <StatusBadge status={w.status} />
                             </td>
                           </tr>
