@@ -10,13 +10,15 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { StatusBadge } from "@/components/status-badge";
 import { PlayerNameLink } from "@/components/player-name-link";
 import { ImportPlayersModal } from "@/components/import-players-modal";
-import { Search, Send, Upload } from "lucide-react";
+import { CreatePlayerModal } from "@/components/create-player-modal";
+import { Search, Send, Upload, UserPlus } from "lucide-react";
 
 export default function PlayersPage() {
   const importedPlayers = useStore((s) => s.importedPlayers);
   const [q, setQ] = useState("");
   const [companyFilter, setCompanyFilter] = useState<string>("all");
   const [importOpen, setImportOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
 
   const allPlayers = useMemo(
     () => [...importedPlayers, ...PLAYERS],
@@ -48,15 +50,25 @@ export default function PlayersPage() {
             )}
           </p>
         </div>
-        <Button
-          onClick={() => setImportOpen(true)}
-          variant="outline"
-          size="sm"
-          className="cursor-pointer"
-        >
-          <Upload className="h-3.5 w-3.5" />
-          Import Players
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            onClick={() => setImportOpen(true)}
+            variant="outline"
+            size="sm"
+            className="cursor-pointer"
+          >
+            <Upload className="h-3.5 w-3.5" />
+            Import Players
+          </Button>
+          <Button
+            onClick={() => setCreateOpen(true)}
+            size="sm"
+            className="cursor-pointer"
+          >
+            <UserPlus className="h-3.5 w-3.5" />
+            Create Player
+          </Button>
+        </div>
       </div>
 
       <Card className="overflow-hidden p-0 gap-0">
@@ -152,6 +164,7 @@ export default function PlayersPage() {
       </Card>
 
       <ImportPlayersModal open={importOpen} onOpenChange={setImportOpen} />
+      <CreatePlayerModal open={createOpen} onOpenChange={setCreateOpen} />
     </div>
   );
 }

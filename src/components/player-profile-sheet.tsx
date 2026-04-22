@@ -14,7 +14,7 @@ import {
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { StatusBadge } from "./status-badge";
 import { Separator } from "@/components/ui/separator";
-import { Send, MessageCircle, Phone, Calendar } from "lucide-react";
+import { Send, MessageCircle, Phone, Calendar, Landmark } from "lucide-react";
 
 type Props = {
   playerId: number | null;
@@ -23,7 +23,10 @@ type Props = {
 };
 
 export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
-  const player = PLAYERS.find((p) => p.player_id === playerId);
+  const importedPlayers = useStore((s) => s.importedPlayers);
+  const player =
+    importedPlayers.find((p) => p.player_id === playerId) ??
+    PLAYERS.find((p) => p.player_id === playerId);
   const gameCredits = useStore((s) => s.gameCredits);
   const deposits = useStore((s) => s.deposits);
   const withdrawals = useStore((s) => s.withdrawals);
@@ -132,6 +135,38 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
                     );
                   })}
                 </div>
+              </section>
+
+              <Separator />
+
+              <section>
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
+                  Bank Account on File
+                </h3>
+                {player.bank_account_number ? (
+                  <div className="rounded-md border bg-card p-3 flex items-start gap-3">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary">
+                      <Landmark className="h-4 w-4" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium">
+                        {player.bank_account_holder ?? player.full_name}
+                      </div>
+                      <div className="text-[12px] font-mono text-muted-foreground mt-0.5">
+                        {player.bank_account_number}
+                      </div>
+                    </div>
+                    {player.bank_name && (
+                      <span className="inline-flex items-center rounded-md border bg-muted/40 px-2 py-0.5 text-[11px]">
+                        {player.bank_name}
+                      </span>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    No bank account on file. Auto-matching incoming deposits is disabled for this player.
+                  </p>
+                )}
               </section>
 
               <Separator />

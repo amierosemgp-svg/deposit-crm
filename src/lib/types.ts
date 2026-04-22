@@ -39,6 +39,9 @@ export type Player = {
   telegram_username: string;
   wechat_id?: string;
   company_id: number;
+  bank_name?: BankName;
+  bank_account_number?: string;
+  bank_account_holder?: string;
   registration_date: string;
   status: "active" | "suspended";
   total_deposits: number;

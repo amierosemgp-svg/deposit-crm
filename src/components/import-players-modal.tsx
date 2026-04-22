@@ -16,6 +16,7 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { COMPANIES } from "@/lib/mock-data";
 import { useStore, type ImportedPlayerInput } from "@/lib/store";
+import { BANKS, type BankName } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -37,12 +38,12 @@ const REQUIRED_COLS = [
   "company_id",
 ] as const;
 
-const SAMPLE_CSV = `full_name,username,telegram_username,contact_number,wechat_id,company_id
-Tan Hong Ming,thm_tan,@thm_tan,+60 12-555 0011,thmtan_wx,1
-Nurul Aisyah,nurul_a,@nurul_a,+60 19-700 4422,,2
-Vikram Pillai,vik_pillai,@vik_pillai,,vikpillai88,3
-Chloe Ng,chloe_ng,@chloeng,+60 16-880 9912,chloeng_wx,4
-Mohd Hafiz,hafiz_m,@hafiz_m,+60 13-220 7766,,5`;
+const SAMPLE_CSV = `full_name,username,telegram_username,contact_number,wechat_id,company_id,bank_name,bank_account_number,bank_account_holder
+Tan Hong Ming,thm_tan,@thm_tan,+60 12-555 0011,thmtan_wx,1,Maybank,5128 4471 9023,Tan Hong Ming
+Nurul Aisyah,nurul_a,@nurul_a,+60 19-700 4422,,2,CIMB,7042 1188 5530,Nurul Aisyah
+Vikram Pillai,vik_pillai,@vik_pillai,,vikpillai88,3,,,
+Chloe Ng,chloe_ng,@chloeng,+60 16-880 9912,chloeng_wx,4,Public Bank,4-9112-7733-08,Chloe Ng
+Mohd Hafiz,hafiz_m,@hafiz_m,+60 13-220 7766,,5,Hong Leong,381 5577 0023,Mohd Hafiz`;
 
 function parseCSV(text: string): ParsedRow[] {
   const lines = text
@@ -76,6 +77,19 @@ function parseCSV(text: string): ParsedRow[] {
       return row;
     }
 
+    let bankName: BankName | undefined;
+    if (raw.bank_name) {
+      const matched = BANKS.find(
+        (b) => b.toLowerCase() === raw.bank_name.toLowerCase(),
+      );
+      if (!matched) {
+        row.error = `Unknown bank_name "${raw.bank_name}"`;
+        return row;
+      }
+      bankName = matched;
+    }
+
+    const acctNum = raw.bank_account_number || undefined;
     row.data = {
       full_name: raw.full_name,
       username: raw.username,
@@ -85,6 +99,9 @@ function parseCSV(text: string): ParsedRow[] {
       contact_number: raw.contact_number || undefined,
       wechat_id: raw.wechat_id || undefined,
       company_id: companyId,
+      bank_name: bankName,
+      bank_account_number: acctNum,
+      bank_account_holder: raw.bank_account_holder || (acctNum ? raw.full_name : undefined),
     };
     return row;
   });
@@ -165,8 +182,9 @@ export function ImportPlayersModal({ open, onOpenChange }: Props) {
               Import players
             </h2>
             <p className="text-[12px] text-muted-foreground leading-tight mt-0.5">
-              Paste CSV or drop a file. Required columns: full_name, username,
-              telegram_username, company_id
+              Required: full_name, username, telegram_username, company_id ·
+              Optional: contact_number, wechat_id, bank_name,
+              bank_account_number, bank_account_holder
             </p>
           </div>
         </div>
@@ -229,7 +247,7 @@ export function ImportPlayersModal({ open, onOpenChange }: Props) {
                 setCsvText(e.target.value);
                 if (fileName) setFileName(null);
               }}
-              placeholder="full_name,username,telegram_username,contact_number,wechat_id,company_id&#10;Lim Ah Kow,lim_ak,@lim_ak,+60 12-345 6789,,1"
+              placeholder="full_name,username,telegram_username,contact_number,wechat_id,company_id,bank_name,bank_account_number,bank_account_holder&#10;Lim Ah Kow,lim_ak,@lim_ak,+60 12-345 6789,,1,Maybank,5128 4471 9023,Lim Ah Kow"
               spellCheck={false}
               className="w-full h-36 rounded-md border border-input bg-background px-3 py-2 text-[12px] font-mono outline-none focus:border-ring focus:ring-2 focus:ring-ring/30 resize-none"
             />
