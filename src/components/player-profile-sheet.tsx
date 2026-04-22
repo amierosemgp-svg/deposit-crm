@@ -14,7 +14,7 @@ import {
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { StatusBadge } from "./status-badge";
 import { Separator } from "@/components/ui/separator";
-import { Send, MessageCircle, Phone, Calendar, Landmark } from "lucide-react";
+import { Send, MessageCircle, Phone, Calendar, Landmark, Gamepad2 } from "lucide-react";
 
 type Props = {
   playerId: number | null;
@@ -140,31 +140,77 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
               <Separator />
 
               <section>
-                <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
-                  Bank Account on File
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2 flex items-center gap-1.5">
+                  <Landmark className="h-3 w-3" />
+                  Bank Accounts on File
+                  {player.bank_accounts && player.bank_accounts.length > 0 && (
+                    <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground normal-case tracking-normal">
+                      {player.bank_accounts.length}
+                    </span>
+                  )}
                 </h3>
-                {player.bank_account_number ? (
-                  <div className="rounded-md border bg-card p-3 flex items-start gap-3">
-                    <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary">
-                      <Landmark className="h-4 w-4" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium">
-                        {player.bank_account_holder ?? player.full_name}
+                {player.bank_accounts && player.bank_accounts.length > 0 ? (
+                  <div className="space-y-2">
+                    {player.bank_accounts.map((b, i) => (
+                      <div
+                        key={i}
+                        className="rounded-md border bg-card p-3 flex items-start gap-3"
+                      >
+                        <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary">
+                          <Landmark className="h-4 w-4" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium">
+                            {b.account_holder}
+                          </div>
+                          <div className="text-[12px] font-mono text-muted-foreground mt-0.5">
+                            {b.account_number}
+                          </div>
+                        </div>
+                        <span className="inline-flex items-center rounded-md border bg-muted/40 px-2 py-0.5 text-[11px] whitespace-nowrap">
+                          {b.bank_name}
+                        </span>
                       </div>
-                      <div className="text-[12px] font-mono text-muted-foreground mt-0.5">
-                        {player.bank_account_number}
-                      </div>
-                    </div>
-                    {player.bank_name && (
-                      <span className="inline-flex items-center rounded-md border bg-muted/40 px-2 py-0.5 text-[11px]">
-                        {player.bank_name}
-                      </span>
-                    )}
+                    ))}
                   </div>
                 ) : (
                   <p className="text-xs text-muted-foreground">
-                    No bank account on file. Auto-matching incoming deposits is disabled for this player.
+                    No bank accounts on file. Auto-matching incoming deposits is disabled for this player.
+                  </p>
+                )}
+              </section>
+
+              <Separator />
+
+              <section>
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2 flex items-center gap-1.5">
+                  <Gamepad2 className="h-3 w-3" />
+                  Linked Game Accounts
+                  {player.game_accounts && player.game_accounts.length > 0 && (
+                    <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground normal-case tracking-normal">
+                      {player.game_accounts.length}
+                    </span>
+                  )}
+                </h3>
+                {player.game_accounts && player.game_accounts.length > 0 ? (
+                  <div className="grid grid-cols-2 gap-2">
+                    {player.game_accounts.map((g, i) => (
+                      <div
+                        key={i}
+                        className="rounded-md border bg-card px-3 py-2"
+                      >
+                        <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                          {g.game_name}
+                        </div>
+                        <div className="text-sm font-medium font-mono mt-0.5 truncate">
+                          {g.game_username}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    No game accounts linked. Top-ups will require manual game username entry.
                   </p>
                 )}
               </section>

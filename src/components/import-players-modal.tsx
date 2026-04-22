@@ -89,7 +89,18 @@ function parseCSV(text: string): ParsedRow[] {
       bankName = matched;
     }
 
-    const acctNum = raw.bank_account_number || undefined;
+    const acctNum = raw.bank_account_number?.trim();
+    const bankAccounts =
+      bankName && acctNum
+        ? [
+            {
+              bank_name: bankName,
+              account_number: acctNum,
+              account_holder: raw.bank_account_holder || raw.full_name,
+            },
+          ]
+        : undefined;
+
     row.data = {
       full_name: raw.full_name,
       username: raw.username,
@@ -99,9 +110,7 @@ function parseCSV(text: string): ParsedRow[] {
       contact_number: raw.contact_number || undefined,
       wechat_id: raw.wechat_id || undefined,
       company_id: companyId,
-      bank_name: bankName,
-      bank_account_number: acctNum,
-      bank_account_holder: raw.bank_account_holder || (acctNum ? raw.full_name : undefined),
+      bank_accounts: bankAccounts,
     };
     return row;
   });
@@ -184,7 +193,8 @@ export function ImportPlayersModal({ open, onOpenChange }: Props) {
             <p className="text-[12px] text-muted-foreground leading-tight mt-0.5">
               Required: full_name, username, telegram_username, company_id ·
               Optional: contact_number, wechat_id, bank_name,
-              bank_account_number, bank_account_holder
+              bank_account_number, bank_account_holder · For multiple banks or
+              game accounts, use the Create Player form
             </p>
           </div>
         </div>

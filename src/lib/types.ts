@@ -31,6 +31,17 @@ export const GAMES: GameName[] = ["Mega888", "Pussy888", "918Kiss", "XE88"];
 export type BankName = "Maybank" | "CIMB" | "Hong Leong" | "Public Bank";
 export const BANKS: BankName[] = ["Maybank", "CIMB", "Hong Leong", "Public Bank"];
 
+export type PlayerBankAccount = {
+  bank_name: BankName;
+  account_number: string;
+  account_holder: string;
+};
+
+export type PlayerGameAccount = {
+  game_name: GameName;
+  game_username: string;
+};
+
 export type Player = {
   player_id: number;
   username: string;
@@ -39,9 +50,8 @@ export type Player = {
   telegram_username: string;
   wechat_id?: string;
   company_id: number;
-  bank_name?: BankName;
-  bank_account_number?: string;
-  bank_account_holder?: string;
+  bank_accounts?: PlayerBankAccount[];
+  game_accounts?: PlayerGameAccount[];
   registration_date: string;
   status: "active" | "suspended";
   total_deposits: number;
