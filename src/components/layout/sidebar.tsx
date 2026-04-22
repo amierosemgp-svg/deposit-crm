@@ -13,6 +13,7 @@ import {
   Settings,
   Network,
   Landmark,
+  KeyRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useStore } from "@/lib/store";
@@ -24,6 +25,7 @@ const NAV = [
   { href: "/players", label: "Players", icon: Users },
   { href: "/withdrawals", label: "Withdrawals", icon: Banknote, badge: "pending_withdrawals" as const },
   { href: "/bank-accounts", label: "Bank Accounts", icon: Landmark },
+  { href: "/provider-accounts", label: "Provider BO Accounts", icon: KeyRound },
   { href: "/game-transfer", label: "Game Credit Transfer", icon: ArrowLeftRight },
   { href: "/history", label: "Transaction History", icon: History },
   { href: "/reports", label: "Reports", icon: BarChart3 },

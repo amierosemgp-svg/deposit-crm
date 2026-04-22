@@ -9,6 +9,8 @@ import type {
   GameName,
   GameTransfer,
   Player,
+  ProviderBoAccount,
+  ProviderBoAdjustment,
   Withdrawal,
 } from "./types";
 import {
@@ -19,6 +21,8 @@ import {
   GAME_TRANSFERS,
   LIVE_FEED_POOL,
   PLAYERS,
+  PROVIDER_BO_ACCOUNTS,
+  PROVIDER_BO_ADJUSTMENTS,
   WITHDRAWALS,
 } from "./mock-data";
 
@@ -39,6 +43,11 @@ export type CompanyBankAccountInput = Omit<
   "account_id" | "created_at"
 >;
 
+export type ProviderBoAccountInput = Omit<
+  ProviderBoAccount,
+  "bo_account_id" | "created_at"
+>;
+
 type Store = {
   deposits: Deposit[];
   withdrawals: Withdrawal[];
@@ -47,6 +56,8 @@ type Store = {
   importedPlayers: Player[];
   companyBankAccounts: CompanyBankAccount[];
   bankTransfers: BankTransfer[];
+  providerBoAccounts: ProviderBoAccount[];
+  providerBoAdjustments: ProviderBoAdjustment[];
   notifications: Notification[];
 
   // Derived helpers
@@ -70,6 +81,20 @@ type Store = {
     notes?: string;
     handledByUserId: number;
   }) => BankTransfer | null;
+
+  // Provider BO account CRUD + credit adjustment
+  addProviderBoAccount: (input: ProviderBoAccountInput) => ProviderBoAccount;
+  updateProviderBoAccount: (
+    boAccountId: number,
+    patch: Partial<ProviderBoAccountInput>,
+  ) => void;
+  deleteProviderBoAccount: (boAccountId: number) => void;
+  adjustProviderBoCredit: (input: {
+    boAccountId: number;
+    amount: number; // signed: positive = top-up, negative = deduct
+    reason: string;
+    handledByUserId: number;
+  }) => ProviderBoAdjustment | null;
 
   // Deposit actions
   updateDepositDraft: (
@@ -108,6 +133,8 @@ export const useStore = create<Store>((set, get) => ({
   importedPlayers: [],
   companyBankAccounts: COMPANY_BANK_ACCOUNTS,
   bankTransfers: BANK_TRANSFERS,
+  providerBoAccounts: PROVIDER_BO_ACCOUNTS,
+  providerBoAdjustments: PROVIDER_BO_ADJUSTMENTS,
   notifications: [],
 
   getCreditBalance: (playerId, game) => {
@@ -223,6 +250,77 @@ export const useStore = create<Store>((set, get) => ({
       message: `Transferred RM ${amount.toFixed(2)} from ${from.bank_name} ${from.account_number.slice(-4)} → ${to.bank_name} ${to.account_number.slice(-4)}`,
     });
     return transfer;
+  },
+
+  addProviderBoAccount: (input) => {
+    const maxId = Math.max(
+      9000,
+      ...get().providerBoAccounts.map((a) => a.bo_account_id),
+    );
+    const account: ProviderBoAccount = {
+      ...input,
+      bo_account_id: maxId + 1,
+      created_at: new Date().toISOString(),
+    };
+    set((s) => ({
+      providerBoAccounts: [account, ...s.providerBoAccounts],
+    }));
+    return account;
+  },
+
+  updateProviderBoAccount: (boAccountId, patch) => {
+    set((s) => ({
+      providerBoAccounts: s.providerBoAccounts.map((a) =>
+        a.bo_account_id === boAccountId ? { ...a, ...patch } : a,
+      ),
+    }));
+  },
+
+  deleteProviderBoAccount: (boAccountId) => {
+    set((s) => ({
+      providerBoAccounts: s.providerBoAccounts.filter(
+        (a) => a.bo_account_id !== boAccountId,
+      ),
+      providerBoAdjustments: s.providerBoAdjustments.filter(
+        (j) => j.bo_account_id !== boAccountId,
+      ),
+    }));
+  },
+
+  adjustProviderBoCredit: ({ boAccountId, amount, reason, handledByUserId }) => {
+    if (amount === 0 || !reason.trim()) return null;
+    const account = get().providerBoAccounts.find(
+      (a) => a.bo_account_id === boAccountId,
+    );
+    if (!account) return null;
+    const newBalance = +(account.current_credit + amount).toFixed(2);
+    if (newBalance < 0) return null;
+
+    const adjustment: ProviderBoAdjustment = {
+      adjustment_id:
+        Math.max(12000, ...get().providerBoAdjustments.map((j) => j.adjustment_id)) +
+        1,
+      bo_account_id: boAccountId,
+      amount,
+      reason: reason.trim(),
+      handled_by_user_id: handledByUserId,
+      created_at: new Date().toISOString(),
+    };
+
+    set((s) => ({
+      providerBoAccounts: s.providerBoAccounts.map((a) =>
+        a.bo_account_id === boAccountId
+          ? { ...a, current_credit: newBalance }
+          : a,
+      ),
+      providerBoAdjustments: [adjustment, ...s.providerBoAdjustments],
+    }));
+
+    get().pushNotification({
+      kind: "topup",
+      message: `${amount > 0 ? "Topped up" : "Deducted"} ${Math.abs(amount).toLocaleString("en-MY")} credits on ${account.game_name} (${account.bo_username})`,
+    });
+    return adjustment;
   },
 
   updateDepositDraft: (depositId, patch) => {

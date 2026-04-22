@@ -153,4 +153,25 @@ export type BankTransfer = {
   created_at: string;
 };
 
+export type ProviderBoAccount = {
+  bo_account_id: number;
+  company_id: number;
+  game_name: GameName;
+  bo_username: string;
+  bo_label?: string;
+  current_credit: number;
+  status: "active" | "inactive";
+  notes?: string;
+  created_at: string;
+};
+
+export type ProviderBoAdjustment = {
+  adjustment_id: number;
+  bo_account_id: number;
+  amount: number; // positive = top-up from provider, negative = manual deduction
+  reason: string;
+  handled_by_user_id: number;
+  created_at: string;
+};
+
 export const BONUS_OPTIONS = [0, 5, 10, 20, 30, 50, 100] as const;

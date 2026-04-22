@@ -7,6 +7,8 @@ import type {
   GameTransfer,
   Organization,
   Player,
+  ProviderBoAccount,
+  ProviderBoAdjustment,
   User,
   Withdrawal,
 } from "./types";
@@ -693,6 +695,29 @@ export const BANK_TRANSFERS: BankTransfer[] = [
   { transfer_id: 11003, from_account_id: 8002, to_account_id: 8001, amount: 3000, reference: "TRF-CIMB-MBB-558720", notes: "Consolidate to main", handled_by_user_id: 11, status: "completed", created_at: iso(60 * 18) },
   { transfer_id: 11004, from_account_id: 8006, to_account_id: 8007, amount: 4500, reference: "TRF-CIMB-PBB-219007", notes: "Cross-company settlement", handled_by_user_id: 1, status: "completed", created_at: iso(60 * 26) },
   { transfer_id: 11005, from_account_id: 8008, to_account_id: 8009, amount: 1200, reference: "TRF-MBB-HLB-991204", handled_by_user_id: 15, status: "failed", created_at: iso(60 * 40) },
+];
+
+// Game provider back-office accounts (operator's wholesale credit pools per game)
+export const PROVIDER_BO_ACCOUNTS: ProviderBoAccount[] = [
+  { bo_account_id: 9001, company_id: 1, game_name: "Mega888", bo_username: "alpha_mega_master", bo_label: "Master Agent", current_credit: 48500.0, status: "active", notes: "Primary BO for Alpha", created_at: iso(60 * 24 * 200) },
+  { bo_account_id: 9002, company_id: 1, game_name: "Pussy888", bo_username: "alpha_pussy_main", bo_label: "Main", current_credit: 22300.5, status: "active", created_at: iso(60 * 24 * 180) },
+  { bo_account_id: 9003, company_id: 1, game_name: "918Kiss", bo_username: "alpha_kiss01", current_credit: 17850.0, status: "active", created_at: iso(60 * 24 * 160) },
+  { bo_account_id: 9004, company_id: 2, game_name: "Mega888", bo_username: "bravo_mega_main", bo_label: "Main", current_credit: 35200.0, status: "active", created_at: iso(60 * 24 * 175) },
+  { bo_account_id: 9005, company_id: 2, game_name: "XE88", bo_username: "bravo_xe88", current_credit: 8900.75, status: "active", created_at: iso(60 * 24 * 130) },
+  { bo_account_id: 9006, company_id: 3, game_name: "Mega888", bo_username: "charlie_mega", bo_label: "Master Agent", current_credit: 52100.0, status: "active", created_at: iso(60 * 24 * 165) },
+  { bo_account_id: 9007, company_id: 3, game_name: "Pussy888", bo_username: "charlie_pussy_sub", bo_label: "Sub Agent A", current_credit: 14600.0, status: "active", created_at: iso(60 * 24 * 90) },
+  { bo_account_id: 9008, company_id: 4, game_name: "918Kiss", bo_username: "delta_kiss_main", bo_label: "Main", current_credit: 21450.5, status: "active", created_at: iso(60 * 24 * 140) },
+  { bo_account_id: 9009, company_id: 4, game_name: "XE88", bo_username: "delta_xe88_v2", current_credit: 0, status: "inactive", notes: "Migrated to new agent line", created_at: iso(60 * 24 * 60) },
+  { bo_account_id: 9010, company_id: 5, game_name: "Mega888", bo_username: "echo_mega_main", bo_label: "Main", current_credit: 39800.0, status: "active", created_at: iso(60 * 24 * 120) },
+  { bo_account_id: 9011, company_id: 5, game_name: "Pussy888", bo_username: "echo_pussy_main", current_credit: 11200.0, status: "active", created_at: iso(60 * 24 * 100) },
+];
+
+export const PROVIDER_BO_ADJUSTMENTS: ProviderBoAdjustment[] = [
+  { adjustment_id: 12001, bo_account_id: 9001, amount: 20000, reason: "Wholesale credit purchase from Mega888 provider", handled_by_user_id: 11, created_at: iso(60 * 8) },
+  { adjustment_id: 12002, bo_account_id: 9006, amount: 15000, reason: "Top-up from provider settlement", handled_by_user_id: 13, created_at: iso(60 * 24) },
+  { adjustment_id: 12003, bo_account_id: 9004, amount: -500, reason: "Manual reconciliation — duplicated top-up", handled_by_user_id: 12, created_at: iso(60 * 36) },
+  { adjustment_id: 12004, bo_account_id: 9010, amount: 12000, reason: "Weekly credit replenishment", handled_by_user_id: 15, created_at: iso(60 * 48) },
+  { adjustment_id: 12005, bo_account_id: 9007, amount: 5000, reason: "Sub-agent allocation", handled_by_user_id: 13, created_at: iso(60 * 72) },
 ];
 
 // Pool of simulated "new" deposits that can be auto-injected for live-feed demo
