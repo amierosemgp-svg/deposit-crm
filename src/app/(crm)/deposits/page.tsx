@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from "react";
 import { useStore } from "@/lib/store";
+import { PLAYERS, COMPANIES } from "@/lib/mock-data";
 import { formatRM, formatDateTime, formatRelative } from "@/lib/format";
 import { BONUS_OPTIONS, GAMES, BANKS } from "@/lib/types";
 import {
@@ -29,19 +30,39 @@ import { cn } from "@/lib/utils";
 export default function DepositsPage() {
   const deposits = useStore((s) => s.deposits);
   const updateDraft = useStore((s) => s.updateDepositDraft);
+  const importedPlayers = useStore((s) => s.importedPlayers);
+  const selectedCompanyId = useStore((s) => s.selectedCompanyId);
 
   const [bankFilter, setBankFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [approvingId, setApprovingId] = useState<number | null>(null);
 
+  const playerCompanyMap = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const p of PLAYERS) map.set(p.player_id, p.company_id);
+    for (const p of importedPlayers) map.set(p.player_id, p.company_id);
+    return map;
+  }, [importedPlayers]);
+
+  const inCompanyScope = (playerId: number) =>
+    selectedCompanyId === null ||
+    playerCompanyMap.get(playerId) === selectedCompanyId;
+
+  const scopedDeposits = useMemo(
+    () => deposits.filter((d) => inCompanyScope(d.player_id)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [deposits, selectedCompanyId, playerCompanyMap],
+  );
+
   const filtered = useMemo(() => {
-    return [...deposits]
+    return [...scopedDeposits]
       .filter((d) => bankFilter === "all" || d.bank_name === bankFilter)
       .filter((d) => statusFilter === "all" || d.status === statusFilter)
       .sort((a, b) => b.created_at.localeCompare(a.created_at));
-  }, [deposits, bankFilter, statusFilter]);
+  }, [scopedDeposits, bankFilter, statusFilter]);
 
-  const pendingCount = deposits.filter((d) => d.status === "pending").length;
+  const pendingCount = scopedDeposits.filter((d) => d.status === "pending").length;
+  const activeCompany = COMPANIES.find((c) => c.company_id === selectedCompanyId);
 
   return (
     <div className="space-y-5">
@@ -50,6 +71,15 @@ export default function DepositsPage() {
           <h1 className="text-2xl font-semibold">Deposits</h1>
           <p className="text-sm text-muted-foreground mt-1">
             Bot-detected bank transactions — approve &amp; auto top-up to games
+            {activeCompany && (
+              <>
+                {" "}
+                ·{" "}
+                <span className="font-medium text-foreground">
+                  {activeCompany.company_name}
+                </span>
+              </>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -255,7 +285,13 @@ export default function DepositsPage() {
 
         <div className="flex items-center justify-between border-t bg-muted/30 px-4 py-2 text-[11px] text-muted-foreground">
           <span>
-            Showing {filtered.length} of {deposits.length} deposits
+            Showing {filtered.length} of {scopedDeposits.length} deposits
+            {selectedCompanyId !== null && (
+              <span className="text-muted-foreground/70">
+                {" "}
+                ({deposits.length} total across all companies)
+              </span>
+            )}
           </span>
           <span>Connected: OpenClaw Bot · Last sync 2s ago</span>
         </div>

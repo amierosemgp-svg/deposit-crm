@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Bell, Search, Wallet, LogOut, Play } from "lucide-react";
 import {
@@ -25,10 +24,18 @@ import { useStore } from "@/lib/store";
 
 export function TopNav() {
   const router = useRouter();
-  const [companyId, setCompanyId] = useState<string>("all");
+  const selectedCompanyId = useStore((s) => s.selectedCompanyId);
+  const setSelectedCompanyId = useStore((s) => s.setSelectedCompanyId);
   const notifications = useStore((s) => s.notifications);
   const clearNotifications = useStore((s) => s.clearNotifications);
   const injectLiveDeposit = useStore((s) => s.injectLiveDeposit);
+
+  const companyValue = selectedCompanyId === null ? "all" : String(selectedCompanyId);
+  const companyLabel =
+    selectedCompanyId === null
+      ? "All Companies"
+      : COMPANIES.find((c) => c.company_id === selectedCompanyId)?.company_name ??
+        "All Companies";
 
   return (
     <header className="h-14 shrink-0 border-b border-border bg-card/60 backdrop-blur-sm">
@@ -44,9 +51,14 @@ export function TopNav() {
         </div>
 
         <div className="w-52">
-          <Select value={companyId} onValueChange={(v) => setCompanyId(v ?? "all")}>
+          <Select
+            value={companyValue}
+            onValueChange={(v) =>
+              setSelectedCompanyId(!v || v === "all" ? null : Number(v))
+            }
+          >
             <SelectTrigger className="h-9 w-full">
-              <SelectValue placeholder="All Companies" />
+              <SelectValue placeholder="All Companies">{companyLabel}</SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Companies</SelectItem>

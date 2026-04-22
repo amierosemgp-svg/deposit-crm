@@ -19,13 +19,6 @@ import type { CompanyBankAccount } from "@/lib/types";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/status-badge";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { BankAccountFormModal } from "@/components/bank-account-form-modal";
 import { BankTransferModal } from "@/components/bank-transfer-modal";
 import { cn } from "@/lib/utils";
@@ -34,8 +27,8 @@ export default function BankAccountsPage() {
   const accounts = useStore((s) => s.companyBankAccounts);
   const transfers = useStore((s) => s.bankTransfers);
   const deleteAccount = useStore((s) => s.deleteCompanyBankAccount);
+  const selectedCompanyId = useStore((s) => s.selectedCompanyId);
 
-  const [companyFilter, setCompanyFilter] = useState<string>("all");
   const [formOpen, setFormOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<CompanyBankAccount | null>(null);
   const [transferOpen, setTransferOpen] = useState(false);
@@ -44,10 +37,12 @@ export default function BankAccountsPage() {
   const filteredAccounts = useMemo(
     () =>
       accounts
-        .filter((a) => companyFilter === "all" || String(a.company_id) === companyFilter)
+        .filter((a) => selectedCompanyId === null || a.company_id === selectedCompanyId)
         .sort((a, b) => a.company_id - b.company_id || a.bank_name.localeCompare(b.bank_name)),
-    [accounts, companyFilter],
+    [accounts, selectedCompanyId],
   );
+
+  const activeCompany = COMPANIES.find((c) => c.company_id === selectedCompanyId);
 
   const totalBalance = useMemo(
     () => filteredAccounts.reduce((sum, a) => sum + a.current_balance, 0),
@@ -91,6 +86,15 @@ export default function BankAccountsPage() {
           <h1 className="text-2xl font-semibold">Bank Accounts</h1>
           <p className="text-sm text-muted-foreground mt-1">
             Company-owned receiving accounts and treasury transfers
+            {activeCompany && (
+              <>
+                {" "}
+                ·{" "}
+                <span className="font-medium text-foreground">
+                  {activeCompany.company_name}
+                </span>
+              </>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -152,22 +156,11 @@ export default function BankAccountsPage() {
       <Card className="overflow-hidden p-0 gap-0">
         <div className="flex items-center gap-2 border-b bg-muted/30 px-4 py-2.5">
           <Landmark className="h-3.5 w-3.5 text-muted-foreground" />
-          <Select
-            value={companyFilter}
-            onValueChange={(v) => setCompanyFilter(v ?? "all")}
-          >
-            <SelectTrigger className="h-8 w-[180px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All companies</SelectItem>
-              {COMPANIES.map((c) => (
-                <SelectItem key={c.company_id} value={String(c.company_id)}>
-                  {c.company_name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <span className="text-[12px] text-muted-foreground">
+            {activeCompany
+              ? activeCompany.company_name
+              : "All companies"}
+          </span>
           <span className="ml-auto text-[11px] text-muted-foreground">
             {filteredAccounts.length} account{filteredAccounts.length === 1 ? "" : "s"} shown
           </span>

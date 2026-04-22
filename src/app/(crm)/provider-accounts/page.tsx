@@ -41,8 +41,8 @@ export default function ProviderAccountsPage() {
   const accounts = useStore((s) => s.providerBoAccounts);
   const adjustments = useStore((s) => s.providerBoAdjustments);
   const deleteAccount = useStore((s) => s.deleteProviderBoAccount);
+  const selectedCompanyId = useStore((s) => s.selectedCompanyId);
 
-  const [companyFilter, setCompanyFilter] = useState<string>("all");
   const [gameFilter, setGameFilter] = useState<string>("all");
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<ProviderBoAccount | null>(null);
@@ -53,7 +53,7 @@ export default function ProviderAccountsPage() {
   const filtered = useMemo(
     () =>
       accounts
-        .filter((a) => companyFilter === "all" || String(a.company_id) === companyFilter)
+        .filter((a) => selectedCompanyId === null || a.company_id === selectedCompanyId)
         .filter((a) => gameFilter === "all" || a.game_name === gameFilter)
         .sort(
           (a, b) =>
@@ -61,8 +61,16 @@ export default function ProviderAccountsPage() {
             a.game_name.localeCompare(b.game_name) ||
             a.bo_username.localeCompare(b.bo_username),
         ),
-    [accounts, companyFilter, gameFilter],
+    [accounts, selectedCompanyId, gameFilter],
   );
+
+  const activeCompany = COMPANIES.find((c) => c.company_id === selectedCompanyId);
+
+  // Adjustments scoped to the accounts currently visible
+  const adjustmentsInScope = useMemo(() => {
+    const idSet = new Set(filtered.map((a) => a.bo_account_id));
+    return adjustments.filter((j) => idSet.has(j.bo_account_id));
+  }, [adjustments, filtered]);
 
   const totalCredit = useMemo(
     () => filtered.reduce((s, a) => s + a.current_credit, 0),
@@ -121,6 +129,15 @@ export default function ProviderAccountsPage() {
           <h1 className="text-2xl font-semibold">Provider BO Accounts</h1>
           <p className="text-sm text-muted-foreground mt-1">
             Game-provider back-office logins and the wholesale credit each holds
+            {activeCompany && (
+              <>
+                {" "}
+                ·{" "}
+                <span className="font-medium text-foreground">
+                  {activeCompany.company_name}
+                </span>
+              </>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -198,22 +215,9 @@ export default function ProviderAccountsPage() {
       <Card className="overflow-hidden p-0 gap-0">
         <div className="flex items-center gap-2 border-b bg-muted/30 px-4 py-2.5">
           <KeyRound className="h-3.5 w-3.5 text-muted-foreground" />
-          <Select
-            value={companyFilter}
-            onValueChange={(v) => setCompanyFilter(v ?? "all")}
-          >
-            <SelectTrigger className="h-8 w-[170px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All companies</SelectItem>
-              {COMPANIES.map((c) => (
-                <SelectItem key={c.company_id} value={String(c.company_id)}>
-                  {c.company_name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <span className="text-[12px] text-muted-foreground">
+            {activeCompany ? activeCompany.company_name : "All companies"}
+          </span>
           <Select value={gameFilter} onValueChange={(v) => setGameFilter(v ?? "all")}>
             <SelectTrigger className="h-8 w-[140px]">
               <SelectValue />
@@ -370,7 +374,12 @@ export default function ProviderAccountsPage() {
           <Coins className="h-3.5 w-3.5 text-muted-foreground" />
           <h2 className="text-sm font-semibold">Recent Credit Adjustments</h2>
           <span className="ml-auto text-[11px] text-muted-foreground">
-            {adjustments.length} total
+            {adjustmentsInScope.length}
+            {selectedCompanyId !== null && (
+              <span className="text-muted-foreground/70">
+                {" "}of {adjustments.length}
+              </span>
+            )}
           </span>
         </div>
         <div className="overflow-x-auto">
@@ -387,17 +396,17 @@ export default function ProviderAccountsPage() {
               </tr>
             </thead>
             <tbody>
-              {adjustments.length === 0 && (
+              {adjustmentsInScope.length === 0 && (
                 <tr>
                   <td
                     colSpan={5}
                     className="px-3 py-10 text-center text-sm text-muted-foreground"
                   >
-                    No credit adjustments yet.
+                    No credit adjustments {activeCompany ? `for ${activeCompany.company_name}` : "yet"}.
                   </td>
                 </tr>
               )}
-              {adjustments.map((j) => {
+              {adjustmentsInScope.map((j) => {
                 const acct = accounts.find((a) => a.bo_account_id === j.bo_account_id);
                 const handler = USERS.find((u) => u.user_id === j.handled_by_user_id);
                 const positive = j.amount > 0;

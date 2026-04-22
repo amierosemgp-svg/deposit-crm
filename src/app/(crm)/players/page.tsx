@@ -15,8 +15,8 @@ import { Search, Send, Upload, UserPlus } from "lucide-react";
 
 export default function PlayersPage() {
   const importedPlayers = useStore((s) => s.importedPlayers);
+  const selectedCompanyId = useStore((s) => s.selectedCompanyId);
   const [q, setQ] = useState("");
-  const [companyFilter, setCompanyFilter] = useState<string>("all");
   const [importOpen, setImportOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
 
@@ -32,9 +32,14 @@ export default function PlayersPage() {
       p.username.toLowerCase().includes(q.toLowerCase()) ||
       p.telegram_username.toLowerCase().includes(q.toLowerCase());
     const matchC =
-      companyFilter === "all" || String(p.company_id) === companyFilter;
+      selectedCompanyId === null || p.company_id === selectedCompanyId;
     return matchQ && matchC;
   });
+
+  const inScopeTotal = allPlayers.filter(
+    (p) => selectedCompanyId === null || p.company_id === selectedCompanyId,
+  ).length;
+  const activeCompany = COMPANIES.find((c) => c.company_id === selectedCompanyId);
 
   return (
     <div className="space-y-5">
@@ -42,7 +47,19 @@ export default function PlayersPage() {
         <div>
           <h1 className="text-2xl font-semibold">Players</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            {allPlayers.length} total players across {COMPANIES.length} companies
+            {activeCompany ? (
+              <>
+                {inScopeTotal} players in{" "}
+                <span className="font-medium text-foreground">
+                  {activeCompany.company_name}
+                </span>
+              </>
+            ) : (
+              <>
+                {allPlayers.length} total players across {COMPANIES.length}{" "}
+                companies
+              </>
+            )}
             {importedPlayers.length > 0 && (
               <span className="ml-1.5 inline-flex items-center rounded-md bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
                 +{importedPlayers.length} imported
@@ -82,18 +99,6 @@ export default function PlayersPage() {
               className="h-8 w-full rounded-md border border-input bg-background pl-9 pr-3 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/30"
             />
           </div>
-          <select
-            value={companyFilter}
-            onChange={(e) => setCompanyFilter(e.target.value)}
-            className="h-8 rounded-md border border-input bg-background px-2 text-sm outline-none"
-          >
-            <option value="all">All companies</option>
-            {COMPANIES.map((c) => (
-              <option key={c.company_id} value={c.company_id}>
-                {c.company_name}
-              </option>
-            ))}
-          </select>
           <span className="ml-auto text-[11px] text-muted-foreground">
             {filtered.length} shown
           </span>

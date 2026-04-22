@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
-import { PLAYERS } from "@/lib/mock-data";
+import { PLAYERS, COMPANIES } from "@/lib/mock-data";
 import { formatRM, formatDateTime, formatRelative } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -15,11 +15,30 @@ export default function WithdrawalsPage() {
   const withdrawals = useStore((s) => s.withdrawals);
   const getBalance = useStore((s) => s.getCreditBalance);
   const markPaid = useStore((s) => s.markWithdrawalPaid);
+  const importedPlayers = useStore((s) => s.importedPlayers);
+  const selectedCompanyId = useStore((s) => s.selectedCompanyId);
   const [pullingId, setPullingId] = useState<number | null>(null);
+
+  const playerCompanyMap = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const p of PLAYERS) map.set(p.player_id, p.company_id);
+    for (const p of importedPlayers) map.set(p.player_id, p.company_id);
+    return map;
+  }, [importedPlayers]);
+
+  const scoped = useMemo(
+    () =>
+      withdrawals.filter(
+        (w) =>
+          selectedCompanyId === null ||
+          playerCompanyMap.get(w.player_id) === selectedCompanyId,
+      ),
+    [withdrawals, selectedCompanyId, playerCompanyMap],
+  );
 
   const sorted = useMemo(
     () =>
-      [...withdrawals].sort((a, b) => {
+      [...scoped].sort((a, b) => {
         // requested first, then credits_pulled, then paid, then failed
         const rank = (s: string) =>
           s === "requested"
@@ -33,12 +52,13 @@ export default function WithdrawalsPage() {
         if (d !== 0) return d;
         return b.created_at.localeCompare(a.created_at);
       }),
-    [withdrawals],
+    [scoped],
   );
 
-  const pending = withdrawals.filter(
+  const pending = scoped.filter(
     (w) => w.status === "requested" || w.status === "credits_pulled",
   ).length;
+  const activeCompany = COMPANIES.find((c) => c.company_id === selectedCompanyId);
 
   return (
     <div className="space-y-5">
@@ -47,6 +67,15 @@ export default function WithdrawalsPage() {
           <h1 className="text-2xl font-semibold">Withdrawals</h1>
           <p className="text-sm text-muted-foreground mt-1">
             Requests received via Telegram/WeChat — pull credits from game, then pay out
+            {activeCompany && (
+              <>
+                {" "}
+                ·{" "}
+                <span className="font-medium text-foreground">
+                  {activeCompany.company_name}
+                </span>
+              </>
+            )}
           </p>
         </div>
         {pending > 0 && (

@@ -1,7 +1,8 @@
 "use client";
 
+import { useMemo } from "react";
 import { useStore } from "@/lib/store";
-import { PLAYERS } from "@/lib/mock-data";
+import { PLAYERS, COMPANIES } from "@/lib/mock-data";
 import { formatRM, formatDateTime } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatusBadge } from "@/components/status-badge";
@@ -55,6 +56,8 @@ function KpiCard({
 export default function DashboardPage() {
   const deposits = useStore((s) => s.deposits);
   const withdrawals = useStore((s) => s.withdrawals);
+  const importedPlayers = useStore((s) => s.importedPlayers);
+  const selectedCompanyId = useStore((s) => s.selectedCompanyId);
 
   const today = new Date();
   const isSameDay = (iso: string) => {
@@ -66,15 +69,32 @@ export default function DashboardPage() {
     );
   };
 
-  const todaysDeposits = deposits.filter(
+  const playerCompanyMap = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const p of PLAYERS) map.set(p.player_id, p.company_id);
+    for (const p of importedPlayers) map.set(p.player_id, p.company_id);
+    return map;
+  }, [importedPlayers]);
+
+  const inScope = (playerId: number) =>
+    selectedCompanyId === null ||
+    playerCompanyMap.get(playerId) === selectedCompanyId;
+
+  const scopedDeposits = deposits.filter((d) => inScope(d.player_id));
+  const scopedWithdrawals = withdrawals.filter((w) => inScope(w.player_id));
+  const scopedPlayers = [...PLAYERS, ...importedPlayers].filter(
+    (p) => selectedCompanyId === null || p.company_id === selectedCompanyId,
+  );
+
+  const todaysDeposits = scopedDeposits.filter(
     (d) => isSameDay(d.created_at) && d.status === "completed",
   );
   const todaysDepositsTotal = todaysDeposits.reduce(
     (sum, d) => sum + d.total_amount,
     0,
   );
-  const pendingDeposits = deposits.filter((d) => d.status === "pending");
-  const todaysWithdrawals = withdrawals.filter(
+  const pendingDeposits = scopedDeposits.filter((d) => d.status === "pending");
+  const todaysWithdrawals = scopedWithdrawals.filter(
     (w) => isSameDay(w.created_at) && w.status === "paid",
   );
   const todaysWithdrawalsTotal = todaysWithdrawals.reduce(
@@ -82,12 +102,14 @@ export default function DashboardPage() {
     0,
   );
 
-  const recentDeposits = [...deposits]
+  const recentDeposits = [...scopedDeposits]
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
     .slice(0, 5);
-  const recentWithdrawals = [...withdrawals]
+  const recentWithdrawals = [...scopedWithdrawals]
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
     .slice(0, 5);
+
+  const activeCompany = COMPANIES.find((c) => c.company_id === selectedCompanyId);
 
   return (
     <div className="space-y-6">
@@ -100,6 +122,15 @@ export default function DashboardPage() {
             month: "long",
             year: "numeric",
           })}
+          {activeCompany && (
+            <>
+              {" "}
+              ·{" "}
+              <span className="font-medium text-foreground">
+                {activeCompany.company_name}
+              </span>
+            </>
+          )}
         </p>
       </div>
 
@@ -126,8 +157,8 @@ export default function DashboardPage() {
         />
         <KpiCard
           title="Active Players"
-          value={String(PLAYERS.filter((p) => p.status === "active").length)}
-          sub={`${PLAYERS.length} total`}
+          value={String(scopedPlayers.filter((p) => p.status === "active").length)}
+          sub={`${scopedPlayers.length} total`}
           icon={Users}
         />
       </div>

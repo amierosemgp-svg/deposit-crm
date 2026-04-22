@@ -31,16 +31,38 @@ export default function GameTransferPage() {
   const transfers = useStore((s) => s.gameTransfers);
   const getBalance = useStore((s) => s.getCreditBalance);
   const createTransfer = useStore((s) => s.createGameTransfer);
+  const importedPlayers = useStore((s) => s.importedPlayers);
+  const selectedCompanyId = useStore((s) => s.selectedCompanyId);
 
   const playerMatches = useMemo(() => {
     if (!playerQuery) return [];
     const q = playerQuery.toLowerCase();
-    return PLAYERS.filter(
-      (p) =>
-        p.full_name.toLowerCase().includes(q) ||
-        p.username.toLowerCase().includes(q),
-    ).slice(0, 5);
-  }, [playerQuery]);
+    return [...PLAYERS, ...importedPlayers]
+      .filter(
+        (p) =>
+          (p.full_name.toLowerCase().includes(q) ||
+            p.username.toLowerCase().includes(q)) &&
+          (selectedCompanyId === null || p.company_id === selectedCompanyId),
+      )
+      .slice(0, 5);
+  }, [playerQuery, importedPlayers, selectedCompanyId]);
+
+  const playerCompanyMap = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const p of PLAYERS) map.set(p.player_id, p.company_id);
+    for (const p of importedPlayers) map.set(p.player_id, p.company_id);
+    return map;
+  }, [importedPlayers]);
+
+  const scopedTransfers = useMemo(
+    () =>
+      transfers.filter(
+        (t) =>
+          selectedCompanyId === null ||
+          playerCompanyMap.get(t.player_id) === selectedCompanyId,
+      ),
+    [transfers, selectedCompanyId, playerCompanyMap],
+  );
 
   const player = playerId ? PLAYERS.find((p) => p.player_id === playerId) : null;
   const fromBal = player ? getBalance(player.player_id, fromGame) : 0;
@@ -194,7 +216,7 @@ export default function GameTransferPage() {
                 </tr>
               </thead>
               <tbody>
-                {transfers.map((t) => {
+                {scopedTransfers.map((t) => {
                   const p = PLAYERS.find((x) => x.player_id === t.player_id);
                   return (
                     <tr key={t.transfer_id} className="border-t hover:bg-muted/30">

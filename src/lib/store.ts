@@ -60,6 +60,10 @@ type Store = {
   providerBoAdjustments: ProviderBoAdjustment[];
   notifications: Notification[];
 
+  // Global UI context — null = "All companies"
+  selectedCompanyId: number | null;
+  setSelectedCompanyId: (companyId: number | null) => void;
+
   // Derived helpers
   getCreditBalance: (playerId: number, game: GameName) => number;
 
@@ -135,6 +139,8 @@ export const useStore = create<Store>((set, get) => ({
   bankTransfers: BANK_TRANSFERS,
   providerBoAccounts: PROVIDER_BO_ACCOUNTS,
   providerBoAdjustments: PROVIDER_BO_ADJUSTMENTS,
+  selectedCompanyId: null,
+  setSelectedCompanyId: (companyId) => set({ selectedCompanyId: companyId }),
   notifications: [],
 
   getCreditBalance: (playerId, game) => {

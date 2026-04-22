@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
-import { PLAYERS, USERS } from "@/lib/mock-data";
+import { PLAYERS, USERS, COMPANIES } from "@/lib/mock-data";
 import { formatRM, formatDateTime } from "@/lib/format";
 import { Card } from "@/components/ui/card";
 import { StatusBadge } from "@/components/status-badge";
@@ -33,8 +33,19 @@ export default function HistoryPage() {
   const deposits = useStore((s) => s.deposits);
   const withdrawals = useStore((s) => s.withdrawals);
   const transfers = useStore((s) => s.gameTransfers);
+  const importedPlayers = useStore((s) => s.importedPlayers);
+  const selectedCompanyId = useStore((s) => s.selectedCompanyId);
   const [type, setType] = useState<string>("all");
   const [q, setQ] = useState("");
+
+  const playerCompanyMap = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const p of PLAYERS) map.set(p.player_id, p.company_id);
+    for (const p of importedPlayers) map.set(p.player_id, p.company_id);
+    return map;
+  }, [importedPlayers]);
+
+  const activeCompany = COMPANIES.find((c) => c.company_id === selectedCompanyId);
 
   const rows = useMemo<Row[]>(() => {
     const agentFor = (uid?: number) =>
@@ -88,6 +99,11 @@ export default function HistoryPage() {
   }, [deposits, withdrawals, transfers]);
 
   const filtered = rows
+    .filter(
+      (r) =>
+        selectedCompanyId === null ||
+        playerCompanyMap.get(r.player_id) === selectedCompanyId,
+    )
     .filter((r) => type === "all" || r.type === type)
     .filter((r) => {
       if (!q) return true;
@@ -102,6 +118,15 @@ export default function HistoryPage() {
         <h1 className="text-2xl font-semibold">Transaction History</h1>
         <p className="text-sm text-muted-foreground mt-1">
           Full audit log of deposits, withdrawals, and game credit transfers
+          {activeCompany && (
+            <>
+              {" "}
+              ·{" "}
+              <span className="font-medium text-foreground">
+                {activeCompany.company_name}
+              </span>
+            </>
+          )}
         </p>
       </div>
 
