@@ -1,19 +1,29 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { PLAYERS, COMPANIES } from "@/lib/mock-data";
+import { useStore } from "@/lib/store";
 import { formatRM, formatRelative, initialsOf } from "@/lib/format";
 import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { StatusBadge } from "@/components/status-badge";
 import { PlayerNameLink } from "@/components/player-name-link";
-import { Search, Send } from "lucide-react";
+import { ImportPlayersModal } from "@/components/import-players-modal";
+import { Search, Send, Upload } from "lucide-react";
 
 export default function PlayersPage() {
+  const importedPlayers = useStore((s) => s.importedPlayers);
   const [q, setQ] = useState("");
   const [companyFilter, setCompanyFilter] = useState<string>("all");
+  const [importOpen, setImportOpen] = useState(false);
 
-  const filtered = PLAYERS.filter((p) => {
+  const allPlayers = useMemo(
+    () => [...importedPlayers, ...PLAYERS],
+    [importedPlayers],
+  );
+
+  const filtered = allPlayers.filter((p) => {
     const matchQ =
       !q ||
       p.full_name.toLowerCase().includes(q.toLowerCase()) ||
@@ -26,11 +36,27 @@ export default function PlayersPage() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-2xl font-semibold">Players</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          {PLAYERS.length} total players across {COMPANIES.length} companies
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold">Players</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            {allPlayers.length} total players across {COMPANIES.length} companies
+            {importedPlayers.length > 0 && (
+              <span className="ml-1.5 inline-flex items-center rounded-md bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
+                +{importedPlayers.length} imported
+              </span>
+            )}
+          </p>
+        </div>
+        <Button
+          onClick={() => setImportOpen(true)}
+          variant="outline"
+          size="sm"
+          className="cursor-pointer"
+        >
+          <Upload className="h-3.5 w-3.5" />
+          Import Players
+        </Button>
       </div>
 
       <Card className="overflow-hidden p-0 gap-0">
@@ -124,6 +150,8 @@ export default function PlayersPage() {
           </table>
         </div>
       </Card>
+
+      <ImportPlayersModal open={importOpen} onOpenChange={setImportOpen} />
     </div>
   );
 }

@@ -6,6 +6,7 @@ import type {
   GameCredit,
   GameName,
   GameTransfer,
+  Player,
   Withdrawal,
 } from "./types";
 import {
@@ -13,6 +14,7 @@ import {
   GAME_CREDITS,
   GAME_TRANSFERS,
   LIVE_FEED_POOL,
+  PLAYERS,
   WITHDRAWALS,
 } from "./mock-data";
 
@@ -23,15 +25,24 @@ type Notification = {
   createdAt: number;
 };
 
+export type ImportedPlayerInput = Omit<
+  Player,
+  "player_id" | "registration_date" | "status" | "total_deposits" | "total_withdrawals"
+>;
+
 type Store = {
   deposits: Deposit[];
   withdrawals: Withdrawal[];
   gameCredits: GameCredit[];
   gameTransfers: GameTransfer[];
+  importedPlayers: Player[];
   notifications: Notification[];
 
   // Derived helpers
   getCreditBalance: (playerId: number, game: GameName) => number;
+
+  // Player import
+  importPlayers: (rows: ImportedPlayerInput[]) => Player[];
 
   // Deposit actions
   updateDepositDraft: (
@@ -67,6 +78,7 @@ export const useStore = create<Store>((set, get) => ({
   withdrawals: WITHDRAWALS,
   gameCredits: GAME_CREDITS,
   gameTransfers: GAME_TRANSFERS,
+  importedPlayers: [],
   notifications: [],
 
   getCreditBalance: (playerId, game) => {
@@ -74,6 +86,29 @@ export const useStore = create<Store>((set, get) => ({
       (c) => c.player_id === playerId && c.game_name === game,
     );
     return row?.current_balance ?? 0;
+  },
+
+  importPlayers: (rows) => {
+    const existingMaxId = Math.max(
+      ...PLAYERS.map((p) => p.player_id),
+      ...get().importedPlayers.map((p) => p.player_id),
+      1000,
+    );
+    const nowIso = new Date().toISOString();
+    const created: Player[] = rows.map((r, i) => ({
+      player_id: existingMaxId + 1 + i,
+      ...r,
+      registration_date: nowIso,
+      status: "active",
+      total_deposits: 0,
+      total_withdrawals: 0,
+    }));
+    set((s) => ({ importedPlayers: [...created, ...s.importedPlayers] }));
+    get().pushNotification({
+      kind: "deposit",
+      message: `Imported ${created.length} new player${created.length === 1 ? "" : "s"}`,
+    });
+    return created;
   },
 
   updateDepositDraft: (depositId, patch) => {
