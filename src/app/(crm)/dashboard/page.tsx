@@ -2,7 +2,6 @@
 
 import { useMemo } from "react";
 import { useStore } from "@/lib/store";
-import { PLAYERS, COMPANIES } from "@/lib/mock-data";
 import { formatRM, formatDateTime } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatusBadge } from "@/components/status-badge";
@@ -53,10 +52,37 @@ function KpiCard({
   );
 }
 
+function EmptyRow({
+  colSpan,
+  hydrated,
+  message,
+}: {
+  colSpan: number;
+  hydrated: boolean;
+  message: string;
+}) {
+  return (
+    <tr>
+      <td
+        colSpan={colSpan}
+        className="px-4 py-8 text-center text-xs text-muted-foreground"
+      >
+        {hydrated ? message : "Loading…"}
+      </td>
+    </tr>
+  );
+}
+
+const PENDING_DEPOSIT_STATUSES = new Set(["pending_match", "matched", "pending"]);
+
 export default function DashboardPage() {
+  const me = useStore((s) => s.me);
+  const hydrated = useStore((s) => s.hydrated);
   const deposits = useStore((s) => s.deposits);
   const withdrawals = useStore((s) => s.withdrawals);
-  const importedPlayers = useStore((s) => s.importedPlayers);
+  const players = useStore((s) => s.players);
+  const entities = useStore((s) => s.entities);
+  const userName = useStore((s) => s.userName);
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
 
   const today = new Date();
@@ -69,33 +95,48 @@ export default function DashboardPage() {
     );
   };
 
-  const playerCompanyMap = useMemo(() => {
-    const map = new Map<number, number>();
-    for (const p of PLAYERS) map.set(p.player_id, p.company_id);
-    for (const p of importedPlayers) map.set(p.player_id, p.company_id);
-    return map;
-  }, [importedPlayers]);
+  const playerMap = useMemo(
+    () => new Map(players.map((p) => [p.player_id, p])),
+    [players],
+  );
 
-  const inScope = (playerId: number) =>
-    selectedCompanyId === null ||
-    playerCompanyMap.get(playerId) === selectedCompanyId;
-
-  const scopedDeposits = deposits.filter((d) => inScope(d.player_id));
-  const scopedWithdrawals = withdrawals.filter((w) => inScope(w.player_id));
-  const scopedPlayers = [...PLAYERS, ...importedPlayers].filter(
-    (p) => selectedCompanyId === null || p.company_id === selectedCompanyId,
+  const scopedDeposits = useMemo(
+    () =>
+      selectedCompanyId === null
+        ? deposits
+        : deposits.filter((d) => d.company_entity_id === selectedCompanyId),
+    [deposits, selectedCompanyId],
+  );
+  const scopedWithdrawals = useMemo(
+    () =>
+      selectedCompanyId === null
+        ? withdrawals
+        : withdrawals.filter(
+            (w) =>
+              playerMap.get(w.player_id)?.company_entity_id === selectedCompanyId,
+          ),
+    [withdrawals, playerMap, selectedCompanyId],
+  );
+  const scopedPlayers = useMemo(
+    () =>
+      selectedCompanyId === null
+        ? players
+        : players.filter((p) => p.company_entity_id === selectedCompanyId),
+    [players, selectedCompanyId],
   );
 
   const todaysDeposits = scopedDeposits.filter(
-    (d) => isSameDay(d.created_at) && d.status === "completed",
+    (d) => d.status === "completed" && isSameDay(d.updated_at),
   );
   const todaysDepositsTotal = todaysDeposits.reduce(
     (sum, d) => sum + d.total_amount,
     0,
   );
-  const pendingDeposits = scopedDeposits.filter((d) => d.status === "pending");
+  const pendingDeposits = scopedDeposits.filter((d) =>
+    PENDING_DEPOSIT_STATUSES.has(d.status),
+  );
   const todaysWithdrawals = scopedWithdrawals.filter(
-    (w) => isSameDay(w.created_at) && w.status === "paid",
+    (w) => w.status === "paid" && w.paid_at != null && isSameDay(w.paid_at),
   );
   const todaysWithdrawalsTotal = todaysWithdrawals.reduce(
     (sum, w) => sum + w.credit_pulled_amount,
@@ -109,12 +150,19 @@ export default function DashboardPage() {
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
     .slice(0, 5);
 
-  const activeCompany = COMPANIES.find((c) => c.company_id === selectedCompanyId);
+  const activeCompany =
+    selectedCompanyId === null
+      ? null
+      : entities.find((e) => e.entity_id === selectedCompanyId);
+
+  const firstName = me?.full_name.split(" ")[0];
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">Welcome back, Ahmad 👋</h1>
+        <h1 className="text-2xl font-semibold">
+          Welcome back{firstName ? `, ${firstName}` : ""} 👋
+        </h1>
         <p className="text-sm text-muted-foreground mt-1">
           {today.toLocaleDateString("en-US", {
             weekday: "long",
@@ -127,7 +175,7 @@ export default function DashboardPage() {
               {" "}
               ·{" "}
               <span className="font-medium text-foreground">
-                {activeCompany.company_name}
+                {activeCompany.name}
               </span>
             </>
           )}
@@ -179,28 +227,53 @@ export default function DashboardPage() {
                   <th className="px-4 py-2 text-left font-medium">Time</th>
                   <th className="px-4 py-2 text-left font-medium">Player</th>
                   <th className="px-4 py-2 text-right font-medium">Amount</th>
+                  <th className="px-4 py-2 text-left font-medium">Handled by</th>
                   <th className="px-4 py-2 text-left font-medium">Status</th>
                 </tr>
               </thead>
               <tbody>
-                {recentDeposits.map((d) => (
-                  <tr key={d.deposit_id} className="border-t hover:bg-muted/30">
-                    <td className="px-4 py-2 whitespace-nowrap text-muted-foreground">
-                      {formatDateTime(d.created_at)}
-                    </td>
-                    <td className="px-4 py-2 whitespace-nowrap">
-                      <PlayerNameLink playerId={d.player_id}>
-                        {d.player_username}
-                      </PlayerNameLink>
-                    </td>
-                    <td className="px-4 py-2 text-right whitespace-nowrap font-medium">
-                      {formatRM(d.total_amount)}
-                    </td>
-                    <td className="px-4 py-2">
-                      <StatusBadge status={d.status} />
-                    </td>
-                  </tr>
-                ))}
+                {recentDeposits.length === 0 ? (
+                  <EmptyRow
+                    colSpan={5}
+                    hydrated={hydrated}
+                    message="No deposits yet — they'll appear here as soon as the bot detects one."
+                  />
+                ) : (
+                  recentDeposits.map((d) => (
+                    <tr
+                      key={d.deposit_id}
+                      className={`border-t hover:bg-muted/30 ${
+                        d.is_new ? "bg-emerald-500/10" : ""
+                      }`}
+                    >
+                      <td className="px-4 py-2 whitespace-nowrap text-muted-foreground">
+                        {formatDateTime(d.created_at)}
+                      </td>
+                      <td className="px-4 py-2 whitespace-nowrap">
+                        {d.player_id != null ? (
+                          <PlayerNameLink playerId={d.player_id}>
+                            {d.player_username ??
+                              playerMap.get(d.player_id)?.username ??
+                              `P-${d.player_id}`}
+                          </PlayerNameLink>
+                        ) : (
+                          <span className="text-muted-foreground">
+                            {d.player_username ?? d.bank_description ?? "Unmatched"}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2 text-right whitespace-nowrap font-medium">
+                        {formatRM(d.total_amount)}
+                      </td>
+                      <td className="px-4 py-2 whitespace-nowrap text-muted-foreground">
+                        {userName(d.handled_by_user_id)}
+                      </td>
+                      <td className="px-4 py-2">
+                        <StatusBadge status={d.status} />
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </CardContent>
@@ -221,31 +294,46 @@ export default function DashboardPage() {
                   <th className="px-4 py-2 text-left font-medium">Time</th>
                   <th className="px-4 py-2 text-left font-medium">Player</th>
                   <th className="px-4 py-2 text-right font-medium">Amount</th>
+                  <th className="px-4 py-2 text-left font-medium">Handled by</th>
                   <th className="px-4 py-2 text-left font-medium">Status</th>
                 </tr>
               </thead>
               <tbody>
-                {recentWithdrawals.map((w) => {
-                  const player = PLAYERS.find((p) => p.player_id === w.player_id);
-                  return (
-                    <tr key={w.withdrawal_id} className="border-t hover:bg-muted/30">
-                      <td className="px-4 py-2 whitespace-nowrap text-muted-foreground">
-                        {formatDateTime(w.created_at)}
-                      </td>
-                      <td className="px-4 py-2 whitespace-nowrap">
-                        <PlayerNameLink playerId={w.player_id}>
-                          {player?.username ?? `P-${w.player_id}`}
-                        </PlayerNameLink>
-                      </td>
-                      <td className="px-4 py-2 text-right whitespace-nowrap font-medium">
-                        {formatRM(w.requested_amount)}
-                      </td>
-                      <td className="px-4 py-2">
-                        <StatusBadge status={w.status} />
-                      </td>
-                    </tr>
-                  );
-                })}
+                {recentWithdrawals.length === 0 ? (
+                  <EmptyRow
+                    colSpan={5}
+                    hydrated={hydrated}
+                    message="No withdrawals yet — player payout requests will show up here."
+                  />
+                ) : (
+                  recentWithdrawals.map((w) => {
+                    const player = playerMap.get(w.player_id);
+                    return (
+                      <tr
+                        key={w.withdrawal_id}
+                        className="border-t hover:bg-muted/30"
+                      >
+                        <td className="px-4 py-2 whitespace-nowrap text-muted-foreground">
+                          {formatDateTime(w.created_at)}
+                        </td>
+                        <td className="px-4 py-2 whitespace-nowrap">
+                          <PlayerNameLink playerId={w.player_id}>
+                            {player?.username ?? `P-${w.player_id}`}
+                          </PlayerNameLink>
+                        </td>
+                        <td className="px-4 py-2 text-right whitespace-nowrap font-medium">
+                          {formatRM(w.requested_amount)}
+                        </td>
+                        <td className="px-4 py-2 whitespace-nowrap text-muted-foreground">
+                          {userName(w.handled_by_user_id)}
+                        </td>
+                        <td className="px-4 py-2">
+                          <StatusBadge status={w.status} />
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </CardContent>

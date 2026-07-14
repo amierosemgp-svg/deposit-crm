@@ -2,545 +2,518 @@
 
 import { create } from "zustand";
 import type {
+  AuditEntry,
+  BankAccount,
   BankTransfer,
-  CompanyBankAccount,
+  CompanyView,
   Deposit,
+  Entity,
   GameCredit,
-  GameName,
   GameTransfer,
+  Me,
   Player,
   ProviderBoAccount,
   ProviderBoAdjustment,
+  ServerSettings,
+  User,
   Withdrawal,
 } from "./types";
-import {
-  BANK_TRANSFERS,
-  COMPANY_BANK_ACCOUNTS,
-  DEPOSITS,
-  GAME_CREDITS,
-  GAME_TRANSFERS,
-  LIVE_FEED_POOL,
-  PLAYERS,
-  PROVIDER_BO_ACCOUNTS,
-  PROVIDER_BO_ADJUSTMENTS,
-  WITHDRAWALS,
-} from "./mock-data";
 
-type Notification = {
+export type Notification = {
   id: string;
-  kind: "deposit" | "withdrawal" | "topup" | "pullback";
+  kind: "deposit" | "withdrawal" | "topup" | "pullback" | "transfer" | "system";
   message: string;
   createdAt: number;
 };
 
-export type ImportedPlayerInput = Omit<
-  Player,
-  "player_id" | "registration_date" | "status" | "total_deposits" | "total_withdrawals"
->;
+export type MutationResult = { ok: boolean; error?: string };
 
-export type CompanyBankAccountInput = Omit<
-  CompanyBankAccount,
-  "account_id" | "created_at"
->;
+async function api<T = unknown>(
+  path: string,
+  init?: RequestInit,
+): Promise<{ ok: boolean; status: number; data: T | null; error?: string }> {
+  try {
+    const res = await fetch(path, {
+      ...init,
+      headers: {
+        ...(init?.body ? { "Content-Type": "application/json" } : {}),
+        ...init?.headers,
+      },
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      return {
+        ok: false,
+        status: res.status,
+        data,
+        error: (data as { error?: string } | null)?.error ?? `Request failed (${res.status})`,
+      };
+    }
+    return { ok: true, status: res.status, data };
+  } catch {
+    return { ok: false, status: 0, data: null, error: "Network error" };
+  }
+}
 
-export type ProviderBoAccountInput = Omit<
-  ProviderBoAccount,
-  "bo_account_id" | "created_at"
->;
-
-type Store = {
+type StateResponse = {
+  me: Me;
+  entities: Entity[];
+  users: User[];
+  players: Player[];
   deposits: Deposit[];
   withdrawals: Withdrawal[];
   gameCredits: GameCredit[];
   gameTransfers: GameTransfer[];
-  importedPlayers: Player[];
-  companyBankAccounts: CompanyBankAccount[];
+  bankAccounts: BankAccount[];
   bankTransfers: BankTransfer[];
-  providerBoAccounts: ProviderBoAccount[];
-  providerBoAdjustments: ProviderBoAdjustment[];
+  boAccounts: ProviderBoAccount[];
+  boAdjustments: ProviderBoAdjustment[];
+  auditLog: AuditEntry[];
+  settings: ServerSettings;
+};
+
+type Store = {
+  hydrated: boolean;
+  me: Me | null;
+  entities: Entity[];
+  users: User[];
+  players: Player[];
+  deposits: Deposit[];
+  withdrawals: Withdrawal[];
+  gameCredits: GameCredit[];
+  gameTransfers: GameTransfer[];
+  bankAccounts: BankAccount[];
+  bankTransfers: BankTransfer[];
+  boAccounts: ProviderBoAccount[];
+  boAdjustments: ProviderBoAdjustment[];
+  auditLog: AuditEntry[];
+  settings: ServerSettings;
   notifications: Notification[];
 
-  // Global UI context — null = "All companies"
+  /** Company selector in the top nav — null = all visible companies. */
   selectedCompanyId: number | null;
   setSelectedCompanyId: (companyId: number | null) => void;
 
-  // Derived helpers
-  getCreditBalance: (playerId: number, game: GameName) => number;
+  // --- hydration ---
+  refresh: () => Promise<void>;
+  startPolling: () => void;
+  stopPolling: () => void;
 
-  // Player import
-  importPlayers: (rows: ImportedPlayerInput[]) => Player[];
+  // --- derived helpers ---
+  companies: () => CompanyView[];
+  getCreditBalance: (playerId: number, game: string) => number;
+  userName: (userId?: number | null) => string;
+  playerById: (playerId?: number | null) => Player | undefined;
+  entityName: (entityId?: number | null) => string;
+  games: () => string[];
+  banks: () => string[];
+  bonusOptions: () => number[];
 
-  // Company bank account CRUD
-  addCompanyBankAccount: (input: CompanyBankAccountInput) => CompanyBankAccount;
-  updateCompanyBankAccount: (
+  // --- mutations (API-backed; refresh() after success) ---
+  updateDepositDraft: (
+    depositId: number,
+    patch: Partial<Pick<Deposit, "bonus_percentage" | "selected_game" | "player_id">>,
+  ) => Promise<MutationResult>;
+  approveDeposit: (depositId: number) => Promise<MutationResult>;
+  createDepositIntent: (input: {
+    player_id: number;
+    amount: number;
+    bank_name: string;
+    status?: "pending_match" | "pending";
+    receipt_url?: string;
+  }) => Promise<MutationResult>;
+  createWithdrawal: (input: {
+    player_id: number;
+    requested_amount: number;
+    game_name: string;
+    bank_name?: string;
+    bank_account_number?: string;
+  }) => Promise<MutationResult>;
+  pullCreditsForWithdrawal: (withdrawalId: number) => Promise<MutationResult>;
+  markWithdrawalPaid: (
+    withdrawalId: number,
+    opts?: { paid_from_account_id?: number; proof_url?: string },
+  ) => Promise<MutationResult>;
+  createGameTransfer: (input: {
+    playerId: number;
+    fromGame: string;
+    toGame: string;
+    amount: number;
+  }) => Promise<MutationResult>;
+  createPlayer: (input: {
+    username: string;
+    full_name: string;
+    telegram_username: string;
+    company_entity_id: number;
+    contact_number?: string;
+    wechat_id?: string;
+    notes?: string;
+    bank_accounts?: { bank_name: string; account_number: string; account_holder: string }[];
+    game_accounts?: { game_name: string; game_username: string }[];
+  }) => Promise<MutationResult>;
+  importPlayers: (
+    rows: Parameters<Store["createPlayer"]>[0][],
+  ) => Promise<MutationResult>;
+  updatePlayer: (
+    playerId: number,
+    patch: Partial<
+      Pick<
+        Player,
+        | "full_name"
+        | "contact_number"
+        | "telegram_username"
+        | "wechat_id"
+        | "status"
+        | "notes"
+        | "bank_accounts"
+        | "game_accounts"
+      >
+    >,
+  ) => Promise<MutationResult>;
+  addBankAccount: (input: {
+    entity_id: number;
+    role: "deposit" | "withdrawal";
+    bank_name: string;
+    account_number: string;
+    account_holder: string;
+    label?: string;
+    current_balance?: number;
+    status?: "active" | "inactive";
+  }) => Promise<MutationResult>;
+  updateBankAccount: (
     accountId: number,
-    patch: Partial<CompanyBankAccountInput>,
-  ) => void;
-  deleteCompanyBankAccount: (accountId: number) => void;
-  transferBetweenCompanyAccounts: (input: {
+    patch: Record<string, unknown>,
+  ) => Promise<MutationResult>;
+  deleteBankAccount: (accountId: number) => Promise<MutationResult>;
+  createBankTransfer: (input: {
     fromAccountId: number;
     toAccountId: number;
     amount: number;
     reference?: string;
     notes?: string;
-    handledByUserId: number;
-  }) => BankTransfer | null;
-
-  // Provider BO account CRUD + credit adjustment
-  addProviderBoAccount: (input: ProviderBoAccountInput) => ProviderBoAccount;
-  updateProviderBoAccount: (
+  }) => Promise<MutationResult>;
+  confirmBankTransfer: (transferId: number) => Promise<MutationResult>;
+  rejectBankTransfer: (transferId: number) => Promise<MutationResult>;
+  addBoAccount: (input: {
+    company_entity_id: number;
+    game_name: string;
+    bo_username: string;
+    bo_label?: string;
+    current_credit?: number;
+    status?: "active" | "inactive";
+    notes?: string;
+  }) => Promise<MutationResult>;
+  updateBoAccount: (
     boAccountId: number,
-    patch: Partial<ProviderBoAccountInput>,
-  ) => void;
-  deleteProviderBoAccount: (boAccountId: number) => void;
-  adjustProviderBoCredit: (input: {
+    patch: Record<string, unknown>,
+  ) => Promise<MutationResult>;
+  deleteBoAccount: (boAccountId: number) => Promise<MutationResult>;
+  adjustBoCredit: (input: {
     boAccountId: number;
-    amount: number; // signed: positive = top-up, negative = deduct
-    reason: string;
-    handledByUserId: number;
-  }) => ProviderBoAdjustment | null;
-
-  // Deposit actions
-  updateDepositDraft: (
-    depositId: number,
-    patch: Partial<Pick<Deposit, "bonus_percentage" | "selected_game">>,
-  ) => void;
-  approveDeposit: (depositId: number, handledByUserId: number) => void;
-  injectLiveDeposit: () => Deposit | null;
-
-  // Withdrawal actions
-  pullCreditsForWithdrawal: (
-    withdrawalId: number,
-    handledByUserId: number,
-  ) => void;
-  markWithdrawalPaid: (withdrawalId: number) => void;
-
-  // Game transfer
-  createGameTransfer: (input: {
-    playerId: number;
-    fromGame: GameName;
-    toGame: GameName;
     amount: number;
-    handledByUserId: number;
-  }) => void;
+    reason: string;
+  }) => Promise<MutationResult>;
+  addEntity: (input: {
+    parent_entity_id: number;
+    entity_type: "leader" | "company" | "cs";
+    name: string;
+  }) => Promise<MutationResult>;
+  addUser: (input: {
+    username: string;
+    email: string;
+    full_name: string;
+    password: string;
+    role: "company_leader" | "cs_agent" | "viewer";
+    entity_id: number;
+  }) => Promise<MutationResult>;
+  uploadFile: (file: File) => Promise<{ ok: boolean; url?: string; error?: string }>;
+  logout: () => Promise<void>;
 
-  // Notifications
   pushNotification: (n: Omit<Notification, "id" | "createdAt">) => void;
   clearNotifications: () => void;
 };
 
-export const useStore = create<Store>((set, get) => ({
-  deposits: DEPOSITS,
-  withdrawals: WITHDRAWALS,
-  gameCredits: GAME_CREDITS,
-  gameTransfers: GAME_TRANSFERS,
-  importedPlayers: [],
-  companyBankAccounts: COMPANY_BANK_ACCOUNTS,
-  bankTransfers: BANK_TRANSFERS,
-  providerBoAccounts: PROVIDER_BO_ACCOUNTS,
-  providerBoAdjustments: PROVIDER_BO_ADJUSTMENTS,
-  selectedCompanyId: null,
-  setSelectedCompanyId: (companyId) => set({ selectedCompanyId: companyId }),
-  notifications: [],
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+let knownDepositIds: Set<number> | null = null;
 
-  getCreditBalance: (playerId, game) => {
-    const row = get().gameCredits.find(
-      (c) => c.player_id === playerId && c.game_name === game,
-    );
-    return row?.current_balance ?? 0;
-  },
+export const useStore = create<Store>((set, get) => {
+  async function mutate(
+    path: string,
+    init: RequestInit,
+    okMessage?: { kind: Notification["kind"]; message: string },
+  ): Promise<MutationResult> {
+    const res = await api(path, init);
+    if (!res.ok) return { ok: false, error: res.error };
+    if (okMessage) get().pushNotification(okMessage);
+    await get().refresh();
+    return { ok: true };
+  }
 
-  importPlayers: (rows) => {
-    const existingMaxId = Math.max(
-      ...PLAYERS.map((p) => p.player_id),
-      ...get().importedPlayers.map((p) => p.player_id),
-      1000,
-    );
-    const nowIso = new Date().toISOString();
-    const created: Player[] = rows.map((r, i) => ({
-      player_id: existingMaxId + 1 + i,
-      ...r,
-      registration_date: nowIso,
-      status: "active",
-      total_deposits: 0,
-      total_withdrawals: 0,
-    }));
-    set((s) => ({ importedPlayers: [...created, ...s.importedPlayers] }));
-    get().pushNotification({
-      kind: "deposit",
-      message: `Imported ${created.length} new player${created.length === 1 ? "" : "s"}`,
-    });
-    return created;
-  },
+  return {
+    hydrated: false,
+    me: null,
+    entities: [],
+    users: [],
+    players: [],
+    deposits: [],
+    withdrawals: [],
+    gameCredits: [],
+    gameTransfers: [],
+    bankAccounts: [],
+    bankTransfers: [],
+    boAccounts: [],
+    boAdjustments: [],
+    auditLog: [],
+    settings: {},
+    notifications: [],
+    selectedCompanyId: null,
+    setSelectedCompanyId: (companyId) => set({ selectedCompanyId: companyId }),
 
-  addCompanyBankAccount: (input) => {
-    const maxId = Math.max(
-      8000,
-      ...get().companyBankAccounts.map((a) => a.account_id),
-    );
-    const account: CompanyBankAccount = {
-      ...input,
-      account_id: maxId + 1,
-      created_at: new Date().toISOString(),
-    };
-    set((s) => ({
-      companyBankAccounts: [account, ...s.companyBankAccounts],
-    }));
-    return account;
-  },
-
-  updateCompanyBankAccount: (accountId, patch) => {
-    set((s) => ({
-      companyBankAccounts: s.companyBankAccounts.map((a) =>
-        a.account_id === accountId ? { ...a, ...patch } : a,
-      ),
-    }));
-  },
-
-  deleteCompanyBankAccount: (accountId) => {
-    set((s) => ({
-      companyBankAccounts: s.companyBankAccounts.filter(
-        (a) => a.account_id !== accountId,
-      ),
-    }));
-  },
-
-  transferBetweenCompanyAccounts: ({
-    fromAccountId,
-    toAccountId,
-    amount,
-    reference,
-    notes,
-    handledByUserId,
-  }) => {
-    if (fromAccountId === toAccountId || amount <= 0) return null;
-    const accounts = get().companyBankAccounts;
-    const from = accounts.find((a) => a.account_id === fromAccountId);
-    const to = accounts.find((a) => a.account_id === toAccountId);
-    if (!from || !to) return null;
-    if (amount > from.current_balance) return null;
-
-    const transfer: BankTransfer = {
-      transfer_id: Math.max(11000, ...get().bankTransfers.map((t) => t.transfer_id)) + 1,
-      from_account_id: fromAccountId,
-      to_account_id: toAccountId,
-      amount,
-      reference: reference?.trim() || undefined,
-      notes: notes?.trim() || undefined,
-      handled_by_user_id: handledByUserId,
-      status: "completed",
-      created_at: new Date().toISOString(),
-    };
-
-    set((s) => ({
-      companyBankAccounts: s.companyBankAccounts.map((a) => {
-        if (a.account_id === fromAccountId) {
-          return {
-            ...a,
-            current_balance: +(a.current_balance - amount).toFixed(2),
-          };
+    refresh: async () => {
+      const res = await api<StateResponse>("/api/state");
+      if (!res.ok) {
+        if (res.status === 401 && typeof window !== "undefined") {
+          window.location.href = "/login";
         }
-        if (a.account_id === toAccountId) {
-          return {
-            ...a,
-            current_balance: +(a.current_balance + amount).toFixed(2),
-          };
-        }
-        return a;
-      }),
-      bankTransfers: [transfer, ...s.bankTransfers],
-    }));
-
-    get().pushNotification({
-      kind: "topup",
-      message: `Transferred RM ${amount.toFixed(2)} from ${from.bank_name} ${from.account_number.slice(-4)} → ${to.bank_name} ${to.account_number.slice(-4)}`,
-    });
-    return transfer;
-  },
-
-  addProviderBoAccount: (input) => {
-    const maxId = Math.max(
-      9000,
-      ...get().providerBoAccounts.map((a) => a.bo_account_id),
-    );
-    const account: ProviderBoAccount = {
-      ...input,
-      bo_account_id: maxId + 1,
-      created_at: new Date().toISOString(),
-    };
-    set((s) => ({
-      providerBoAccounts: [account, ...s.providerBoAccounts],
-    }));
-    return account;
-  },
-
-  updateProviderBoAccount: (boAccountId, patch) => {
-    set((s) => ({
-      providerBoAccounts: s.providerBoAccounts.map((a) =>
-        a.bo_account_id === boAccountId ? { ...a, ...patch } : a,
-      ),
-    }));
-  },
-
-  deleteProviderBoAccount: (boAccountId) => {
-    set((s) => ({
-      providerBoAccounts: s.providerBoAccounts.filter(
-        (a) => a.bo_account_id !== boAccountId,
-      ),
-      providerBoAdjustments: s.providerBoAdjustments.filter(
-        (j) => j.bo_account_id !== boAccountId,
-      ),
-    }));
-  },
-
-  adjustProviderBoCredit: ({ boAccountId, amount, reason, handledByUserId }) => {
-    if (amount === 0 || !reason.trim()) return null;
-    const account = get().providerBoAccounts.find(
-      (a) => a.bo_account_id === boAccountId,
-    );
-    if (!account) return null;
-    const newBalance = +(account.current_credit + amount).toFixed(2);
-    if (newBalance < 0) return null;
-
-    const adjustment: ProviderBoAdjustment = {
-      adjustment_id:
-        Math.max(12000, ...get().providerBoAdjustments.map((j) => j.adjustment_id)) +
-        1,
-      bo_account_id: boAccountId,
-      amount,
-      reason: reason.trim(),
-      handled_by_user_id: handledByUserId,
-      created_at: new Date().toISOString(),
-    };
-
-    set((s) => ({
-      providerBoAccounts: s.providerBoAccounts.map((a) =>
-        a.bo_account_id === boAccountId
-          ? { ...a, current_credit: newBalance }
-          : a,
-      ),
-      providerBoAdjustments: [adjustment, ...s.providerBoAdjustments],
-    }));
-
-    get().pushNotification({
-      kind: "topup",
-      message: `${amount > 0 ? "Topped up" : "Deducted"} ${Math.abs(amount).toLocaleString("en-MY")} credits on ${account.game_name} (${account.bo_username})`,
-    });
-    return adjustment;
-  },
-
-  updateDepositDraft: (depositId, patch) => {
-    set((s) => ({
-      deposits: s.deposits.map((d) => {
-        if (d.deposit_id !== depositId) return d;
-        const bonusPct =
-          patch.bonus_percentage !== undefined
-            ? patch.bonus_percentage
-            : d.bonus_percentage;
-        const bonusAmt = +(d.deposit_amount * (bonusPct / 100)).toFixed(2);
-        return {
-          ...d,
-          ...patch,
-          bonus_percentage: bonusPct,
-          bonus_amount: bonusAmt,
-          total_amount: +(d.deposit_amount + bonusAmt).toFixed(2),
-          updated_at: new Date().toISOString(),
-        };
-      }),
-    }));
-  },
-
-  approveDeposit: (depositId, handledByUserId) => {
-    const d = get().deposits.find((x) => x.deposit_id === depositId);
-    if (!d || !d.selected_game) return;
-    const reference = `TOPUP-${Math.floor(Math.random() * 900000 + 100000)}`;
-    set((s) => ({
-      deposits: s.deposits.map((x) =>
-        x.deposit_id === depositId
-          ? {
-              ...x,
-              status: "completed",
-              handled_by_user_id: handledByUserId,
-              game_topup_reference: reference,
-              is_new: false,
-              updated_at: new Date().toISOString(),
-            }
-          : x,
-      ),
-      gameCredits: (() => {
-        const existing = s.gameCredits.find(
-          (c) =>
-            c.player_id === d.player_id && c.game_name === d.selected_game,
-        );
-        if (existing) {
-          return s.gameCredits.map((c) =>
-            c.player_id === d.player_id && c.game_name === d.selected_game
-              ? {
-                  ...c,
-                  current_balance: +(
-                    c.current_balance + d.total_amount
-                  ).toFixed(2),
-                  last_updated_at: new Date().toISOString(),
-                }
-              : c,
+        return;
+      }
+      const data = res.data!;
+      // Flag deposits that appeared since the previous poll (green flash + bell)
+      const incoming = new Set(data.deposits.map((d) => d.deposit_id));
+      let flagged = data.deposits;
+      if (knownDepositIds) {
+        const fresh = data.deposits.filter((d) => !knownDepositIds!.has(d.deposit_id));
+        if (fresh.length) {
+          flagged = data.deposits.map((d) =>
+            knownDepositIds!.has(d.deposit_id) ? d : { ...d, is_new: true },
           );
+          for (const d of fresh) {
+            get().pushNotification({
+              kind: "deposit",
+              message: `New deposit detected: ${d.player_username ?? d.bank_description ?? "unmatched"} — RM ${d.deposit_amount.toFixed(2)} via ${d.bank_name}`,
+            });
+          }
         }
-        return [
-          ...s.gameCredits,
-          {
-            player_id: d.player_id,
-            game_name: d.selected_game!,
-            current_balance: d.total_amount,
-            last_updated_at: new Date().toISOString(),
-          },
-        ];
-      })(),
-    }));
-    get().pushNotification({
-      kind: "topup",
-      message: `RM ${d.total_amount.toFixed(2)} credited to ${d.selected_game} for ${d.player_username}`,
-    });
-  },
+      }
+      knownDepositIds = incoming;
+      set({ ...data, deposits: flagged, hydrated: true });
+    },
 
-  injectLiveDeposit: () => {
-    const pool = LIVE_FEED_POOL;
-    const pick = pool[Math.floor(Math.random() * pool.length)];
-    const id = 6000 + Math.floor(Math.random() * 9000);
-    const deposit: Deposit = {
-      deposit_id: id,
-      transaction_ref: `TXN${Date.now().toString().slice(-12)}`,
-      deposit_date: new Date().toISOString(),
-      player_id: pick.player_id,
-      player_username: pick.player_username,
-      deposit_amount: pick.deposit_amount,
-      bank_name: pick.bank_name,
-      bank_account_number: pick.bank_account_number,
-      bank_account_holder: pick.bank_account_holder,
-      bonus_percentage: 0,
-      bonus_amount: 0,
-      total_amount: pick.deposit_amount,
-      selected_game: null,
-      status: "pending",
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      is_new: true,
-    };
-    set((s) => ({ deposits: [deposit, ...s.deposits] }));
-    get().pushNotification({
-      kind: "deposit",
-      message: `New deposit detected: ${pick.player_username} — RM ${pick.deposit_amount.toFixed(2)} via ${pick.bank_name}`,
-    });
-    return deposit;
-  },
+    startPolling: () => {
+      if (pollTimer) return;
+      void get().refresh();
+      pollTimer = setInterval(() => void get().refresh(), 10_000);
+    },
+    stopPolling: () => {
+      if (pollTimer) clearInterval(pollTimer);
+      pollTimer = null;
+    },
 
-  pullCreditsForWithdrawal: (withdrawalId, handledByUserId) => {
-    const w = get().withdrawals.find((x) => x.withdrawal_id === withdrawalId);
-    if (!w) return;
-    const bal = get().getCreditBalance(w.player_id, w.game_name);
-    const pulled = Math.min(bal, w.requested_amount);
-    set((s) => ({
-      withdrawals: s.withdrawals.map((x) =>
-        x.withdrawal_id === withdrawalId
-          ? {
-              ...x,
-              status: "credits_pulled",
-              credit_pulled_amount: pulled,
-              handled_by_user_id: handledByUserId,
-              updated_at: new Date().toISOString(),
-            }
-          : x,
-      ),
-      gameCredits: s.gameCredits.map((c) =>
-        c.player_id === w.player_id && c.game_name === w.game_name
-          ? {
-              ...c,
-              current_balance: +(c.current_balance - pulled).toFixed(2),
-              last_updated_at: new Date().toISOString(),
-            }
-          : c,
-      ),
-    }));
-    get().pushNotification({
-      kind: "pullback",
-      message: `Pulled RM ${pulled.toFixed(2)} from ${w.game_name} back to CRM`,
-    });
-  },
+    companies: () => {
+      const { entities } = get();
+      const byId = new Map(entities.map((e) => [e.entity_id, e]));
+      return entities
+        .filter((e) => e.entity_type === "company")
+        .map((e) => ({
+          company_id: e.entity_id,
+          company_name: e.name,
+          leader_entity_id: e.parent_entity_id,
+          leader_name: e.parent_entity_id
+            ? (byId.get(e.parent_entity_id)?.name ?? "")
+            : "",
+          status: e.status,
+        }));
+    },
 
-  markWithdrawalPaid: (withdrawalId) => {
-    set((s) => ({
-      withdrawals: s.withdrawals.map((x) =>
-        x.withdrawal_id === withdrawalId
-          ? { ...x, status: "paid", updated_at: new Date().toISOString() }
-          : x,
-      ),
-    }));
-    const w = get().withdrawals.find((x) => x.withdrawal_id === withdrawalId);
-    if (w) {
-      get().pushNotification({
-        kind: "withdrawal",
-        message: `Withdrawal RM ${w.credit_pulled_amount.toFixed(2)} paid out`,
+    getCreditBalance: (playerId, game) =>
+      get().gameCredits.find(
+        (c) => c.player_id === playerId && c.game_name === game,
+      )?.current_balance ?? 0,
+
+    userName: (userId) =>
+      get().users.find((u) => u.user_id === userId)?.full_name ?? "—",
+
+    playerById: (playerId) =>
+      get().players.find((p) => p.player_id === playerId),
+
+    entityName: (entityId) =>
+      get().entities.find((e) => e.entity_id === entityId)?.name ?? "—",
+
+    games: () => get().settings.games ?? ["Mega888", "Pussy888", "918Kiss", "XE88"],
+    banks: () =>
+      get().settings.banks ?? ["Maybank", "CIMB", "Hong Leong", "Public Bank"],
+    bonusOptions: () => get().settings.bonus_options ?? [0, 5, 10, 20, 30, 50, 100],
+
+    updateDepositDraft: (depositId, patch) =>
+      mutate(`/api/deposits/${depositId}`, {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+      }),
+
+    approveDeposit: async (depositId) => {
+      const d = get().deposits.find((x) => x.deposit_id === depositId);
+      const result = await mutate(`/api/deposits/${depositId}/approve`, {
+        method: "POST",
       });
-    }
-  },
-
-  createGameTransfer: ({ playerId, fromGame, toGame, amount, handledByUserId }) => {
-    const fromBal = get().getCreditBalance(playerId, fromGame);
-    if (amount > fromBal) return;
-    const transfer: GameTransfer = {
-      transfer_id: 10000 + Math.floor(Math.random() * 9000),
-      player_id: playerId,
-      from_game: fromGame,
-      to_game: toGame,
-      transfer_amount: amount,
-      from_game_balance_before: fromBal,
-      status: "completed",
-      handled_by_user_id: handledByUserId,
-      created_at: new Date().toISOString(),
-    };
-    set((s) => {
-      const hasTo = s.gameCredits.some(
-        (c) => c.player_id === playerId && c.game_name === toGame,
-      );
-      const updatedCredits = s.gameCredits.map((c) => {
-        if (c.player_id === playerId && c.game_name === fromGame) {
-          return {
-            ...c,
-            current_balance: +(c.current_balance - amount).toFixed(2),
-            last_updated_at: new Date().toISOString(),
-          };
-        }
-        if (c.player_id === playerId && c.game_name === toGame) {
-          return {
-            ...c,
-            current_balance: +(c.current_balance + amount).toFixed(2),
-            last_updated_at: new Date().toISOString(),
-          };
-        }
-        return c;
-      });
-      if (!hasTo) {
-        updatedCredits.push({
-          player_id: playerId,
-          game_name: toGame,
-          current_balance: amount,
-          last_updated_at: new Date().toISOString(),
+      if (result.ok && d) {
+        get().pushNotification({
+          kind: "topup",
+          message: `RM ${d.total_amount.toFixed(2)} credited to ${d.selected_game} for ${d.player_username}`,
         });
       }
-      return {
-        gameTransfers: [transfer, ...s.gameTransfers],
-        gameCredits: updatedCredits,
+      return result;
+    },
+
+    createDepositIntent: (input) =>
+      mutate("/api/deposits", { method: "POST", body: JSON.stringify(input) }),
+
+    createWithdrawal: (input) =>
+      mutate("/api/withdrawals", { method: "POST", body: JSON.stringify(input) }),
+
+    pullCreditsForWithdrawal: async (withdrawalId) => {
+      const w = get().withdrawals.find((x) => x.withdrawal_id === withdrawalId);
+      const result = await mutate(`/api/withdrawals/${withdrawalId}/pull`, {
+        method: "POST",
+      });
+      if (result.ok && w) {
+        get().pushNotification({
+          kind: "pullback",
+          message: `Pulled credits from ${w.game_name} back to CRM`,
+        });
+      }
+      return result;
+    },
+
+    markWithdrawalPaid: (withdrawalId, opts) =>
+      mutate(
+        `/api/withdrawals/${withdrawalId}/paid`,
+        { method: "POST", body: JSON.stringify(opts ?? {}) },
+        { kind: "withdrawal", message: "Withdrawal marked as paid" },
+      ),
+
+    createGameTransfer: ({ playerId, fromGame, toGame, amount }) =>
+      mutate("/api/game-transfers", {
+        method: "POST",
+        body: JSON.stringify({
+          player_id: playerId,
+          from_game: fromGame,
+          to_game: toGame,
+          amount,
+        }),
+      }),
+
+    createPlayer: (input) =>
+      mutate("/api/players", { method: "POST", body: JSON.stringify(input) }),
+
+    importPlayers: (rows) =>
+      mutate(
+        "/api/players",
+        { method: "POST", body: JSON.stringify(rows) },
+        {
+          kind: "system",
+          message: `Imported ${rows.length} player${rows.length === 1 ? "" : "s"}`,
+        },
+      ),
+
+    updatePlayer: (playerId, patch) =>
+      mutate(`/api/players/${playerId}`, {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+      }),
+
+    addBankAccount: (input) =>
+      mutate("/api/bank-accounts", { method: "POST", body: JSON.stringify(input) }),
+
+    updateBankAccount: (accountId, patch) =>
+      mutate(`/api/bank-accounts/${accountId}`, {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+      }),
+
+    deleteBankAccount: (accountId) =>
+      mutate(`/api/bank-accounts/${accountId}`, { method: "DELETE" }),
+
+    createBankTransfer: ({ fromAccountId, toAccountId, amount, reference, notes }) =>
+      mutate(
+        "/api/transfers",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            from_account_id: fromAccountId,
+            to_account_id: toAccountId,
+            amount,
+            reference,
+            notes,
+          }),
+        },
+        {
+          kind: "transfer",
+          message: `Transfer of RM ${amount.toFixed(2)} initiated — awaiting recipient confirmation`,
+        },
+      ),
+
+    confirmBankTransfer: (transferId) =>
+      mutate(
+        `/api/transfers/${transferId}/confirm`,
+        { method: "POST" },
+        { kind: "transfer", message: "Transfer confirmed — funds credited" },
+      ),
+
+    rejectBankTransfer: (transferId) =>
+      mutate(
+        `/api/transfers/${transferId}/reject`,
+        { method: "POST" },
+        { kind: "transfer", message: "Transfer rejected — sender refunded" },
+      ),
+
+    addBoAccount: (input) =>
+      mutate("/api/bo-accounts", { method: "POST", body: JSON.stringify(input) }),
+
+    updateBoAccount: (boAccountId, patch) =>
+      mutate(`/api/bo-accounts/${boAccountId}`, {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+      }),
+
+    deleteBoAccount: (boAccountId) =>
+      mutate(`/api/bo-accounts/${boAccountId}`, { method: "DELETE" }),
+
+    adjustBoCredit: ({ boAccountId, amount, reason }) =>
+      mutate(`/api/bo-accounts/${boAccountId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ adjust_amount: amount, adjust_reason: reason }),
+      }),
+
+    addEntity: (input) =>
+      mutate("/api/entities", { method: "POST", body: JSON.stringify(input) }),
+
+    addUser: (input) =>
+      mutate("/api/users", { method: "POST", body: JSON.stringify(input) }),
+
+    uploadFile: async (file) => {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch("/api/uploads", { method: "POST", body: form });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) return { ok: false, error: data?.error ?? "Upload failed" };
+      return { ok: true, url: data.url };
+    },
+
+    logout: async () => {
+      get().stopPolling();
+      await fetch("/api/auth/logout", { method: "POST" });
+      window.location.href = "/login";
+    },
+
+    pushNotification: (n) => {
+      const notif: Notification = {
+        ...n,
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        createdAt: Date.now(),
       };
-    });
-  },
+      set((s) => ({ notifications: [notif, ...s.notifications].slice(0, 20) }));
+    },
 
-  pushNotification: (n) => {
-    const notif: Notification = {
-      ...n,
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      createdAt: Date.now(),
-    };
-    set((s) => ({ notifications: [notif, ...s.notifications].slice(0, 20) }));
-  },
-
-  clearNotifications: () => set({ notifications: [] }),
-}));
+    clearNotifications: () => set({ notifications: [] }),
+  };
+});

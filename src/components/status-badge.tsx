@@ -1,10 +1,22 @@
 import { cn } from "@/lib/utils";
-import type { DepositStatus, WithdrawalStatus } from "@/lib/types";
+import type { BankTransferStatus, DepositStatus, WithdrawalStatus } from "@/lib/types";
 
-type Kind = DepositStatus | WithdrawalStatus | "active" | "inactive" | "suspended";
+type Kind =
+  | DepositStatus
+  | WithdrawalStatus
+  | BankTransferStatus
+  | "active"
+  | "inactive"
+  | "suspended";
 
 const STYLES: Record<string, string> = {
   pending: "bg-amber-500/10 text-amber-700 border-amber-500/30",
+  pending_match: "bg-orange-500/10 text-orange-700 border-orange-500/30",
+  matched: "bg-sky-500/10 text-sky-700 border-sky-500/30",
+  pending_confirmation: "bg-amber-500/10 text-amber-700 border-amber-500/30",
+  confirmed: "bg-emerald-500/10 text-emerald-700 border-emerald-500/30",
+  auto_confirmed: "bg-emerald-500/10 text-emerald-700 border-emerald-500/30",
+  rejected: "bg-red-500/10 text-red-700 border-red-500/30",
   approved: "bg-blue-500/10 text-blue-700 border-blue-500/30",
   processing: "bg-blue-500/10 text-blue-700 border-blue-500/30",
   completed: "bg-emerald-500/10 text-emerald-700 border-emerald-500/30",
@@ -19,6 +31,10 @@ const STYLES: Record<string, string> = {
 
 const LABELS: Record<string, string> = {
   credits_pulled: "Credits Pulled",
+  pending_match: "Awaiting Bank Match",
+  matched: "Bank Matched",
+  pending_confirmation: "Awaiting Confirmation",
+  auto_confirmed: "Auto-confirmed",
 };
 
 export function StatusBadge({ status }: { status: Kind }) {

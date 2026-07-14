@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { PLAYERS, COMPANIES } from "@/lib/mock-data";
 import { useStore } from "@/lib/store";
 import { formatRM, formatRelative, initialsOf } from "@/lib/format";
 import { Card } from "@/components/ui/card";
@@ -11,35 +10,44 @@ import { StatusBadge } from "@/components/status-badge";
 import { PlayerNameLink } from "@/components/player-name-link";
 import { ImportPlayersModal } from "@/components/import-players-modal";
 import { CreatePlayerModal } from "@/components/create-player-modal";
-import { Search, Send, Upload, UserPlus } from "lucide-react";
+import { Search, Send, Upload, UserPlus, Users } from "lucide-react";
 
 export default function PlayersPage() {
-  const importedPlayers = useStore((s) => s.importedPlayers);
+  const players = useStore((s) => s.players);
+  const entityName = useStore((s) => s.entityName);
+  const companiesFn = useStore((s) => s.companies);
+  const me = useStore((s) => s.me);
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
   const [q, setQ] = useState("");
   const [importOpen, setImportOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
 
-  const allPlayers = useMemo(
-    () => [...importedPlayers, ...PLAYERS],
-    [importedPlayers],
+  const isViewer = me?.role === "viewer";
+  const companies = companiesFn();
+  const activeCompany = companies.find(
+    (c) => c.company_id === selectedCompanyId,
   );
 
-  const filtered = allPlayers.filter((p) => {
-    const matchQ =
-      !q ||
-      p.full_name.toLowerCase().includes(q.toLowerCase()) ||
-      p.username.toLowerCase().includes(q.toLowerCase()) ||
-      p.telegram_username.toLowerCase().includes(q.toLowerCase());
-    const matchC =
-      selectedCompanyId === null || p.company_id === selectedCompanyId;
-    return matchQ && matchC;
-  });
+  const filtered = useMemo(
+    () =>
+      players.filter((p) => {
+        const matchQ =
+          !q ||
+          p.full_name.toLowerCase().includes(q.toLowerCase()) ||
+          p.username.toLowerCase().includes(q.toLowerCase()) ||
+          p.telegram_username.toLowerCase().includes(q.toLowerCase());
+        const matchC =
+          selectedCompanyId === null ||
+          p.company_entity_id === selectedCompanyId;
+        return matchQ && matchC;
+      }),
+    [players, q, selectedCompanyId],
+  );
 
-  const inScopeTotal = allPlayers.filter(
-    (p) => selectedCompanyId === null || p.company_id === selectedCompanyId,
+  const inScopeTotal = players.filter(
+    (p) =>
+      selectedCompanyId === null || p.company_entity_id === selectedCompanyId,
   ).length;
-  const activeCompany = COMPANIES.find((c) => c.company_id === selectedCompanyId);
 
   return (
     <div className="space-y-5">
@@ -56,36 +64,33 @@ export default function PlayersPage() {
               </>
             ) : (
               <>
-                {allPlayers.length} total players across {COMPANIES.length}{" "}
+                {players.length} total players across {companies.length}{" "}
                 companies
               </>
             )}
-            {importedPlayers.length > 0 && (
-              <span className="ml-1.5 inline-flex items-center rounded-md bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
-                +{importedPlayers.length} imported
-              </span>
-            )}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button
-            onClick={() => setImportOpen(true)}
-            variant="outline"
-            size="sm"
-            className="cursor-pointer"
-          >
-            <Upload className="h-3.5 w-3.5" />
-            Import Players
-          </Button>
-          <Button
-            onClick={() => setCreateOpen(true)}
-            size="sm"
-            className="cursor-pointer"
-          >
-            <UserPlus className="h-3.5 w-3.5" />
-            Create Player
-          </Button>
-        </div>
+        {!isViewer && (
+          <div className="flex items-center gap-2">
+            <Button
+              onClick={() => setImportOpen(true)}
+              variant="outline"
+              size="sm"
+              className="cursor-pointer"
+            >
+              <Upload className="h-3.5 w-3.5" />
+              Import Players
+            </Button>
+            <Button
+              onClick={() => setCreateOpen(true)}
+              size="sm"
+              className="cursor-pointer"
+            >
+              <UserPlus className="h-3.5 w-3.5" />
+              Create Player
+            </Button>
+          </div>
+        )}
       </div>
 
       <Card className="overflow-hidden p-0 gap-0">
@@ -104,23 +109,38 @@ export default function PlayersPage() {
           </span>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/50 text-muted-foreground">
-              <tr>
-                <th className="px-3 py-2.5 text-left font-medium">Player</th>
-                <th className="px-3 py-2.5 text-left font-medium">Company</th>
-                <th className="px-3 py-2.5 text-left font-medium">Contact</th>
-                <th className="px-3 py-2.5 text-right font-medium whitespace-nowrap">Total Deposits</th>
-                <th className="px-3 py-2.5 text-right font-medium whitespace-nowrap">Total Withdrawals</th>
-                <th className="px-3 py-2.5 text-left font-medium">Status</th>
-                <th className="px-3 py-2.5 text-left font-medium">Joined</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((p) => {
-                const company = COMPANIES.find((c) => c.company_id === p.company_id);
-                return (
+        {filtered.length === 0 ? (
+          <div className="flex flex-col items-center justify-center gap-2 px-4 py-14 text-center">
+            <div className="flex h-11 w-11 items-center justify-center rounded-full bg-muted text-muted-foreground">
+              <Users className="h-5 w-5" />
+            </div>
+            <p className="text-sm font-medium">
+              {q ? "No players match your search" : "No players yet"}
+            </p>
+            <p className="text-[12px] text-muted-foreground max-w-sm">
+              {q
+                ? "Try a different name, username or Telegram handle."
+                : isViewer
+                  ? "Players will appear here once they are registered."
+                  : "Create a player or import a batch via CSV to get started."}
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2.5 text-left font-medium">Player</th>
+                  <th className="px-3 py-2.5 text-left font-medium">Company</th>
+                  <th className="px-3 py-2.5 text-left font-medium">Contact</th>
+                  <th className="px-3 py-2.5 text-right font-medium whitespace-nowrap">Total Deposits</th>
+                  <th className="px-3 py-2.5 text-right font-medium whitespace-nowrap">Total Withdrawals</th>
+                  <th className="px-3 py-2.5 text-left font-medium">Status</th>
+                  <th className="px-3 py-2.5 text-left font-medium">Joined</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((p) => (
                   <tr key={p.player_id} className="border-t hover:bg-muted/30">
                     <td className="px-3 py-2">
                       <div className="flex items-center gap-2.5">
@@ -140,7 +160,7 @@ export default function PlayersPage() {
                       </div>
                     </td>
                     <td className="px-3 py-2 text-[12px]">
-                      {company?.company_name ?? "—"}
+                      {entityName(p.company_entity_id)}
                     </td>
                     <td className="px-3 py-2">
                       <div className="inline-flex items-center gap-1 text-[11px]">
@@ -161,11 +181,11 @@ export default function PlayersPage() {
                       {formatRelative(p.registration_date)}
                     </td>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </Card>
 
       <ImportPlayersModal open={importOpen} onOpenChange={setImportOpen} />

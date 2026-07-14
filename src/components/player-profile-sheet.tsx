@@ -1,9 +1,9 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import { useStore } from "@/lib/store";
-import { PLAYERS, COMPANIES } from "@/lib/mock-data";
 import { formatRM, formatShortDateTime, formatRelative, initialsOf } from "@/lib/format";
-import { GAMES } from "@/lib/types";
 import {
   Sheet,
   SheetContent,
@@ -12,9 +12,19 @@ import {
   SheetDescription,
 } from "@/components/ui/sheet";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
 import { StatusBadge } from "./status-badge";
 import { Separator } from "@/components/ui/separator";
-import { Send, MessageCircle, Phone, Calendar, Landmark, Gamepad2 } from "lucide-react";
+import {
+  Send,
+  MessageCircle,
+  Phone,
+  Calendar,
+  Landmark,
+  Gamepad2,
+  Loader2,
+  Save,
+} from "lucide-react";
 
 type Props = {
   playerId: number | null;
@@ -23,15 +33,32 @@ type Props = {
 };
 
 export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
-  const importedPlayers = useStore((s) => s.importedPlayers);
-  const player =
-    importedPlayers.find((p) => p.player_id === playerId) ??
-    PLAYERS.find((p) => p.player_id === playerId);
+  const player = useStore((s) =>
+    playerId ? s.players.find((p) => p.player_id === playerId) : undefined,
+  );
   const gameCredits = useStore((s) => s.gameCredits);
   const deposits = useStore((s) => s.deposits);
   const withdrawals = useStore((s) => s.withdrawals);
+  const me = useStore((s) => s.me);
+  const entityName = useStore((s) => s.entityName);
+  const gamesFn = useStore((s) => s.games);
+  const updatePlayer = useStore((s) => s.updatePlayer);
+
+  const isViewer = me?.role === "viewer";
+
+  const [notesDraft, setNotesDraft] = useState("");
+  const [savingNotes, setSavingNotes] = useState(false);
+
+  useEffect(() => {
+    setNotesDraft(player?.notes ?? "");
+    // Reset the draft whenever a different player is opened.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playerId, open]);
 
   const playerCredits = gameCredits.filter((c) => c.player_id === playerId);
+  const gameNames = Array.from(
+    new Set([...gamesFn(), ...playerCredits.map((c) => c.game_name)]),
+  );
   const playerDeposits = deposits
     .filter((d) => d.player_id === playerId)
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
@@ -41,13 +68,28 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
     .slice(0, 8);
 
-  const company = player
-    ? COMPANIES.find((c) => c.company_id === player.company_id)
-    : null;
+  const notesDirty = (player?.notes ?? "") !== notesDraft;
+
+  async function saveNotes() {
+    if (!player || savingNotes) return;
+    setSavingNotes(true);
+    const res = await updatePlayer(player.player_id, { notes: notesDraft });
+    setSavingNotes(false);
+    if (res.ok) {
+      toast.success("Notes saved");
+    } else {
+      toast.error(res.error ?? "Failed to save notes");
+    }
+  }
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="w-full sm:max-w-xl overflow-y-auto p-0 gap-0">
+        {!player && (
+          <div className="p-8 text-center text-sm text-muted-foreground">
+            Player not found.
+          </div>
+        )}
         {player && (
           <>
             <SheetHeader className="border-b p-6 pb-4 space-y-0">
@@ -88,7 +130,7 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
                     </span>
                   </div>
                   <div className="mt-1 text-xs text-muted-foreground">
-                    {company?.company_name}
+                    {entityName(player.company_entity_id)}
                   </div>
                 </div>
               </div>
@@ -119,7 +161,7 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
                   Current Game Balances
                 </h3>
                 <div className="grid grid-cols-2 gap-2">
-                  {GAMES.map((g) => {
+                  {gameNames.map((g) => {
                     const row = playerCredits.find((c) => c.game_name === g);
                     const bal = row?.current_balance ?? 0;
                     return (
@@ -293,16 +335,43 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
                 )}
               </section>
 
-              {player.notes && (
+              {(!isViewer || player.notes) && (
                 <>
                   <Separator />
                   <section>
                     <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
                       Internal Notes
                     </h3>
-                    <div className="rounded-md border bg-muted/20 p-3 text-sm">
-                      {player.notes}
-                    </div>
+                    {isViewer ? (
+                      <div className="rounded-md border bg-muted/20 p-3 text-sm whitespace-pre-wrap">
+                        {player.notes}
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <textarea
+                          value={notesDraft}
+                          onChange={(e) => setNotesDraft(e.target.value)}
+                          placeholder="VIP, prefers Mega888, etc."
+                          rows={3}
+                          className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/30 resize-none"
+                        />
+                        <div className="flex justify-end">
+                          <Button
+                            size="sm"
+                            onClick={saveNotes}
+                            disabled={!notesDirty || savingNotes}
+                            className="cursor-pointer"
+                          >
+                            {savingNotes ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Save className="h-3.5 w-3.5" />
+                            )}
+                            Save notes
+                          </Button>
+                        </div>
+                      </div>
+                    )}
                   </section>
                 </>
               )}

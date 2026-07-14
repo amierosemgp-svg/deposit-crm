@@ -10,15 +10,34 @@ import { Wallet } from "lucide-react";
 
 export default function LoginPage() {
   const router = useRouter();
-  const [username, setUsername] = useState("cs_ahmad");
-  const [password, setPassword] = useState("demo");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(true);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  function onSubmit(e: React.FormEvent) {
+  async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
-    setTimeout(() => router.push("/hierarchy"), 450);
+    setError(null);
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        setError(body?.error ?? "Login failed");
+        setLoading(false);
+        return;
+      }
+      router.push("/hierarchy");
+      router.refresh();
+    } catch {
+      setError("Network error — please try again");
+      setLoading(false);
+    }
   }
 
   return (
@@ -66,12 +85,14 @@ export default function LoginPage() {
                 Forgot password?
               </a>
             </div>
-            <Button type="submit" className="w-full h-10" disabled={loading}>
+            {error && (
+              <p className="text-sm text-destructive text-center" role="alert">
+                {error}
+              </p>
+            )}
+            <Button type="submit" className="w-full h-10 cursor-pointer" disabled={loading}>
               {loading ? "Signing in…" : "Login"}
             </Button>
-            <p className="text-center text-xs text-muted-foreground pt-2">
-              Demo: any credentials will sign you in.
-            </p>
           </form>
         </CardContent>
       </Card>

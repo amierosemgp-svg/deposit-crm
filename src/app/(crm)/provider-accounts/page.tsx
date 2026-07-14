@@ -13,9 +13,8 @@ import {
   Trash2,
 } from "lucide-react";
 import { useStore } from "@/lib/store";
-import { COMPANIES, USERS } from "@/lib/mock-data";
 import { formatRelative } from "@/lib/format";
-import { GAMES, type ProviderBoAccount } from "@/lib/types";
+import type { ProviderBoAccount } from "@/lib/types";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/status-badge";
@@ -38,10 +37,17 @@ function fmtCredit(n: number) {
 }
 
 export default function ProviderAccountsPage() {
-  const accounts = useStore((s) => s.providerBoAccounts);
-  const adjustments = useStore((s) => s.providerBoAdjustments);
-  const deleteAccount = useStore((s) => s.deleteProviderBoAccount);
+  const accounts = useStore((s) => s.boAccounts);
+  const adjustments = useStore((s) => s.boAdjustments);
+  const deleteAccount = useStore((s) => s.deleteBoAccount);
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
+  const entityName = useStore((s) => s.entityName);
+  const userName = useStore((s) => s.userName);
+  const games = useStore((s) => s.games)();
+  const me = useStore((s) => s.me);
+
+  const canManage =
+    !!me && (me.role === "super_admin" || me.role === "company_leader");
 
   const [gameFilter, setGameFilter] = useState<string>("all");
   const [formOpen, setFormOpen] = useState(false);
@@ -53,23 +59,33 @@ export default function ProviderAccountsPage() {
   const filtered = useMemo(
     () =>
       accounts
-        .filter((a) => selectedCompanyId === null || a.company_id === selectedCompanyId)
+        .filter(
+          (a) =>
+            selectedCompanyId === null ||
+            a.company_entity_id === selectedCompanyId,
+        )
         .filter((a) => gameFilter === "all" || a.game_name === gameFilter)
         .sort(
           (a, b) =>
-            a.company_id - b.company_id ||
+            a.company_entity_id - b.company_entity_id ||
             a.game_name.localeCompare(b.game_name) ||
             a.bo_username.localeCompare(b.bo_username),
         ),
     [accounts, selectedCompanyId, gameFilter],
   );
 
-  const activeCompany = COMPANIES.find((c) => c.company_id === selectedCompanyId);
+  const activeCompanyName =
+    selectedCompanyId !== null ? entityName(selectedCompanyId) : null;
 
   // Adjustments scoped to the accounts currently visible
   const adjustmentsInScope = useMemo(() => {
     const idSet = new Set(filtered.map((a) => a.bo_account_id));
-    return adjustments.filter((j) => idSet.has(j.bo_account_id));
+    return adjustments
+      .filter((j) => idSet.has(j.bo_account_id))
+      .sort(
+        (a, b) =>
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+      );
   }, [adjustments, filtered]);
 
   const totalCredit = useMemo(
@@ -83,14 +99,14 @@ export default function ProviderAccountsPage() {
 
   // Per-game totals (filtered scope)
   const perGame = useMemo(() => {
-    return GAMES.map((g) => ({
+    return games.map((g) => ({
       game: g,
       total: filtered
         .filter((a) => a.game_name === g)
         .reduce((s, a) => s + a.current_credit, 0),
       count: filtered.filter((a) => a.game_name === g).length,
     }));
-  }, [filtered]);
+  }, [filtered, games]);
 
   function openCreate() {
     setEditing(null);
@@ -105,20 +121,18 @@ export default function ProviderAccountsPage() {
     setAdjustDirection(dir);
     setAdjustOpen(true);
   }
-  function handleDelete(account: ProviderBoAccount) {
-    if (account.current_credit > 0) {
-      toast.error(
-        "Cannot delete a BO account with non-zero credit. Deduct or transfer credit first.",
-      );
-      return;
-    }
+  async function handleDelete(account: ProviderBoAccount) {
     if (
       !confirm(
         `Delete BO account "${account.bo_username}" (${account.game_name})? This cannot be undone.`,
       )
     )
       return;
-    deleteAccount(account.bo_account_id);
+    const result = await deleteAccount(account.bo_account_id);
+    if (!result.ok) {
+      toast.error(result.error ?? "Could not delete BO account");
+      return;
+    }
     toast.success("BO account deleted");
   }
 
@@ -129,23 +143,25 @@ export default function ProviderAccountsPage() {
           <h1 className="text-2xl font-semibold">Provider BO Accounts</h1>
           <p className="text-sm text-muted-foreground mt-1">
             Game-provider back-office logins and the wholesale credit each holds
-            {activeCompany && (
+            {activeCompanyName && (
               <>
                 {" "}
                 ·{" "}
                 <span className="font-medium text-foreground">
-                  {activeCompany.company_name}
+                  {activeCompanyName}
                 </span>
               </>
             )}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button onClick={openCreate} size="sm" className="cursor-pointer">
-            <Plus className="h-3.5 w-3.5" />
-            Add BO Account
-          </Button>
-        </div>
+        {canManage && (
+          <div className="flex items-center gap-2">
+            <Button onClick={openCreate} size="sm" className="cursor-pointer">
+              <Plus className="h-3.5 w-3.5" />
+              Add BO Account
+            </Button>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -216,16 +232,18 @@ export default function ProviderAccountsPage() {
         <div className="flex items-center gap-2 border-b bg-muted/30 px-4 py-2.5">
           <KeyRound className="h-3.5 w-3.5 text-muted-foreground" />
           <span className="text-[12px] text-muted-foreground">
-            {activeCompany ? activeCompany.company_name : "All companies"}
+            {activeCompanyName ?? "All companies"}
           </span>
           <Select value={gameFilter} onValueChange={(v) => setGameFilter(v ?? "all")}>
-            <SelectTrigger className="h-8 w-[140px]">
+            <SelectTrigger className="h-8 w-[140px] cursor-pointer">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All games</SelectItem>
-              {GAMES.map((g) => (
-                <SelectItem key={g} value={g}>
+              <SelectItem value="all" className="cursor-pointer">
+                All games
+              </SelectItem>
+              {games.map((g) => (
+                <SelectItem key={g} value={g} className="cursor-pointer">
                   {g}
                 </SelectItem>
               ))}
@@ -246,22 +264,30 @@ export default function ProviderAccountsPage() {
                   Credit Balance
                 </th>
                 <th className="px-3 py-2.5 text-left font-medium">Status</th>
-                <th className="px-3 py-2.5 text-right font-medium">Actions</th>
+                {canManage && (
+                  <th className="px-3 py-2.5 text-right font-medium">Actions</th>
+                )}
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 && (
                 <tr>
                   <td
-                    colSpan={5}
+                    colSpan={canManage ? 5 : 4}
                     className="px-3 py-12 text-center text-sm text-muted-foreground"
                   >
-                    No BO accounts. Click <strong>Add BO Account</strong> to create one.
+                    {canManage ? (
+                      <>
+                        No BO accounts. Click <strong>Add BO Account</strong> to create
+                        one.
+                      </>
+                    ) : (
+                      "No BO accounts yet."
+                    )}
                   </td>
                 </tr>
               )}
               {filtered.map((a) => {
-                const company = COMPANIES.find((c) => c.company_id === a.company_id);
                 const isLow = a.status === "active" && a.current_credit < 5000;
                 return (
                   <tr key={a.bo_account_id} className="border-t hover:bg-muted/30">
@@ -293,7 +319,7 @@ export default function ProviderAccountsPage() {
                       </div>
                     </td>
                     <td className="px-3 py-2 text-[12px]">
-                      {company?.company_name ?? "—"}
+                      {entityName(a.company_entity_id)}
                     </td>
                     <td className="px-3 py-2 text-right whitespace-nowrap">
                       <div className="flex items-center justify-end gap-1.5">
@@ -319,48 +345,50 @@ export default function ProviderAccountsPage() {
                     <td className="px-3 py-2">
                       <StatusBadge status={a.status} />
                     </td>
-                    <td className="px-3 py-2">
-                      <div className="flex items-center justify-end gap-1">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => openAdjust(a, "topup")}
-                          disabled={a.status !== "active"}
-                          className="cursor-pointer h-7 px-2 text-emerald-700 hover:text-emerald-800 hover:bg-emerald-50"
-                          title="Top up credit"
-                        >
-                          <ArrowUpCircle className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => openAdjust(a, "deduct")}
-                          disabled={a.status !== "active" || a.current_credit <= 0}
-                          className="cursor-pointer h-7 px-2 text-rose-600 hover:text-rose-700 hover:bg-rose-50"
-                          title="Deduct credit"
-                        >
-                          <ArrowDownCircle className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => openEdit(a)}
-                          className="cursor-pointer h-7 px-2"
-                          title="Edit"
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => handleDelete(a)}
-                          className="cursor-pointer h-7 px-2 text-rose-600 hover:text-rose-700 hover:bg-rose-50"
-                          title="Delete"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    </td>
+                    {canManage && (
+                      <td className="px-3 py-2">
+                        <div className="flex items-center justify-end gap-1">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => openAdjust(a, "topup")}
+                            disabled={a.status !== "active"}
+                            className="cursor-pointer h-7 px-2 text-emerald-700 hover:text-emerald-800 hover:bg-emerald-50"
+                            title="Top up credit"
+                          >
+                            <ArrowUpCircle className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => openAdjust(a, "deduct")}
+                            disabled={a.status !== "active" || a.current_credit <= 0}
+                            className="cursor-pointer h-7 px-2 text-rose-600 hover:text-rose-700 hover:bg-rose-50"
+                            title="Deduct credit"
+                          >
+                            <ArrowDownCircle className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => openEdit(a)}
+                            className="cursor-pointer h-7 px-2"
+                            title="Edit"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handleDelete(a)}
+                            className="cursor-pointer h-7 px-2 text-rose-600 hover:text-rose-700 hover:bg-rose-50"
+                            title="Delete"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </td>
+                    )}
                   </tr>
                 );
               })}
@@ -402,13 +430,13 @@ export default function ProviderAccountsPage() {
                     colSpan={5}
                     className="px-3 py-10 text-center text-sm text-muted-foreground"
                   >
-                    No credit adjustments {activeCompany ? `for ${activeCompany.company_name}` : "yet"}.
+                    No credit adjustments{" "}
+                    {activeCompanyName ? `for ${activeCompanyName}` : "yet"}.
                   </td>
                 </tr>
               )}
               {adjustmentsInScope.map((j) => {
                 const acct = accounts.find((a) => a.bo_account_id === j.bo_account_id);
-                const handler = USERS.find((u) => u.user_id === j.handled_by_user_id);
                 const positive = j.amount > 0;
                 return (
                   <motion.tr
@@ -450,7 +478,7 @@ export default function ProviderAccountsPage() {
                       {j.reason}
                     </td>
                     <td className="px-3 py-2 text-[11px]">
-                      {handler?.full_name ?? `User ${j.handled_by_user_id}`}
+                      {userName(j.handled_by_user_id)}
                     </td>
                   </motion.tr>
                 );

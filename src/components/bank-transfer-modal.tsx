@@ -7,6 +7,7 @@ import {
   ArrowRight,
   ArrowRightLeft,
   CheckCircle2,
+  Info,
   Loader2,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -16,13 +17,15 @@ import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { COMPANIES, CURRENT_USER } from "@/lib/mock-data";
 import { useStore } from "@/lib/store";
 import { formatRM } from "@/lib/format";
+import type { BankAccount } from "@/lib/types";
 
 type Props = {
   open: boolean;
@@ -30,19 +33,30 @@ type Props = {
   defaultFromAccountId?: number | null;
 };
 
-const PROCESS_MS = 1800;
-
 export function BankTransferModal({
   open,
   onOpenChange,
   defaultFromAccountId,
 }: Props) {
-  const accounts = useStore((s) => s.companyBankAccounts);
-  const transfer = useStore((s) => s.transferBetweenCompanyAccounts);
+  const accounts = useStore((s) => s.bankAccounts);
+  const me = useStore((s) => s.me);
+  const entityName = useStore((s) => s.entityName);
+  const createTransfer = useStore((s) => s.createBankTransfer);
 
   const activeAccounts = useMemo(
     () => accounts.filter((a) => a.status === "active"),
     [accounts],
+  );
+
+  // From: only accounts belonging to entities the user manages
+  const fromAccounts = useMemo(
+    () =>
+      activeAccounts.filter(
+        (a) =>
+          !!me &&
+          (me.ownedEntityIds === null || me.ownedEntityIds.includes(a.entity_id)),
+      ),
+    [activeAccounts, me],
   );
 
   const [fromId, setFromId] = useState<string>("");
@@ -50,10 +64,7 @@ export function BankTransferModal({
   const [amount, setAmount] = useState("");
   const [reference, setReference] = useState("");
   const [notes, setNotes] = useState("");
-  const [phase, setPhase] = useState<"input" | "processing" | "success">(
-    "input",
-  );
-  const [progress, setProgress] = useState(0);
+  const [phase, setPhase] = useState<"input" | "submitting" | "success">("input");
 
   useEffect(() => {
     if (open) {
@@ -63,15 +74,29 @@ export function BankTransferModal({
       setReference("");
       setNotes("");
       setPhase("input");
-      setProgress(0);
     }
   }, [open, defaultFromAccountId]);
 
-  const fromAccount = activeAccounts.find(
-    (a) => a.account_id === Number(fromId),
-  );
+  const fromAccount = fromAccounts.find((a) => a.account_id === Number(fromId));
   const toAccount = activeAccounts.find((a) => a.account_id === Number(toId));
   const amt = Number(amount) || 0;
+
+  // To: all visible active accounts except the selected source, grouped by entity
+  const toGroups = useMemo(() => {
+    const candidates = activeAccounts.filter(
+      (a) => String(a.account_id) !== fromId,
+    );
+    const map = new Map<number, BankAccount[]>();
+    for (const a of candidates) {
+      const list = map.get(a.entity_id) ?? [];
+      list.push(a);
+      map.set(a.entity_id, list);
+    }
+    return Array.from(map.entries()).map(([entityId, accts]) => ({
+      entityId,
+      accounts: accts,
+    }));
+  }, [activeAccounts, fromId]);
 
   const validation = (() => {
     if (!fromAccount) return "Select source account";
@@ -82,44 +107,31 @@ export function BankTransferModal({
     if (amt > fromAccount.current_balance) return "Exceeds source balance";
     return null;
   })();
-  const canSubmit = !validation;
+  const canSubmit = !validation && phase === "input";
 
-  function handleStart() {
+  async function handleSubmit() {
     if (!canSubmit || !fromAccount || !toAccount) return;
-    setPhase("processing");
-    setProgress(0);
-
-    const started = Date.now();
-    const interval = setInterval(() => {
-      const pct = Math.min(100, ((Date.now() - started) / PROCESS_MS) * 100);
-      setProgress(pct);
-      if (pct >= 100) clearInterval(interval);
-    }, 40);
-
-    setTimeout(() => {
-      const result = transfer({
-        fromAccountId: fromAccount.account_id,
-        toAccountId: toAccount.account_id,
-        amount: amt,
-        reference: reference || undefined,
-        notes: notes || undefined,
-        handledByUserId: CURRENT_USER.user_id,
-      });
-      if (result) {
-        setPhase("success");
-        toast.success(
-          `Transferred ${formatRM(amt)} → ${toAccount.bank_name} ${toAccount.account_number.slice(-4)}`,
-        );
-      } else {
-        toast.error("Transfer failed");
-        setPhase("input");
-      }
-    }, PROCESS_MS);
+    setPhase("submitting");
+    const result = await createTransfer({
+      fromAccountId: fromAccount.account_id,
+      toAccountId: toAccount.account_id,
+      amount: amt,
+      reference: reference || undefined,
+      notes: notes || undefined,
+    });
+    if (result.ok) {
+      setPhase("success");
+      toast.success(
+        `Transfer of ${formatRM(amt)} initiated — awaiting recipient confirmation`,
+      );
+    } else {
+      toast.error(result.error ?? "Transfer failed");
+      setPhase("input");
+    }
   }
 
-  function accountLabel(a: (typeof accounts)[number]) {
-    const company = COMPANIES.find((c) => c.company_id === a.company_id);
-    return `${a.bank_name} · ${a.account_number} · ${company?.company_name ?? ""}${a.label ? ` · ${a.label}` : ""}`;
+  function accountLabel(a: BankAccount) {
+    return `${a.bank_name} · ${a.account_number}${a.label ? ` · ${a.label}` : ""}`;
   }
 
   return (
@@ -136,13 +148,13 @@ export function BankTransferModal({
               Transfer between bank accounts
             </h2>
             <p className="text-[12px] text-muted-foreground leading-tight mt-0.5">
-              Move funds between company-owned accounts
+              Sender is debited immediately; recipient is credited on confirmation
             </p>
           </div>
         </div>
 
         <AnimatePresence mode="wait">
-          {phase === "input" && (
+          {(phase === "input" || phase === "submitting") && (
             <motion.div
               key="input"
               initial={{ opacity: 0 }}
@@ -150,19 +162,35 @@ export function BankTransferModal({
               exit={{ opacity: 0 }}
               className="space-y-4 p-5"
             >
+              <div className="flex items-start gap-2 rounded-md border border-blue-500/30 bg-blue-500/5 px-3 py-2.5 text-[11px] text-blue-900 dark:text-blue-200">
+                <Info className="h-3.5 w-3.5 shrink-0 mt-0.5 text-blue-600" />
+                <span>
+                  Transfers require recipient confirmation and auto-confirm after the
+                  configured window. Allowed: between companies under the same leader,
+                  or from a leader to their own company.
+                </span>
+              </div>
+
               <div className="space-y-1.5">
                 <Label>From</Label>
                 <Select value={fromId} onValueChange={(v) => setFromId(v ?? "")}>
-                  <SelectTrigger className="h-9 w-full">
+                  <SelectTrigger className="h-9 w-full cursor-pointer">
                     <SelectValue placeholder="Source account" />
                   </SelectTrigger>
                   <SelectContent>
-                    {activeAccounts.map((a) => (
+                    {fromAccounts.length === 0 && (
+                      <div className="px-3 py-2 text-[12px] text-muted-foreground">
+                        No active accounts you manage
+                      </div>
+                    )}
+                    {fromAccounts.map((a) => (
                       <SelectItem
                         key={a.account_id}
                         value={String(a.account_id)}
+                        className="cursor-pointer"
                       >
-                        {accountLabel(a)} · {formatRM(a.current_balance)}
+                        {accountLabel(a)} · {entityName(a.entity_id)} ·{" "}
+                        {formatRM(a.current_balance)}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -180,20 +208,29 @@ export function BankTransferModal({
               <div className="space-y-1.5">
                 <Label>To</Label>
                 <Select value={toId} onValueChange={(v) => setToId(v ?? "")}>
-                  <SelectTrigger className="h-9 w-full">
+                  <SelectTrigger className="h-9 w-full cursor-pointer">
                     <SelectValue placeholder="Destination account" />
                   </SelectTrigger>
                   <SelectContent>
-                    {activeAccounts
-                      .filter((a) => String(a.account_id) !== fromId)
-                      .map((a) => (
-                        <SelectItem
-                          key={a.account_id}
-                          value={String(a.account_id)}
-                        >
-                          {accountLabel(a)} · {formatRM(a.current_balance)}
-                        </SelectItem>
-                      ))}
+                    {toGroups.length === 0 && (
+                      <div className="px-3 py-2 text-[12px] text-muted-foreground">
+                        No eligible destination accounts
+                      </div>
+                    )}
+                    {toGroups.map((g) => (
+                      <SelectGroup key={g.entityId}>
+                        <SelectLabel>{entityName(g.entityId)}</SelectLabel>
+                        {g.accounts.map((a) => (
+                          <SelectItem
+                            key={a.account_id}
+                            value={String(a.account_id)}
+                            className="cursor-pointer"
+                          >
+                            {accountLabel(a)}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -244,70 +281,24 @@ export function BankTransferModal({
                   type="button"
                   variant="ghost"
                   onClick={() => onOpenChange(false)}
+                  disabled={phase === "submitting"}
                   className="cursor-pointer"
                 >
                   Cancel
                 </Button>
                 <Button
                   type="button"
-                  onClick={handleStart}
+                  onClick={handleSubmit}
                   disabled={!canSubmit}
                   className="cursor-pointer"
                 >
-                  <ArrowRightLeft className="h-3.5 w-3.5" />
+                  {phase === "submitting" ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <ArrowRightLeft className="h-3.5 w-3.5" />
+                  )}
                   Transfer {amt > 0 ? formatRM(amt) : ""}
                 </Button>
-              </div>
-            </motion.div>
-          )}
-
-          {phase === "processing" && (
-            <motion.div
-              key="processing"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="space-y-5 p-8 text-center"
-            >
-              <div className="relative mx-auto h-16 w-16">
-                <motion.div
-                  animate={{ rotate: 360 }}
-                  transition={{
-                    duration: 1.6,
-                    repeat: Infinity,
-                    ease: "linear",
-                  }}
-                  className="absolute inset-0 rounded-full border-4 border-primary/10 border-t-primary"
-                />
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <ArrowRightLeft className="h-6 w-6 text-primary" />
-                </div>
-              </div>
-              <div>
-                <h3 className="text-base font-semibold">
-                  Transferring {formatRM(amt)}…
-                </h3>
-                <p className="mt-1 text-[12px] text-muted-foreground">
-                  {fromAccount?.bank_name} {fromAccount?.account_number} →{" "}
-                  {toAccount?.bank_name} {toAccount?.account_number}
-                </p>
-              </div>
-              <div className="mx-auto max-w-sm">
-                <div className="h-2 overflow-hidden rounded-full bg-muted">
-                  <motion.div
-                    initial={{ width: 0 }}
-                    animate={{ width: `${progress}%` }}
-                    transition={{ ease: "easeOut" }}
-                    className="h-full bg-gradient-to-r from-primary to-primary/70"
-                  />
-                </div>
-                <div className="mt-2 flex justify-between text-[10px] text-muted-foreground">
-                  <span>
-                    <Loader2 className="inline h-3 w-3 animate-spin mr-1" />
-                    Settling balances
-                  </span>
-                  <span className="font-mono">{Math.round(progress)}%</span>
-                </div>
               </div>
             </motion.div>
           )}
@@ -330,9 +321,13 @@ export function BankTransferModal({
               </motion.div>
               <div>
                 <h3 className="text-lg font-semibold">
-                  {formatRM(amt)} transferred
+                  {formatRM(amt)} transfer initiated
                 </h3>
-                <div className="mt-2 inline-flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-1.5 text-[12px]">
+                <p className="mt-1 text-[12px] text-muted-foreground">
+                  The recipient must confirm before funds are credited. It will
+                  auto-confirm after the configured window.
+                </p>
+                <div className="mt-3 inline-flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-1.5 text-[12px]">
                   <span className="font-medium">{fromAccount?.bank_name}</span>
                   <span className="font-mono text-muted-foreground">
                     {fromAccount?.account_number.slice(-4)}

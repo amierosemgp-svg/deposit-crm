@@ -9,14 +9,22 @@ import {
   Loader2,
   Upload,
   AlertCircle,
+  Building2,
   Sparkles,
   X,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { COMPANIES } from "@/lib/mock-data";
-import { useStore, type ImportedPlayerInput } from "@/lib/store";
-import { BANKS, type BankName } from "@/lib/types";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useStore } from "@/lib/store";
+import type { PlayerBankAccount } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -24,28 +32,33 @@ type Props = {
   onOpenChange: (open: boolean) => void;
 };
 
+/** Parsed row data — company is assigned from the target company select. */
+type RowData = {
+  full_name: string;
+  username: string;
+  telegram_username: string;
+  contact_number?: string;
+  wechat_id?: string;
+  bank_accounts?: PlayerBankAccount[];
+};
+
 type ParsedRow = {
   rowIndex: number;
   raw: Record<string, string>;
-  data?: ImportedPlayerInput;
+  data?: RowData;
   error?: string;
 };
 
-const REQUIRED_COLS = [
-  "full_name",
-  "username",
-  "telegram_username",
-  "company_id",
-] as const;
+const REQUIRED_COLS = ["full_name", "username", "telegram_username"] as const;
 
-const SAMPLE_CSV = `full_name,username,telegram_username,contact_number,wechat_id,company_id,bank_name,bank_account_number,bank_account_holder
-Tan Hong Ming,thm_tan,@thm_tan,+60 12-555 0011,thmtan_wx,1,Maybank,5128 4471 9023,Tan Hong Ming
-Nurul Aisyah,nurul_a,@nurul_a,+60 19-700 4422,,2,CIMB,7042 1188 5530,Nurul Aisyah
-Vikram Pillai,vik_pillai,@vik_pillai,,vikpillai88,3,,,
-Chloe Ng,chloe_ng,@chloeng,+60 16-880 9912,chloeng_wx,4,Public Bank,4-9112-7733-08,Chloe Ng
-Mohd Hafiz,hafiz_m,@hafiz_m,+60 13-220 7766,,5,Hong Leong,381 5577 0023,Mohd Hafiz`;
+const SAMPLE_CSV = `full_name,username,telegram_username,contact_number,wechat_id,bank_name,bank_account_number,bank_account_holder
+Tan Hong Ming,thm_tan,@thm_tan,+60 12-555 0011,thmtan_wx,Maybank,5128 4471 9023,Tan Hong Ming
+Nurul Aisyah,nurul_a,@nurul_a,+60 19-700 4422,,CIMB,7042 1188 5530,Nurul Aisyah
+Vikram Pillai,vik_pillai,@vik_pillai,,vikpillai88,,,
+Chloe Ng,chloe_ng,@chloeng,+60 16-880 9912,chloeng_wx,Public Bank,4-9112-7733-08,Chloe Ng
+Mohd Hafiz,hafiz_m,@hafiz_m,+60 13-220 7766,,Hong Leong,381 5577 0023,Mohd Hafiz`;
 
-function parseCSV(text: string): ParsedRow[] {
+function parseCSV(text: string, banks: string[]): ParsedRow[] {
   const lines = text
     .split(/\r?\n/)
     .map((l) => l.trim())
@@ -53,7 +66,6 @@ function parseCSV(text: string): ParsedRow[] {
   if (lines.length === 0) return [];
 
   const headers = lines[0].split(",").map((h) => h.trim().toLowerCase());
-  const validCompanyIds = new Set(COMPANIES.map((c) => c.company_id));
 
   return lines.slice(1).map((line, i) => {
     const cells = line.split(",").map((c) => c.trim());
@@ -71,15 +83,9 @@ function parseCSV(text: string): ParsedRow[] {
       }
     }
 
-    const companyId = Number(raw.company_id);
-    if (!validCompanyIds.has(companyId)) {
-      row.error = `Unknown company_id "${raw.company_id}"`;
-      return row;
-    }
-
-    let bankName: BankName | undefined;
+    let bankName: string | undefined;
     if (raw.bank_name) {
-      const matched = BANKS.find(
+      const matched = banks.find(
         (b) => b.toLowerCase() === raw.bank_name.toLowerCase(),
       );
       if (!matched) {
@@ -109,7 +115,6 @@ function parseCSV(text: string): ParsedRow[] {
         : `@${raw.telegram_username}`,
       contact_number: raw.contact_number || undefined,
       wechat_id: raw.wechat_id || undefined,
-      company_id: companyId,
       bank_accounts: bankAccounts,
     };
     return row;
@@ -118,19 +123,29 @@ function parseCSV(text: string): ParsedRow[] {
 
 export function ImportPlayersModal({ open, onOpenChange }: Props) {
   const importPlayers = useStore((s) => s.importPlayers);
+  const companiesFn = useStore((s) => s.companies);
+  const banksFn = useStore((s) => s.banks);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const companies = companiesFn();
+  const banks = banksFn();
+
+  const [companyId, setCompanyId] = useState("");
   const [csvText, setCsvText] = useState("");
   const [fileName, setFileName] = useState<string | null>(null);
   const [phase, setPhase] = useState<"input" | "importing" | "done">("input");
   const [progress, setProgress] = useState(0);
   const [importedCount, setImportedCount] = useState(0);
 
-  const parsed = useMemo(() => parseCSV(csvText), [csvText]);
+  const parsed = useMemo(() => parseCSV(csvText, banks), [csvText, banks]);
   const validRows = parsed.filter((r) => r.data);
   const errorRows = parsed.filter((r) => r.error);
+  const targetCompany = companies.find(
+    (c) => String(c.company_id) === companyId,
+  );
 
   function reset() {
+    setCompanyId("");
     setCsvText("");
     setFileName(null);
     setPhase("input");
@@ -145,31 +160,43 @@ export function ImportPlayersModal({ open, onOpenChange }: Props) {
     reader.readAsText(file);
   }
 
-  function handleImport() {
-    if (validRows.length === 0) return;
+  async function handleImport() {
+    if (validRows.length === 0 || !targetCompany) return;
     setPhase("importing");
     setProgress(0);
 
-    const TOTAL_MS = 1400;
+    // Progress creeps toward 90% while the server call is in flight.
     const started = Date.now();
     const interval = setInterval(() => {
-      const pct = Math.min(100, ((Date.now() - started) / TOTAL_MS) * 100);
+      const pct = Math.min(90, ((Date.now() - started) / 1400) * 90);
       setProgress(pct);
-      if (pct >= 100) clearInterval(interval);
     }, 40);
 
-    setTimeout(() => {
-      const created = importPlayers(validRows.map((r) => r.data!));
-      setImportedCount(created.length);
-      setPhase("done");
-      toast.success(
-        `Imported ${created.length} player${created.length === 1 ? "" : "s"}`,
-      );
-    }, TOTAL_MS);
+    const rows = validRows.map((r) => ({
+      ...r.data!,
+      company_entity_id: targetCompany.company_id,
+    }));
+    const res = await importPlayers(rows);
+    clearInterval(interval);
+
+    if (!res.ok) {
+      setPhase("input");
+      setProgress(0);
+      toast.error(res.error ?? "Import failed — no players were added");
+      return;
+    }
+
+    setProgress(100);
+    setImportedCount(rows.length);
+    setPhase("done");
+    toast.success(
+      `Imported ${rows.length} player${rows.length === 1 ? "" : "s"} into ${targetCompany.company_name}`,
+    );
   }
 
   function handleClose(o: boolean) {
     if (!o) {
+      if (phase === "importing") return;
       onOpenChange(false);
       setTimeout(reset, 200);
     } else {
@@ -191,16 +218,35 @@ export function ImportPlayersModal({ open, onOpenChange }: Props) {
               Import players
             </h2>
             <p className="text-[12px] text-muted-foreground leading-tight mt-0.5">
-              Required: full_name, username, telegram_username, company_id ·
-              Optional: contact_number, wechat_id, bank_name,
-              bank_account_number, bank_account_holder · For multiple banks or
-              game accounts, use the Create Player form
+              Required: full_name, username, telegram_username · Optional:
+              contact_number, wechat_id, bank_name, bank_account_number,
+              bank_account_holder · For multiple banks or game accounts, use
+              the Create Player form
             </p>
           </div>
         </div>
 
         {phase === "input" && (
           <div className="space-y-3 p-5">
+            <div className="space-y-1.5">
+              <Label className="flex items-center gap-1.5">
+                <Building2 className="h-3.5 w-3.5 text-muted-foreground" />
+                Target company <span className="text-rose-600">*</span>
+              </Label>
+              <Select value={companyId} onValueChange={(v) => setCompanyId(v ?? "")}>
+                <SelectTrigger className="h-8 w-full sm:max-w-xs">
+                  <SelectValue placeholder="Select company for all imported players" />
+                </SelectTrigger>
+                <SelectContent>
+                  {companies.map((c) => (
+                    <SelectItem key={c.company_id} value={String(c.company_id)}>
+                      {c.company_name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
             <div className="flex items-center gap-2">
               <Button
                 variant="outline"
@@ -257,7 +303,7 @@ export function ImportPlayersModal({ open, onOpenChange }: Props) {
                 setCsvText(e.target.value);
                 if (fileName) setFileName(null);
               }}
-              placeholder="full_name,username,telegram_username,contact_number,wechat_id,company_id,bank_name,bank_account_number,bank_account_holder&#10;Lim Ah Kow,lim_ak,@lim_ak,+60 12-345 6789,,1,Maybank,5128 4471 9023,Lim Ah Kow"
+              placeholder="full_name,username,telegram_username,contact_number,wechat_id,bank_name,bank_account_number,bank_account_holder&#10;Lim Ah Kow,lim_ak,@lim_ak,+60 12-345 6789,,Maybank,5128 4471 9023,Lim Ah Kow"
               spellCheck={false}
               className="w-full h-36 rounded-md border border-input bg-background px-3 py-2 text-[12px] font-mono outline-none focus:border-ring focus:ring-2 focus:ring-ring/30 resize-none"
             />
@@ -272,6 +318,12 @@ export function ImportPlayersModal({ open, onOpenChange }: Props) {
                         {" "}
                         · {errorRows.length} error
                         {errorRows.length === 1 ? "" : "s"}
+                      </span>
+                    )}
+                    {targetCompany && (
+                      <span className="text-muted-foreground">
+                        {" "}
+                        · into {targetCompany.company_name}
                       </span>
                     )}
                   </span>
@@ -296,57 +348,52 @@ export function ImportPlayersModal({ open, onOpenChange }: Props) {
                           Telegram
                         </th>
                         <th className="px-2 py-1.5 text-left font-medium">
-                          Company
+                          Bank
                         </th>
                       </tr>
                     </thead>
                     <tbody>
-                      {parsed.map((row) => {
-                        const company = COMPANIES.find(
-                          (c) => c.company_id === row.data?.company_id,
-                        );
-                        return (
-                          <tr
-                            key={row.rowIndex}
-                            className={cn(
-                              "border-t",
-                              row.error
-                                ? "bg-rose-50/60 text-rose-700"
-                                : "hover:bg-muted/20",
-                            )}
-                          >
-                            <td className="px-2 py-1.5 text-muted-foreground tabular-nums">
-                              {row.rowIndex}
-                            </td>
-                            {row.error ? (
-                              <td colSpan={4} className="px-2 py-1.5">
-                                <span className="inline-flex items-center gap-1">
-                                  <AlertCircle className="h-3 w-3" />
-                                  {row.error}
-                                  <span className="text-rose-500/70">
-                                    · {Object.values(row.raw).join(", ")}
-                                  </span>
+                      {parsed.map((row) => (
+                        <tr
+                          key={row.rowIndex}
+                          className={cn(
+                            "border-t",
+                            row.error
+                              ? "bg-rose-50/60 text-rose-700"
+                              : "hover:bg-muted/20",
+                          )}
+                        >
+                          <td className="px-2 py-1.5 text-muted-foreground tabular-nums">
+                            {row.rowIndex}
+                          </td>
+                          {row.error ? (
+                            <td colSpan={4} className="px-2 py-1.5">
+                              <span className="inline-flex items-center gap-1">
+                                <AlertCircle className="h-3 w-3" />
+                                {row.error}
+                                <span className="text-rose-500/70">
+                                  · {Object.values(row.raw).join(", ")}
                                 </span>
+                              </span>
+                            </td>
+                          ) : (
+                            <>
+                              <td className="px-2 py-1.5">
+                                {row.data!.full_name}
                               </td>
-                            ) : (
-                              <>
-                                <td className="px-2 py-1.5">
-                                  {row.data!.full_name}
-                                </td>
-                                <td className="px-2 py-1.5">
-                                  @{row.data!.username}
-                                </td>
-                                <td className="px-2 py-1.5 text-muted-foreground">
-                                  {row.data!.telegram_username}
-                                </td>
-                                <td className="px-2 py-1.5 text-muted-foreground">
-                                  {company?.company_name ?? "—"}
-                                </td>
-                              </>
-                            )}
-                          </tr>
-                        );
-                      })}
+                              <td className="px-2 py-1.5">
+                                @{row.data!.username}
+                              </td>
+                              <td className="px-2 py-1.5 text-muted-foreground">
+                                {row.data!.telegram_username}
+                              </td>
+                              <td className="px-2 py-1.5 text-muted-foreground">
+                                {row.data!.bank_accounts?.[0]?.bank_name ?? "—"}
+                              </td>
+                            </>
+                          )}
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
                 </div>
@@ -434,7 +481,11 @@ export function ImportPlayersModal({ open, onOpenChange }: Props) {
               </Button>
               <Button
                 onClick={handleImport}
-                disabled={validRows.length === 0 || phase === "importing"}
+                disabled={
+                  validRows.length === 0 ||
+                  !targetCompany ||
+                  phase === "importing"
+                }
                 className="cursor-pointer"
               >
                 <Upload className="h-3.5 w-3.5" />

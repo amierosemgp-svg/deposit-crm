@@ -32,6 +32,7 @@ const NAV = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const me = useStore((s) => s.me);
   const pendingDeposits = useStore((s) =>
     s.deposits.filter((d) => d.status === "pending").length,
   );
@@ -41,11 +42,15 @@ export function Sidebar() {
     ).length,
   );
 
+  const items = NAV.filter(
+    (item) => item.href !== "/settings" || me?.role === "super_admin",
+  );
+
   return (
     <aside className="hidden lg:flex w-60 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
       <div className="flex-1 overflow-y-auto py-3">
         <nav className="flex flex-col gap-0.5 px-2">
-          {NAV.map((item) => {
+          {items.map((item) => {
             const active =
               pathname === item.href || pathname.startsWith(item.href + "/");
             const Icon = item.icon;

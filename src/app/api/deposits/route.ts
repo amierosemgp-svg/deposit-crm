@@ -1,0 +1,78 @@
+import { eq } from "drizzle-orm";
+import { z } from "zod";
+import { db } from "@/db";
+import { deposits, players, transactions } from "@/db/schema";
+import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
+import { jsonError } from "@/lib/api-helpers";
+
+const createSchema = z.object({
+  player_id: z.number().int().positive(),
+  amount: z.number().positive(),
+  bank_name: z.string().min(1),
+  // "pending_match" = intent, waiting for the bot to confirm the bank credit.
+  // "pending" = CS already sighted the receipt, straight to approval queue.
+  status: z.enum(["pending_match", "pending"]).default("pending_match"),
+  receipt_url: z.string().url().optional(),
+  notes: z.string().optional(),
+});
+
+/**
+ * POST /api/deposits — CS creates a deposit intent when the player says
+ * "I've transferred RM50". The bot later confirms it via PATCH /api/bot/
+ * transactions/:id/match (flow B).
+ */
+export async function POST(request: Request) {
+  try {
+    const user = await requireWriteUser();
+    const parsed = createSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) return jsonError("Invalid payload");
+    const body = parsed.data;
+
+    const [player] = await db
+      .select()
+      .from(players)
+      .where(eq(players.player_id, body.player_id));
+    if (!player) return jsonError("Player not found", 404);
+    if (
+      user.companyIds !== null &&
+      !user.companyIds.includes(player.company_entity_id)
+    ) {
+      throw new AuthError(403, "Player is outside your company scope");
+    }
+
+    const nowIso = new Date().toISOString();
+    const [created] = await db
+      .insert(deposits)
+      .values({
+        transaction_ref: `CRM-${Date.now()}`,
+        deposit_date: nowIso,
+        player_id: player.player_id,
+        player_username: player.username,
+        company_entity_id: player.company_entity_id,
+        deposit_amount: body.amount,
+        bank_name: body.bank_name,
+        total_amount: body.amount,
+        status: body.status,
+        receipt_url: body.receipt_url,
+        handled_by_user_id: user.user_id,
+        created_at: nowIso,
+        updated_at: nowIso,
+      })
+      .returning();
+
+    await db.insert(transactions).values({
+      player_id: player.player_id,
+      type: "deposit",
+      amount: body.amount,
+      reference_id: created.deposit_id,
+      user_id: user.user_id,
+      details: { source: "crm", action: "intent_created", status: body.status },
+    });
+
+    return Response.json({ deposit: created }, { status: 201 });
+  } catch (e) {
+    return (
+      authErrorResponse(e) ?? (console.error(e), jsonError("Server error", 500))
+    );
+  }
+}

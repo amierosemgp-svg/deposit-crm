@@ -2,9 +2,9 @@
 
 import { useState, useMemo } from "react";
 import { useStore } from "@/lib/store";
-import { COMPANIES, CURRENT_USER, USERS } from "@/lib/mock-data";
-import { formatRM, formatDateTime, formatRelative, initialsOf } from "@/lib/format";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { formatDateTime, formatRelative, initialsOf } from "@/lib/format";
+import type { CompanyView } from "@/lib/types";
+import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -44,13 +44,20 @@ import {
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
+type RowStats = {
+  deposits: number;
+  withdrawals: number;
+  companies: number;
+  users: number;
+};
+
 type Template = {
   id: string;
   title: string;
   description: string;
   icon: React.ComponentType<{ className?: string }>;
   tone: "emerald" | "blue" | "amber" | "purple" | "rose" | "slate";
-  rows: (deps: number, wds: number) => number;
+  rows: (stats: RowStats) => number;
 };
 
 const TEMPLATES: Template[] = [
@@ -61,7 +68,7 @@ const TEMPLATES: Template[] = [
       "Every completed deposit with player, bonus %, game, CS agent, and top-up reference.",
     icon: Wallet,
     tone: "emerald",
-    rows: (d) => d,
+    rows: (s) => s.deposits,
   },
   {
     id: "daily_withdrawals",
@@ -70,7 +77,7 @@ const TEMPLATES: Template[] = [
       "All withdrawal requests with pulled amount, bank payout status, and processing CS agent.",
     icon: Banknote,
     tone: "blue",
-    rows: (_d, w) => w,
+    rows: (s) => s.withdrawals,
   },
   {
     id: "ggr_summary",
@@ -79,7 +86,7 @@ const TEMPLATES: Template[] = [
       "Per-company gross gaming revenue: deposits − withdrawals − bonuses.",
     icon: Building2,
     tone: "purple",
-    rows: () => 5,
+    rows: (s) => s.companies,
   },
   {
     id: "cs_performance",
@@ -88,7 +95,7 @@ const TEMPLATES: Template[] = [
       "Transactions handled, volume, and approval times per agent for the period.",
     icon: UserCog,
     tone: "amber",
-    rows: () => 15,
+    rows: (s) => s.users,
   },
   {
     id: "bonus_payout",
@@ -97,7 +104,7 @@ const TEMPLATES: Template[] = [
       "Total bonuses issued — broken down by bonus %, game provider, and company.",
     icon: Gift,
     tone: "rose",
-    rows: (d) => d,
+    rows: (s) => s.deposits,
   },
   {
     id: "bank_reconciliation",
@@ -106,7 +113,7 @@ const TEMPLATES: Template[] = [
       "Bank-detected deposits vs CRM-recorded vs game top-ups, with discrepancy flags.",
     icon: ScrollText,
     tone: "slate",
-    rows: (d) => d,
+    rows: (s) => s.deposits,
   },
 ];
 
@@ -145,154 +152,36 @@ function daysAgoStr(n: number) {
   return d.toISOString().slice(0, 10);
 }
 
-function seedReports(): GeneratedReport[] {
-  return [
-    {
-      id: "RPT-24019",
-      templateId: "ggr_summary",
-      title: "GGR Summary",
-      dateFrom: daysAgoStr(7),
-      dateTo: daysAgoStr(1),
-      companyId: "all",
-      format: "PDF",
-      size: "128 KB",
-      generatedBy: 1,
-      generatedAt: new Date(Date.now() - 3 * 3600_000).toISOString(),
-      rows: 5,
-    },
-    {
-      id: "RPT-24018",
-      templateId: "daily_deposits",
-      title: "Daily Deposits Report",
-      dateFrom: daysAgoStr(1),
-      dateTo: daysAgoStr(1),
-      companyId: "1",
-      format: "CSV",
-      size: "46 KB",
-      generatedBy: 101,
-      generatedAt: new Date(Date.now() - 5 * 3600_000).toISOString(),
-      rows: 42,
-    },
-    {
-      id: "RPT-24017",
-      templateId: "cs_performance",
-      title: "CS Agent Performance",
-      dateFrom: daysAgoStr(30),
-      dateTo: todayStr(),
-      companyId: "all",
-      format: "Excel",
-      size: "212 KB",
-      generatedBy: 11,
-      generatedAt: new Date(Date.now() - 26 * 3600_000).toISOString(),
-      rows: 15,
-    },
-    {
-      id: "RPT-24016",
-      templateId: "bank_reconciliation",
-      title: "Bank Reconciliation",
-      dateFrom: daysAgoStr(2),
-      dateTo: daysAgoStr(2),
-      companyId: "all",
-      format: "PDF",
-      size: "88 KB",
-      generatedBy: 1,
-      generatedAt: new Date(Date.now() - 2 * 24 * 3600_000).toISOString(),
-      rows: 18,
-    },
-    {
-      id: "RPT-24015",
-      templateId: "bonus_payout",
-      title: "Bonus Payout Report",
-      dateFrom: daysAgoStr(14),
-      dateTo: daysAgoStr(7),
-      companyId: "2",
-      format: "CSV",
-      size: "33 KB",
-      generatedBy: 12,
-      generatedAt: new Date(Date.now() - 3 * 24 * 3600_000).toISOString(),
-      rows: 28,
-    },
-    {
-      id: "RPT-24014",
-      templateId: "daily_withdrawals",
-      title: "Daily Withdrawals Report",
-      dateFrom: daysAgoStr(3),
-      dateTo: daysAgoStr(3),
-      companyId: "all",
-      format: "CSV",
-      size: "22 KB",
-      generatedBy: 101,
-      generatedAt: new Date(Date.now() - 3 * 24 * 3600_000 - 4 * 3600_000).toISOString(),
-      rows: 14,
-    },
-    {
-      id: "RPT-24013",
-      templateId: "ggr_summary",
-      title: "GGR Summary",
-      dateFrom: daysAgoStr(60),
-      dateTo: daysAgoStr(30),
-      companyId: "all",
-      format: "PDF",
-      size: "142 KB",
-      generatedBy: 1,
-      generatedAt: new Date(Date.now() - 5 * 24 * 3600_000).toISOString(),
-      rows: 5,
-    },
-    {
-      id: "RPT-24012",
-      templateId: "daily_deposits",
-      title: "Daily Deposits Report",
-      dateFrom: daysAgoStr(5),
-      dateTo: daysAgoStr(5),
-      companyId: "3",
-      format: "CSV",
-      size: "39 KB",
-      generatedBy: 13,
-      generatedAt: new Date(Date.now() - 5 * 24 * 3600_000 - 6 * 3600_000).toISOString(),
-      rows: 31,
-    },
-  ];
-}
+type ScheduledReport = {
+  id: string;
+  name: string;
+  template: string;
+  cadence: string;
+  recipients: string[];
+  lastRun: string;
+  nextRun: string;
+  active: boolean;
+};
 
-const SCHEDULED = [
-  {
-    id: "SCH-001",
-    name: "Weekly GGR Summary",
-    template: "GGR Summary",
-    cadence: "Every Monday 08:00 MYT",
-    recipients: ["admin@mpg.local", "finance@mpg.local"],
-    lastRun: new Date(Date.now() - 2 * 24 * 3600_000).toISOString(),
-    nextRun: new Date(Date.now() + 5 * 24 * 3600_000).toISOString(),
-    active: true,
-  },
-  {
-    id: "SCH-002",
-    name: "Daily Deposits — All Companies",
-    template: "Daily Deposits Report",
-    cadence: "Every day 23:59 MYT",
-    recipients: ["ops@mpg.local"],
-    lastRun: new Date(Date.now() - 8 * 3600_000).toISOString(),
-    nextRun: new Date(Date.now() + 16 * 3600_000).toISOString(),
-    active: true,
-  },
-  {
-    id: "SCH-003",
-    name: "Monthly Bank Reconciliation",
-    template: "Bank Reconciliation",
-    cadence: "1st of each month 09:00 MYT",
-    recipients: ["finance@mpg.local", "audit@mpg.local"],
-    lastRun: new Date(Date.now() - 14 * 24 * 3600_000).toISOString(),
-    nextRun: new Date(Date.now() + 16 * 24 * 3600_000).toISOString(),
-    active: false,
-  },
-];
+// Scheduled report definitions will come from the API once supported.
+const SCHEDULED: ScheduledReport[] = [];
 
 export default function ReportsPage() {
   const deposits = useStore((s) => s.deposits);
   const withdrawals = useStore((s) => s.withdrawals);
+  const users = useStore((s) => s.users);
+  const me = useStore((s) => s.me);
+  const companies = useStore((s) => s.companies)();
 
   const [openTpl, setOpenTpl] = useState<Template | null>(null);
-  const [reports, setReports] = useState<GeneratedReport[]>(() => seedReports());
+  const [reports, setReports] = useState<GeneratedReport[]>([]);
+
+  const rowStats: RowStats = {
+    deposits: deposits.length,
+    withdrawals: withdrawals.length,
+    companies: companies.length,
+    users: users.length,
+  };
 
   function handleGenerated(r: GeneratedReport) {
     setReports((prev) => [r, ...prev]);
@@ -322,7 +211,7 @@ export default function ReportsPage() {
               <button
                 key={t.id}
                 onClick={() => setOpenTpl(t)}
-                className="group rounded-lg border bg-card p-4 text-left transition-colors hover:border-primary/40 hover:shadow-sm"
+                className="group cursor-pointer rounded-lg border bg-card p-4 text-left transition-colors hover:border-primary/40 hover:shadow-sm"
               >
                 <div className="flex items-start gap-3">
                   <div
@@ -381,10 +270,10 @@ export default function ReportsPage() {
             </thead>
             <tbody>
               {reports.map((r) => {
-                const gen = USERS.find((u) => u.user_id === r.generatedBy);
+                const gen = users.find((u) => u.user_id === r.generatedBy);
                 const company = r.companyId === "all"
                   ? "All Companies"
-                  : COMPANIES.find((c) => String(c.company_id) === r.companyId)?.company_name ?? r.companyId;
+                  : companies.find((c) => String(c.company_id) === r.companyId)?.company_name ?? r.companyId;
                 return (
                   <tr key={r.id} className="border-t hover:bg-muted/30">
                     <td className="px-3 py-2.5">
@@ -501,6 +390,16 @@ export default function ReportsPage() {
               </tr>
             </thead>
             <tbody>
+              {SCHEDULED.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={6}
+                    className="px-3 py-10 text-center text-xs text-muted-foreground"
+                  >
+                    No scheduled reports configured yet.
+                  </td>
+                </tr>
+              )}
               {SCHEDULED.map((s) => (
                 <tr key={s.id} className="border-t hover:bg-muted/30">
                   <td className="px-3 py-2.5">
@@ -557,8 +456,9 @@ export default function ReportsPage() {
         template={openTpl}
         onOpenChange={(o) => !o && setOpenTpl(null)}
         onGenerated={(r) => handleGenerated(r)}
-        depositCount={deposits.length}
-        withdrawalCount={withdrawals.length}
+        stats={rowStats}
+        companies={companies}
+        currentUserId={me?.user_id ?? 0}
       />
     </div>
   );
@@ -568,14 +468,16 @@ function GenerateDialog({
   template,
   onOpenChange,
   onGenerated,
-  depositCount,
-  withdrawalCount,
+  stats,
+  companies,
+  currentUserId,
 }: {
   template: Template | null;
   onOpenChange: (open: boolean) => void;
   onGenerated: (r: GeneratedReport) => void;
-  depositCount: number;
-  withdrawalCount: number;
+  stats: RowStats;
+  companies: CompanyView[];
+  currentUserId: number;
 }) {
   const [dateFrom, setDateFrom] = useState(daysAgoStr(7));
   const [dateTo, setDateTo] = useState(todayStr());
@@ -588,8 +490,8 @@ function GenerateDialog({
 
   const rowEstimate = useMemo(() => {
     if (!template) return 0;
-    return template.rows(depositCount, withdrawalCount);
-  }, [template, depositCount, withdrawalCount]);
+    return template.rows(stats);
+  }, [template, stats]);
 
   function handleGenerate() {
     if (!template) return;
@@ -610,7 +512,7 @@ function GenerateDialog({
         companyId,
         format,
         size,
-        generatedBy: CURRENT_USER.user_id,
+        generatedBy: currentUserId,
         generatedAt: new Date().toISOString(),
         rows: rowEstimate,
       });
@@ -668,9 +570,15 @@ function GenerateDialog({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">All Companies</SelectItem>
-                    {COMPANIES.map((c) => (
-                      <SelectItem key={c.company_id} value={String(c.company_id)}>
+                    <SelectItem value="all" className="cursor-pointer">
+                      All Companies
+                    </SelectItem>
+                    {companies.map((c) => (
+                      <SelectItem
+                        key={c.company_id}
+                        value={String(c.company_id)}
+                        className="cursor-pointer"
+                      >
                         {c.company_name}
                       </SelectItem>
                     ))}
@@ -686,7 +594,7 @@ function GenerateDialog({
                       key={f}
                       onClick={() => setFormat(f)}
                       className={cn(
-                        "h-9 rounded-md border text-sm font-medium transition-colors",
+                        "h-9 cursor-pointer rounded-md border text-sm font-medium transition-colors",
                         format === f
                           ? "border-primary bg-primary/10 text-primary"
                           : "border-input bg-background hover:bg-muted",

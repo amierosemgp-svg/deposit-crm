@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import {
@@ -8,12 +8,12 @@ import {
   ArrowUpCircle,
   CheckCircle2,
   Coins,
+  Loader2,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { CURRENT_USER, COMPANIES } from "@/lib/mock-data";
 import { useStore } from "@/lib/store";
 import type { ProviderBoAccount } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -42,12 +42,14 @@ export function BoCreditAdjustModal({
   account,
   defaultDirection = "topup",
 }: Props) {
-  const adjust = useStore((s) => s.adjustProviderBoCredit);
+  const adjust = useStore((s) => s.adjustBoCredit);
+  const entityName = useStore((s) => s.entityName);
 
   const [direction, setDirection] = useState<"topup" | "deduct">(defaultDirection);
   const [amount, setAmount] = useState("");
   const [reason, setReason] = useState("");
   const [phase, setPhase] = useState<"input" | "success">("input");
+  const [submitting, setSubmitting] = useState(false);
   const [appliedAmount, setAppliedAmount] = useState(0);
 
   useEffect(() => {
@@ -56,14 +58,12 @@ export function BoCreditAdjustModal({
       setAmount("");
       setReason("");
       setPhase("input");
+      setSubmitting(false);
       setAppliedAmount(0);
     }
   }, [open, defaultDirection]);
 
-  const company = useMemo(
-    () => (account ? COMPANIES.find((c) => c.company_id === account.company_id) : null),
-    [account],
-  );
+  const companyName = account ? entityName(account.company_entity_id) : null;
 
   const amt = Number(amount) || 0;
   const signedAmt = direction === "topup" ? amt : -amt;
@@ -78,16 +78,17 @@ export function BoCreditAdjustModal({
   })();
   const canSubmit = !validation;
 
-  function handleSubmit() {
-    if (!canSubmit || !account) return;
-    const result = adjust({
+  async function handleSubmit() {
+    if (!canSubmit || !account || submitting) return;
+    setSubmitting(true);
+    const result = await adjust({
       boAccountId: account.bo_account_id,
       amount: signedAmt,
       reason: reason.trim(),
-      handledByUserId: CURRENT_USER.user_id,
     });
-    if (!result) {
-      toast.error("Adjustment failed");
+    setSubmitting(false);
+    if (!result.ok) {
+      toast.error(result.error ?? "Adjustment failed");
       return;
     }
     setAppliedAmount(signedAmt);
@@ -122,7 +123,7 @@ export function BoCreditAdjustModal({
             </h2>
             <p className="text-[12px] text-muted-foreground leading-tight mt-0.5">
               {account.game_name} · {account.bo_username}
-              {company ? ` · ${company.company_name}` : ""}
+              {companyName && companyName !== "—" ? ` · ${companyName}` : ""}
             </p>
           </div>
         </div>
@@ -236,14 +237,16 @@ export function BoCreditAdjustModal({
               <Button
                 type="button"
                 onClick={handleSubmit}
-                disabled={!canSubmit}
+                disabled={!canSubmit || submitting}
                 className={cn(
                   "cursor-pointer",
                   direction === "deduct" &&
                     "bg-rose-600 text-white hover:bg-rose-700",
                 )}
               >
-                {direction === "topup" ? (
+                {submitting ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : direction === "topup" ? (
                   <ArrowUpCircle className="h-3.5 w-3.5" />
                 ) : (
                   <ArrowDownCircle className="h-3.5 w-3.5" />

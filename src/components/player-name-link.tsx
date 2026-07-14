@@ -50,7 +50,7 @@ export function PlayerNameLink({
       onClick={() => openPlayer(playerId)}
       className={
         className ??
-        "text-left font-medium text-primary hover:underline decoration-primary/40 underline-offset-2"
+        "cursor-pointer text-left font-medium text-primary hover:underline decoration-primary/40 underline-offset-2"
       }
     >
       {children}

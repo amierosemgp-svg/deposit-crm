@@ -1,44 +1,67 @@
+// Shapes mirror the API/DB (see src/db/schema.ts).
+
 export type UserRole = "super_admin" | "company_leader" | "cs_agent" | "viewer";
+
+export type EntityType = "main_company" | "leader" | "company" | "cs";
+
+export type Entity = {
+  entity_id: number;
+  parent_entity_id: number | null;
+  entity_type: EntityType;
+  name: string;
+  status: "active" | "inactive";
+  created_at: string;
+};
 
 export type User = {
   user_id: number;
   username: string;
   full_name: string;
-  email: string;
+  email?: string;
   role: UserRole;
-  company_id?: number;
+  entity_id: number;
   status: "active" | "inactive";
-  last_login_at: string;
+  last_login_at: string | null;
   created_at: string;
 };
 
-export type Organization = {
-  org_id: number;
-  org_name: string;
+export type Me = User & {
+  companyIds: number[] | null; // null = unrestricted
+  ownedEntityIds: number[] | null;
 };
 
-export type Company = {
-  company_id: number;
-  org_id: number;
+/** Derived view over company entities — convenient for dropdowns/filters. */
+export type CompanyView = {
+  company_id: number; // entity_id of the company
   company_name: string;
-  leader_user_id: number;
+  leader_entity_id: number | null;
+  leader_name: string;
   status: "active" | "inactive";
 };
 
-export type GameName = "Mega888" | "Pussy888" | "918Kiss" | "XE88";
-export const GAMES: GameName[] = ["Mega888", "Pussy888", "918Kiss", "XE88"];
-
-export type BankName = "Maybank" | "CIMB" | "Hong Leong" | "Public Bank";
-export const BANKS: BankName[] = ["Maybank", "CIMB", "Hong Leong", "Public Bank"];
+// Games & banks come from server settings; these are fallbacks.
+export type GameName = string;
+export const GAMES: string[] = ["Mega888", "Pussy888", "918Kiss", "XE88"];
+export type BankName = string;
+export const BANKS: string[] = [
+  "Maybank",
+  "CIMB",
+  "Hong Leong",
+  "Public Bank",
+  "RHB",
+  "BSN",
+  "Ambank",
+];
+export const BONUS_OPTIONS = [0, 5, 10, 20, 30, 50, 100] as const;
 
 export type PlayerBankAccount = {
-  bank_name: BankName;
+  bank_name: string;
   account_number: string;
   account_holder: string;
 };
 
 export type PlayerGameAccount = {
-  game_name: GameName;
+  game_name: string;
   game_username: string;
 };
 
@@ -46,20 +69,22 @@ export type Player = {
   player_id: number;
   username: string;
   full_name: string;
-  contact_number?: string;
+  contact_number?: string | null;
   telegram_username: string;
-  wechat_id?: string;
-  company_id: number;
-  bank_accounts?: PlayerBankAccount[];
-  game_accounts?: PlayerGameAccount[];
+  wechat_id?: string | null;
+  company_entity_id: number;
+  bank_accounts?: PlayerBankAccount[] | null;
+  game_accounts?: PlayerGameAccount[] | null;
   registration_date: string;
   status: "active" | "suspended";
   total_deposits: number;
   total_withdrawals: number;
-  notes?: string;
+  notes?: string | null;
 };
 
 export type DepositStatus =
+  | "pending_match"
+  | "matched"
   | "pending"
   | "approved"
   | "processing"
@@ -68,40 +93,47 @@ export type DepositStatus =
 
 export type Deposit = {
   deposit_id: number;
+  external_id?: string | null;
   transaction_ref: string;
   deposit_date: string;
-  player_id: number;
-  player_username: string;
+  player_id: number | null;
+  player_username: string | null;
+  company_entity_id: number | null;
   deposit_amount: number;
-  bank_name: BankName;
-  bank_account_number: string;
-  bank_account_holder: string;
+  bank_name: string;
+  bank_account_number?: string | null;
+  bank_account_holder?: string | null;
+  bank_description?: string | null;
+  received_into_account_id?: number | null;
   bonus_percentage: number;
   bonus_amount: number;
   total_amount: number;
-  selected_game: GameName | null;
+  selected_game: string | null;
   status: DepositStatus;
-  handled_by_user_id?: number;
-  game_topup_reference?: string;
+  matched_at?: string | null;
+  handled_by_user_id?: number | null;
+  game_topup_reference?: string | null;
+  receipt_url?: string | null;
   created_at: string;
   updated_at: string;
-  is_new?: boolean;
+  is_new?: boolean; // client-side: arrived since the previous poll
 };
 
-export type WithdrawalStatus =
-  | "requested"
-  | "credits_pulled"
-  | "paid"
-  | "failed";
+export type WithdrawalStatus = "requested" | "credits_pulled" | "paid" | "failed";
 
 export type Withdrawal = {
   withdrawal_id: number;
   player_id: number;
   requested_amount: number;
-  game_name: GameName;
+  game_name: string;
   credit_pulled_amount: number;
   status: WithdrawalStatus;
-  handled_by_user_id?: number;
+  handled_by_user_id?: number | null;
+  bank_name?: string | null;
+  bank_account_number?: string | null;
+  paid_from_account_id?: number | null;
+  proof_url?: string | null;
+  paid_at?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -111,8 +143,8 @@ export type GameTransferStatus = "pending" | "completed" | "failed";
 export type GameTransfer = {
   transfer_id: number;
   player_id: number;
-  from_game: GameName;
-  to_game: GameName;
+  from_game: string;
+  to_game: string;
   transfer_amount: number;
   from_game_balance_before: number;
   status: GameTransferStatus;
@@ -122,56 +154,98 @@ export type GameTransfer = {
 
 export type GameCredit = {
   player_id: number;
-  game_name: GameName;
+  game_name: string;
   current_balance: number;
   last_updated_at: string;
 };
 
-export type CompanyBankAccount = {
+export type BankAccountRole = "deposit" | "withdrawal";
+
+export type BankAccount = {
   account_id: number;
-  company_id: number;
-  bank_name: BankName;
+  entity_id: number;
+  role: BankAccountRole;
+  bank_name: string;
   account_number: string;
   account_holder: string;
-  label?: string;
+  label?: string | null;
   current_balance: number;
   status: "active" | "inactive";
   created_at: string;
 };
 
-export type BankTransferStatus = "completed" | "failed";
+export type BankTransferStatus =
+  | "pending_confirmation"
+  | "confirmed"
+  | "auto_confirmed"
+  | "rejected"
+  | "failed";
 
 export type BankTransfer = {
   transfer_id: number;
   from_account_id: number;
   to_account_id: number;
   amount: number;
-  reference?: string;
-  notes?: string;
-  handled_by_user_id: number;
+  reference?: string | null;
+  notes?: string | null;
   status: BankTransferStatus;
+  initiated_by_user_id: number;
+  confirmed_by_user_id?: number | null;
+  confirmed_at?: string | null;
+  expires_at?: string | null;
   created_at: string;
 };
 
 export type ProviderBoAccount = {
   bo_account_id: number;
-  company_id: number;
-  game_name: GameName;
+  company_entity_id: number;
+  game_name: string;
   bo_username: string;
-  bo_label?: string;
+  bo_label?: string | null;
   current_credit: number;
   status: "active" | "inactive";
-  notes?: string;
+  notes?: string | null;
   created_at: string;
 };
 
 export type ProviderBoAdjustment = {
   adjustment_id: number;
   bo_account_id: number;
-  amount: number; // positive = top-up from provider, negative = manual deduction
+  amount: number;
   reason: string;
   handled_by_user_id: number;
   created_at: string;
 };
 
-export const BONUS_OPTIONS = [0, 5, 10, 20, 30, 50, 100] as const;
+export type AuditEntry = {
+  transaction_id: number;
+  player_id: number | null;
+  type:
+    | "deposit"
+    | "withdrawal"
+    | "game_topup"
+    | "game_transfer"
+    | "credit_pull"
+    | "bank_transfer"
+    | "bo_adjustment"
+    | "player_import";
+  amount: number;
+  game_name?: string | null;
+  reference_id?: number | null;
+  user_id?: number | null;
+  details?: Record<string, unknown> | null;
+  created_at: string;
+};
+
+export type ServerSettings = {
+  transfer_auto_confirm_hours?: number;
+  bonus_options?: number[];
+  games?: string[];
+  banks?: string[];
+  [key: string]: unknown;
+};
+
+// Legacy aliases kept so existing components compile during migration.
+export type CompanyBankAccount = BankAccount;
+export type Organization = { org_id: number; org_name: string };
+export type Company = CompanyView;

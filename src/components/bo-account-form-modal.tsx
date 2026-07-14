@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { KeyRound } from "lucide-react";
+import { KeyRound, Loader2 } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,9 +14,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { COMPANIES } from "@/lib/mock-data";
 import { useStore } from "@/lib/store";
-import { GAMES, type GameName, type ProviderBoAccount } from "@/lib/types";
+import type { ProviderBoAccount } from "@/lib/types";
 
 type Props = {
   open: boolean;
@@ -25,7 +24,7 @@ type Props = {
 };
 
 type FormState = {
-  company_id: string;
+  company_entity_id: string;
   game_name: string;
   bo_username: string;
   bo_label: string;
@@ -35,7 +34,7 @@ type FormState = {
 };
 
 const EMPTY: FormState = {
-  company_id: "",
+  company_entity_id: "",
   game_name: "",
   bo_username: "",
   bo_label: "",
@@ -45,17 +44,33 @@ const EMPTY: FormState = {
 };
 
 export function BoAccountFormModal({ open, onOpenChange, account }: Props) {
-  const addAccount = useStore((s) => s.addProviderBoAccount);
-  const updateAccount = useStore((s) => s.updateProviderBoAccount);
+  const addAccount = useStore((s) => s.addBoAccount);
+  const updateAccount = useStore((s) => s.updateBoAccount);
+  const companies = useStore((s) => s.companies)();
+  const games = useStore((s) => s.games)();
+  const me = useStore((s) => s.me);
   const isEdit = !!account;
 
   const [form, setForm] = useState<FormState>(EMPTY);
+  const [submitting, setSubmitting] = useState(false);
+
+  const eligibleCompanies = useMemo(
+    () =>
+      companies.filter(
+        (c) =>
+          c.status === "active" &&
+          (!me ||
+            me.ownedEntityIds === null ||
+            me.ownedEntityIds.includes(c.company_id)),
+      ),
+    [companies, me],
+  );
 
   useEffect(() => {
     if (open) {
       if (account) {
         setForm({
-          company_id: String(account.company_id),
+          company_entity_id: String(account.company_entity_id),
           game_name: account.game_name,
           bo_username: account.bo_username,
           bo_label: account.bo_label ?? "",
@@ -70,13 +85,14 @@ export function BoAccountFormModal({ open, onOpenChange, account }: Props) {
   }, [open, account]);
 
   const errors = {
-    company_id: !form.company_id ? "Required" : null,
+    company_entity_id: !form.company_entity_id ? "Required" : null,
     game_name: !form.game_name ? "Required" : null,
     bo_username: !form.bo_username.trim() ? "Required" : null,
     current_credit:
-      form.current_credit === "" ||
-      isNaN(Number(form.current_credit)) ||
-      Number(form.current_credit) < 0
+      !isEdit &&
+      (form.current_credit === "" ||
+        isNaN(Number(form.current_credit)) ||
+        Number(form.current_credit) < 0)
         ? "Enter a non-negative number"
         : null,
   };
@@ -86,26 +102,39 @@ export function BoAccountFormModal({ open, onOpenChange, account }: Props) {
     setForm((f) => ({ ...f, [key]: value }));
   }
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!isValid) return;
-    const payload = {
-      company_id: Number(form.company_id),
-      game_name: form.game_name as GameName,
-      bo_username: form.bo_username.trim(),
-      bo_label: form.bo_label.trim() || undefined,
-      current_credit: Number(form.current_credit),
-      status: form.status,
-      notes: form.notes.trim() || undefined,
-    };
+    if (!isValid || submitting) return;
+    setSubmitting(true);
 
+    let result;
     if (isEdit && account) {
-      updateAccount(account.bo_account_id, payload);
-      toast.success("BO account updated");
+      result = await updateAccount(account.bo_account_id, {
+        company_entity_id: Number(form.company_entity_id),
+        game_name: form.game_name,
+        bo_username: form.bo_username.trim(),
+        bo_label: form.bo_label.trim() || undefined,
+        status: form.status,
+        notes: form.notes.trim() || undefined,
+      });
     } else {
-      addAccount(payload);
-      toast.success("BO account added");
+      result = await addAccount({
+        company_entity_id: Number(form.company_entity_id),
+        game_name: form.game_name,
+        bo_username: form.bo_username.trim(),
+        bo_label: form.bo_label.trim() || undefined,
+        current_credit: Number(form.current_credit),
+        status: form.status,
+        notes: form.notes.trim() || undefined,
+      });
     }
+    setSubmitting(false);
+
+    if (!result.ok) {
+      toast.error(result.error ?? "Could not save BO account");
+      return;
+    }
+    toast.success(isEdit ? "BO account updated" : "BO account added");
     onOpenChange(false);
   }
 
@@ -137,15 +166,27 @@ export function BoAccountFormModal({ open, onOpenChange, account }: Props) {
                 Company <span className="text-rose-600">*</span>
               </Label>
               <Select
-                value={form.company_id}
-                onValueChange={(v) => update("company_id", v ?? "")}
+                value={form.company_entity_id}
+                onValueChange={(v) => update("company_entity_id", v ?? "")}
               >
-                <SelectTrigger className="h-8 w-full" aria-invalid={!!errors.company_id}>
+                <SelectTrigger
+                  className="h-8 w-full cursor-pointer"
+                  aria-invalid={!!errors.company_entity_id}
+                >
                   <SelectValue placeholder="Select company" />
                 </SelectTrigger>
                 <SelectContent>
-                  {COMPANIES.map((c) => (
-                    <SelectItem key={c.company_id} value={String(c.company_id)}>
+                  {eligibleCompanies.length === 0 && (
+                    <div className="px-3 py-2 text-[12px] text-muted-foreground">
+                      No companies available
+                    </div>
+                  )}
+                  {eligibleCompanies.map((c) => (
+                    <SelectItem
+                      key={c.company_id}
+                      value={String(c.company_id)}
+                      className="cursor-pointer"
+                    >
                       {c.company_name}
                     </SelectItem>
                   ))}
@@ -160,12 +201,15 @@ export function BoAccountFormModal({ open, onOpenChange, account }: Props) {
                 value={form.game_name}
                 onValueChange={(v) => update("game_name", v ?? "")}
               >
-                <SelectTrigger className="h-8 w-full" aria-invalid={!!errors.game_name}>
+                <SelectTrigger
+                  className="h-8 w-full cursor-pointer"
+                  aria-invalid={!!errors.game_name}
+                >
                   <SelectValue placeholder="Select game" />
                 </SelectTrigger>
                 <SelectContent>
-                  {GAMES.map((g) => (
-                    <SelectItem key={g} value={g}>
+                  {games.map((g) => (
+                    <SelectItem key={g} value={g} className="cursor-pointer">
                       {g}
                     </SelectItem>
                   ))}
@@ -199,24 +243,31 @@ export function BoAccountFormModal({ open, onOpenChange, account }: Props) {
           </div>
 
           <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="bo-credit">
-                {isEdit ? "Current credit" : "Opening credit"}
-              </Label>
-              <Input
-                id="bo-credit"
-                type="number"
-                step="0.01"
-                value={form.current_credit}
-                onChange={(e) => update("current_credit", e.target.value)}
-                aria-invalid={!!errors.current_credit}
-              />
-              {isEdit && (
+            {!isEdit ? (
+              <div className="space-y-1.5">
+                <Label htmlFor="bo-credit">Opening credit</Label>
+                <Input
+                  id="bo-credit"
+                  type="number"
+                  step="0.01"
+                  value={form.current_credit}
+                  onChange={(e) => update("current_credit", e.target.value)}
+                  aria-invalid={!!errors.current_credit}
+                />
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                <Label>Current credit</Label>
+                <div className="flex h-8 items-center rounded-md border bg-muted/30 px-2.5 text-sm tabular-nums">
+                  {account?.current_credit.toLocaleString("en-MY", {
+                    minimumFractionDigits: 2,
+                  })}
+                </div>
                 <p className="text-[10px] text-muted-foreground">
-                  For tracked credit changes, use Top Up / Deduct instead.
+                  Use Top Up / Deduct for tracked credit changes.
                 </p>
-              )}
-            </div>
+              </div>
+            )}
             <div className="space-y-1.5">
               <Label>Status</Label>
               <Select
@@ -225,12 +276,16 @@ export function BoAccountFormModal({ open, onOpenChange, account }: Props) {
                   update("status", (v as "active" | "inactive") ?? "active")
                 }
               >
-                <SelectTrigger className="h-8 w-full">
+                <SelectTrigger className="h-8 w-full cursor-pointer">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="active">Active</SelectItem>
-                  <SelectItem value="inactive">Inactive</SelectItem>
+                  <SelectItem value="active" className="cursor-pointer">
+                    Active
+                  </SelectItem>
+                  <SelectItem value="inactive" className="cursor-pointer">
+                    Inactive
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -253,11 +308,17 @@ export function BoAccountFormModal({ open, onOpenChange, account }: Props) {
               type="button"
               variant="ghost"
               onClick={() => onOpenChange(false)}
+              disabled={submitting}
               className="cursor-pointer"
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={!isValid} className="cursor-pointer">
+            <Button
+              type="submit"
+              disabled={!isValid || submitting}
+              className="cursor-pointer"
+            >
+              {submitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               {isEdit ? "Save changes" : "Add BO account"}
             </Button>
           </div>

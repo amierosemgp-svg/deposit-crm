@@ -2,11 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { CheckCircle2, Loader2, Zap, Link2 } from "lucide-react";
+import { CheckCircle2, Loader2, Zap, Link2, XCircle } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { useStore } from "@/lib/store";
-import { PLAYERS, CURRENT_USER } from "@/lib/mock-data";
 import { formatRM } from "@/lib/format";
 import { TelegramBubble } from "./telegram-bubble";
 
@@ -16,53 +15,77 @@ type Props = {
   onOpenChange: (open: boolean) => void;
 };
 
-const TOTAL_MS = 3500;
+/** Minimum time the processing animation stays on screen. */
+const MIN_DISPLAY_MS = 2500;
 
 export function ApprovalFlowModal({ depositId, open, onOpenChange }: Props) {
   const deposit = useStore((s) =>
     depositId ? s.deposits.find((d) => d.deposit_id === depositId) : null,
   );
   const approveDeposit = useStore((s) => s.approveDeposit);
-  const player = deposit ? PLAYERS.find((p) => p.player_id === deposit.player_id) : null;
+  const player = useStore((s) =>
+    deposit?.player_id != null
+      ? s.players.find((p) => p.player_id === deposit.player_id)
+      : undefined,
+  );
 
   const [progress, setProgress] = useState(0);
-  const [phase, setPhase] = useState<"processing" | "success">("processing");
+  const [phase, setPhase] = useState<"processing" | "success" | "error">(
+    "processing",
+  );
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [showBubble, setShowBubble] = useState(false);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || !depositId) return;
     setProgress(0);
     setPhase("processing");
+    setErrorMessage(null);
     setShowBubble(false);
 
+    let cancelled = false;
     const started = Date.now();
+    // Animate towards 95% and hold there until the API call actually resolves.
     const interval = setInterval(() => {
       const elapsed = Date.now() - started;
-      const pct = Math.min(100, (elapsed / TOTAL_MS) * 100);
-      setProgress(pct);
-      if (pct >= 100) {
-        clearInterval(interval);
-      }
+      setProgress((p) => Math.max(p, Math.min(95, (elapsed / MIN_DISPLAY_MS) * 95)));
     }, 50);
 
-    const done = setTimeout(() => {
-      if (depositId) approveDeposit(depositId, CURRENT_USER.user_id);
-      setPhase("success");
-      setTimeout(() => setShowBubble(true), 600);
-    }, TOTAL_MS);
+    const minDelay = new Promise<void>((resolve) =>
+      setTimeout(resolve, MIN_DISPLAY_MS),
+    );
+
+    void Promise.all([approveDeposit(depositId), minDelay]).then(([result]) => {
+      if (cancelled) return;
+      clearInterval(interval);
+      setProgress(100);
+      if (result.ok) {
+        setPhase("success");
+        setTimeout(() => {
+          if (!cancelled) setShowBubble(true);
+        }, 600);
+      } else {
+        setErrorMessage(result.error ?? "Top-up failed. Please try again.");
+        setPhase("error");
+      }
+    });
 
     return () => {
+      cancelled = true;
       clearInterval(interval);
-      clearTimeout(done);
     };
   }, [open, depositId, approveDeposit]);
 
-  const reference = useMemo(
+  const fallbackReference = useMemo(
     () => `TOPUP-${100000 + Math.floor(Math.random() * 900000)}`,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [open],
   );
+  const reference = deposit?.game_topup_reference ?? fallbackReference;
 
-  if (!deposit || !player) {
+  const playerName = player?.full_name ?? deposit?.player_username ?? "player";
+
+  if (!deposit) {
     return (
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent className="sm:max-w-lg" />
@@ -114,7 +137,7 @@ export function ApprovalFlowModal({ depositId, open, onOpenChange }: Props) {
                       </span>{" "}
                       for{" "}
                       <span className="font-semibold text-foreground">
-                        {player.full_name}
+                        {playerName}
                       </span>
                     </p>
                   </div>
@@ -141,7 +164,7 @@ export function ApprovalFlowModal({ depositId, open, onOpenChange }: Props) {
                     Please wait — Do not close this window
                   </p>
                 </motion.div>
-              ) : (
+              ) : phase === "success" ? (
                 <motion.div
                   key="success"
                   initial={{ opacity: 0, scale: 0.96 }}
@@ -176,7 +199,10 @@ export function ApprovalFlowModal({ depositId, open, onOpenChange }: Props) {
                       </div>
 
                       <div className="flex gap-2 pt-2">
-                        <Button onClick={() => onOpenChange(false)}>
+                        <Button
+                          onClick={() => onOpenChange(false)}
+                          className="cursor-pointer"
+                        >
                           Back to Deposits
                         </Button>
                       </div>
@@ -185,11 +211,49 @@ export function ApprovalFlowModal({ depositId, open, onOpenChange }: Props) {
                     <div className="flex justify-center sm:justify-end">
                       <TelegramBubble
                         visible={showBubble}
-                        playerName={player.full_name}
-                        telegramUsername={player.telegram_username}
+                        playerName={playerName}
+                        telegramUsername={player?.telegram_username ?? ""}
                         message={`✅ RM ${deposit.total_amount.toFixed(2)} credited to your ${deposit.selected_game} account. Good luck!`}
                       />
                     </div>
+                  </div>
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="error"
+                  initial={{ opacity: 0, scale: 0.96 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ type: "spring", damping: 18, stiffness: 200 }}
+                  className="text-center space-y-4"
+                >
+                  <motion.div
+                    initial={{ scale: 0 }}
+                    animate={{ scale: 1 }}
+                    transition={{ type: "spring", damping: 10, stiffness: 220, delay: 0.1 }}
+                    className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-red-500/10 text-red-600"
+                  >
+                    <XCircle className="h-9 w-9" />
+                  </motion.div>
+
+                  <div>
+                    <h2 className="text-xl font-semibold">Top-up failed</h2>
+                    <p className="mt-1.5 text-sm text-muted-foreground">
+                      {errorMessage}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      No credits were deducted. The deposit is still awaiting
+                      approval — you can retry from the deposits list.
+                    </p>
+                  </div>
+
+                  <div className="flex justify-center pt-1">
+                    <Button
+                      variant="outline"
+                      onClick={() => onOpenChange(false)}
+                      className="cursor-pointer"
+                    >
+                      Close
+                    </Button>
                   </div>
                 </motion.div>
               )}

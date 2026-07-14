@@ -10,6 +10,7 @@ import {
   Trash2,
   Landmark,
   Gamepad2,
+  Loader2,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -22,16 +23,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { COMPANIES, PLAYERS } from "@/lib/mock-data";
 import { useStore } from "@/lib/store";
-import {
-  BANKS,
-  GAMES,
-  type BankName,
-  type GameName,
-  type PlayerBankAccount,
-  type PlayerGameAccount,
-} from "@/lib/types";
+import type { PlayerBankAccount, PlayerGameAccount } from "@/lib/types";
 
 type Props = {
   open: boolean;
@@ -47,7 +40,7 @@ type FormState = {
   telegram_username: string;
   contact_number: string;
   wechat_id: string;
-  company_id: string;
+  company_entity_id: string;
   bank_accounts: BankRow[];
   game_accounts: GameRow[];
   notes: string;
@@ -59,7 +52,7 @@ const EMPTY: FormState = {
   telegram_username: "",
   contact_number: "",
   wechat_id: "",
-  company_id: "",
+  company_entity_id: "",
   bank_accounts: [],
   game_accounts: [],
   notes: "",
@@ -68,12 +61,20 @@ const EMPTY: FormState = {
 const FORM_ID = "create-player-form";
 
 export function CreatePlayerModal({ open, onOpenChange }: Props) {
-  const importPlayers = useStore((s) => s.importPlayers);
-  const importedPlayers = useStore((s) => s.importedPlayers);
+  const createPlayer = useStore((s) => s.createPlayer);
+  const players = useStore((s) => s.players);
+  const companiesFn = useStore((s) => s.companies);
+  const banksFn = useStore((s) => s.banks);
+  const gamesFn = useStore((s) => s.games);
+
+  const companies = companiesFn();
+  const banks = banksFn();
+  const games = gamesFn();
 
   const [form, setForm] = useState<FormState>(EMPTY);
   const [phase, setPhase] = useState<"input" | "done">("input");
   const [createdName, setCreatedName] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (!open) {
@@ -81,6 +82,7 @@ export function CreatePlayerModal({ open, onOpenChange }: Props) {
         setForm(EMPTY);
         setPhase("input");
         setCreatedName("");
+        setSubmitting(false);
       }, 200);
       return () => clearTimeout(t);
     }
@@ -89,11 +91,8 @@ export function CreatePlayerModal({ open, onOpenChange }: Props) {
   const usernameTaken = useMemo(() => {
     const u = form.username.trim().toLowerCase();
     if (!u) return false;
-    return (
-      PLAYERS.some((p) => p.username.toLowerCase() === u) ||
-      importedPlayers.some((p) => p.username.toLowerCase() === u)
-    );
-  }, [form.username, importedPlayers]);
+    return players.some((p) => p.username.toLowerCase() === u);
+  }, [form.username, players]);
 
   const errors = {
     full_name: !form.full_name.trim() ? "Required" : null,
@@ -103,7 +102,7 @@ export function CreatePlayerModal({ open, onOpenChange }: Props) {
         ? "Username already exists"
         : null,
     telegram_username: !form.telegram_username.trim() ? "Required" : null,
-    company_id: !form.company_id ? "Required" : null,
+    company_entity_id: !form.company_entity_id ? "Required" : null,
     bank_accounts: form.bank_accounts.some(
       (b) => !b.bank_name || !b.account_number.trim(),
     )
@@ -166,38 +165,44 @@ export function CreatePlayerModal({ open, onOpenChange }: Props) {
     }));
   }
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!isValid) return;
+    if (!isValid || submitting) return;
     const tg = form.telegram_username.trim();
     const fullName = form.full_name.trim();
 
     const bankAccounts: PlayerBankAccount[] = form.bank_accounts.map((b) => ({
-      bank_name: b.bank_name as BankName,
+      bank_name: b.bank_name,
       account_number: b.account_number.trim(),
       account_holder: b.account_holder.trim() || fullName,
     }));
     const gameAccounts: PlayerGameAccount[] = form.game_accounts.map((g) => ({
-      game_name: g.game_name as GameName,
+      game_name: g.game_name,
       game_username: g.game_username.trim(),
     }));
 
-    const created = importPlayers([
-      {
-        full_name: fullName,
-        username: form.username.trim(),
-        telegram_username: tg.startsWith("@") ? tg : `@${tg}`,
-        contact_number: form.contact_number.trim() || undefined,
-        wechat_id: form.wechat_id.trim() || undefined,
-        company_id: Number(form.company_id),
-        bank_accounts: bankAccounts.length ? bankAccounts : undefined,
-        game_accounts: gameAccounts.length ? gameAccounts : undefined,
-        notes: form.notes.trim() || undefined,
-      },
-    ]);
-    setCreatedName(created[0]?.full_name ?? "Player");
+    setSubmitting(true);
+    const res = await createPlayer({
+      full_name: fullName,
+      username: form.username.trim(),
+      telegram_username: tg.startsWith("@") ? tg : `@${tg}`,
+      contact_number: form.contact_number.trim() || undefined,
+      wechat_id: form.wechat_id.trim() || undefined,
+      company_entity_id: Number(form.company_entity_id),
+      bank_accounts: bankAccounts.length ? bankAccounts : undefined,
+      game_accounts: gameAccounts.length ? gameAccounts : undefined,
+      notes: form.notes.trim() || undefined,
+    });
+    setSubmitting(false);
+
+    if (!res.ok) {
+      toast.error(res.error ?? "Failed to create player");
+      return;
+    }
+    setCreatedName(fullName);
+    setForm(EMPTY);
     setPhase("done");
-    toast.success(`Player "${created[0]?.full_name}" created`);
+    toast.success(`Player "${fullName}" created`);
   }
 
   return (
@@ -300,17 +305,17 @@ export function CreatePlayerModal({ open, onOpenChange }: Props) {
                       Company <span className="text-rose-600">*</span>
                     </Label>
                     <Select
-                      value={form.company_id}
-                      onValueChange={(v) => update("company_id", v ?? "")}
+                      value={form.company_entity_id}
+                      onValueChange={(v) => update("company_entity_id", v ?? "")}
                     >
                       <SelectTrigger
                         className="h-8 w-full"
-                        aria-invalid={!!errors.company_id}
+                        aria-invalid={!!errors.company_entity_id}
                       >
                         <SelectValue placeholder="Select company" />
                       </SelectTrigger>
                       <SelectContent>
-                        {COMPANIES.map((c) => (
+                        {companies.map((c) => (
                           <SelectItem
                             key={c.company_id}
                             value={String(c.company_id)}
@@ -384,7 +389,7 @@ export function CreatePlayerModal({ open, onOpenChange }: Props) {
                                 <SelectValue placeholder="Select bank" />
                               </SelectTrigger>
                               <SelectContent>
-                                {BANKS.map((bk) => (
+                                {banks.map((bk) => (
                                   <SelectItem key={bk} value={bk}>
                                     {bk}
                                   </SelectItem>
@@ -469,7 +474,7 @@ export function CreatePlayerModal({ open, onOpenChange }: Props) {
                               <SelectValue placeholder="Game" />
                             </SelectTrigger>
                             <SelectContent>
-                              {GAMES.map((gm) => (
+                              {games.map((gm) => (
                                 <SelectItem
                                   key={gm}
                                   value={gm}
@@ -528,6 +533,7 @@ export function CreatePlayerModal({ open, onOpenChange }: Props) {
                 type="button"
                 variant="ghost"
                 onClick={() => onOpenChange(false)}
+                disabled={submitting}
                 className="cursor-pointer"
               >
                 Cancel
@@ -535,10 +541,14 @@ export function CreatePlayerModal({ open, onOpenChange }: Props) {
               <Button
                 type="submit"
                 form={FORM_ID}
-                disabled={!isValid}
+                disabled={!isValid || submitting}
                 className="cursor-pointer"
               >
-                <UserPlus className="h-3.5 w-3.5" />
+                {submitting ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <UserPlus className="h-3.5 w-3.5" />
+                )}
                 Create player
               </Button>
             </div>

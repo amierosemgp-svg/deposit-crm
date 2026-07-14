@@ -2,6 +2,7 @@ import { Sidebar } from "@/components/layout/sidebar";
 import { TopNav } from "@/components/layout/topnav";
 import { PlayerProfileProvider } from "@/components/player-name-link";
 import { ClientOnly } from "@/components/client-only";
+import { StoreHydrator } from "@/components/store-hydrator";
 
 export default function CrmLayout({
   children,
@@ -10,6 +11,7 @@ export default function CrmLayout({
 }) {
   return (
     <PlayerProfileProvider>
+      <StoreHydrator />
       <div className="flex min-h-screen flex-col">
         <TopNav />
         <div className="flex flex-1 overflow-hidden">
