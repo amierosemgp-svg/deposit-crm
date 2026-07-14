@@ -285,12 +285,18 @@
         <a href="#conventions">Conventions</a>
       </div>
       <div class="grp">
-        <p class="grp-label">Endpoints</p>
+        <p class="grp-label">Transactions</p>
         <a href="#create"><span class="m post">Post</span> Create transaction</a>
         <a href="#list"><span class="m get">Get</span> List pending</a>
         <a href="#get-one"><span class="m get">Get</span> Get one</a>
         <a href="#match"><span class="m patch">Patch</span> Match</a>
         <a href="#members"><span class="m get">Get</span> Members</a>
+      </div>
+      <div class="grp">
+        <p class="grp-label">Resources (CRUD)</p>
+        <a href="#players">Players</a>
+        <a href="#entities">Entities</a>
+        <a href="#bank-accounts">Bank accounts</a>
       </div>
       <div class="grp">
         <p class="grp-label">Reference</p>
@@ -305,7 +311,7 @@
         <h1>OpenClaw Bot → Deposit CRM API</h1>
         <p>Everything the bank-scraping bot needs to push detected deposits into the CRM and reconcile them against player records. These are the only endpoints the bot uses — the rest of the CRM sits behind human login and isn't your concern.</p>
         <div class="pill-row">
-          <span class="pill"><b>5</b> endpoints</span>
+          <span class="pill"><b>Transactions</b> + full CRUD</span>
           <span class="pill">Auth: <b>API key</b></span>
           <span class="pill">Format: <b>JSON</b></span>
           <span class="pill">Idempotent writes</span>
@@ -582,6 +588,160 @@
       <span class="k">"telegram_username"</span>: <span class="s">"@ahmadtan88"</span>, <span class="k">"status"</span>: <span class="s">"active"</span> }
   ]
 }</code></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- PLAYERS CRUD -->
+      <section id="players">
+        <h2>Resource</h2>
+        <div class="block-title">Players</div>
+        <div class="prose"><p>Full CRUD over player (member) records. <code>:id</code> accepts the numeric <code>player_id</code> or the <code>username</code>.</p></div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m get">Get</span><span class="ep-path">/api/bot/players</span><span class="use-tag">List</span></div>
+          <div class="ep-body">
+            <div class="prose"><p>Filter with <code>?company_entity_id=</code>, <code>?q=</code> (name/username/telegram search), <code>?status=active|suspended</code>, <code>?limit=</code> (max 500), <code>?offset=</code>.</p></div>
+          </div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m post">Post</span><span class="ep-path">/api/bot/players</span><span class="use-tag">Create · idempotent</span></div>
+          <div class="ep-body">
+            <div class="sub">Body</div>
+            <div class="tbl-wrap"><table>
+              <tr><th>Field</th><th></th><th>Notes</th></tr>
+              <tr><td><code>username</code></td><td><span class="req">req</span></td><td>Unique. Idempotency key — re-sending returns <code>{ "duplicate": true }</code>.</td></tr>
+              <tr><td><code>full_name</code></td><td><span class="req">req</span></td><td></td></tr>
+              <tr><td><code>telegram_username</code></td><td><span class="req">req</span></td><td><code>@</code> added automatically if missing.</td></tr>
+              <tr><td><code>company_entity_id</code></td><td><span class="req">req</span></td><td>Must reference a <code>company</code> entity.</td></tr>
+              <tr><td><code>contact_number, wechat_id, notes</code></td><td><span class="opt">opt</span></td><td></td></tr>
+              <tr><td><code>bank_accounts[], game_accounts[]</code></td><td><span class="opt">opt</span></td><td>Arrays of the player's own accounts.</td></tr>
+            </table></div>
+            <div class="code" data-copy>
+              <button class="copy">Copy</button>
+              <pre><code><span class="k">curl</span> -X POST <span class="s">"$BASE/api/bot/players"</span> -H <span class="s">"X-API-Key: $KEY"</span> \
+  -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{ "username": "ahmadtan88", "full_name": "Ahmad Tan",
+       "telegram_username": "@ahmadtan88", "company_entity_id": 3 }'</span>
+
+<span class="cmt"># → 201 { "player": { "player_id": 12, "username": "ahmadtan88", ... } }</span></code></pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m get">Get</span><span class="ep-path">/api/bot/players/:id</span><span class="use-tag">Retrieve</span></div>
+          <div class="ep-body"><div class="prose"><p><code>404</code> if not found.</p></div></div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m patch">Patch</span><span class="ep-path">/api/bot/players/:id</span><span class="use-tag">Update</span></div>
+          <div class="ep-body">
+            <div class="prose"><p>Any of: <code>full_name</code>, <code>telegram_username</code>, <code>contact_number</code>, <code>wechat_id</code>, <code>company_entity_id</code>, <code>status</code> (<code>active</code>/<code>suspended</code>), <code>notes</code>, <code>bank_accounts</code>, <code>game_accounts</code>.</p></div>
+          </div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m patch">Del</span><span class="ep-path">/api/bot/players/:id</span><span class="use-tag">Delete</span></div>
+          <div class="ep-body">
+            <div class="codes">
+              <div><span class="sc ok">200</span><span>Deleted (player had no transaction history).</span></div>
+              <div><span class="sc warn">409</span><span>Player has history — suspend instead via PATCH <code>status=suspended</code>.</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ENTITIES CRUD -->
+      <section id="entities">
+        <h2>Resource</h2>
+        <div class="block-title">Entities</div>
+        <div class="prose"><p>The org hierarchy: <code>main_company → leader → company → cs</code>. Players belong to a <code>company</code>; bank accounts belong to a <code>leader</code> or <code>company</code>.</p></div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m get">Get</span><span class="ep-path">/api/bot/entities</span><span class="use-tag">List tree</span></div>
+          <div class="ep-body"><div class="prose"><p>Filter with <code>?type=leader|company|cs</code> or <code>?parent_entity_id=</code>. Each row has <code>entity_id, parent_entity_id, entity_type, name, status</code>.</p></div></div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m post">Post</span><span class="ep-path">/api/bot/entities</span><span class="use-tag">Create</span></div>
+          <div class="ep-body">
+            <div class="prose"><p>Body: <code>entity_type</code> (<code>leader</code>/<code>company</code>/<code>cs</code>), <code>name</code>, <code>parent_entity_id</code>. The parent type must be valid for the child (<code>company</code> under <code>leader</code>, etc.) or you get <code>400</code>.</p></div>
+            <div class="code" data-copy>
+              <button class="copy">Copy</button>
+              <pre><code><span class="k">curl</span> -X POST <span class="s">"$BASE/api/bot/entities"</span> -H <span class="s">"X-API-Key: $KEY"</span> \
+  -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{ "entity_type": "company", "name": "Alpha Gaming", "parent_entity_id": 2 }'</span></code></pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m get">Get</span><span class="ep-path">/api/bot/entities/:id</span><span class="use-tag">Retrieve</span></div>
+          <div class="ep-body"><div class="prose"><p>Numeric id.</p></div></div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m patch">Patch</span><span class="ep-path">/api/bot/entities/:id</span><span class="use-tag">Update</span></div>
+          <div class="ep-body"><div class="prose"><p><code>name</code> and/or <code>status</code>. Type and parent are immutable.</p></div></div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m patch">Del</span><span class="ep-path">/api/bot/entities/:id</span><span class="use-tag">Delete</span></div>
+          <div class="ep-body">
+            <div class="codes">
+              <div><span class="sc ok">200</span><span>Deleted (no children, users, players, or accounts).</span></div>
+              <div><span class="sc warn">409</span><span>Still has children — remove those first.</span></div>
+              <div><span class="sc warn">422</span><span>The main company entity cannot be deleted.</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- BANK ACCOUNTS CRUD -->
+      <section id="bank-accounts">
+        <h2>Resource</h2>
+        <div class="block-title">Bank accounts</div>
+        <div class="prose"><p>Collection and payout accounts owned by an entity. <code>role: "deposit"</code> = player collection (the accounts the bot watches); <code>role: "withdrawal"</code> = payouts.</p></div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m get">Get</span><span class="ep-path">/api/bot/bank-accounts</span><span class="use-tag">List</span></div>
+          <div class="ep-body"><div class="prose"><p>Filter with <code>?entity_id=</code>, <code>?role=deposit|withdrawal</code>, <code>?status=active|inactive</code>.</p></div></div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m post">Post</span><span class="ep-path">/api/bot/bank-accounts</span><span class="use-tag">Create</span></div>
+          <div class="ep-body">
+            <div class="prose"><p>Body: <code>entity_id</code>, <code>role</code>, <code>bank_name</code>, <code>account_number</code>, <code>account_holder</code>, optional <code>label</code>, <code>current_balance</code>, <code>status</code>. The entity must be a leader, company, or the main company.</p></div>
+            <div class="code" data-copy>
+              <button class="copy">Copy</button>
+              <pre><code><span class="k">curl</span> -X POST <span class="s">"$BASE/api/bot/bank-accounts"</span> -H <span class="s">"X-API-Key: $KEY"</span> \
+  -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{ "entity_id": 3, "role": "deposit", "bank_name": "Maybank",
+       "account_number": "5642 2178 9813", "account_holder": "Alpha Gaming" }'</span></code></pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m get">Get</span><span class="ep-path">/api/bot/bank-accounts/:id</span><span class="use-tag">Retrieve</span></div>
+          <div class="ep-body"><div class="prose"><p>Numeric id.</p></div></div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m patch">Patch</span><span class="ep-path">/api/bot/bank-accounts/:id</span><span class="use-tag">Update</span></div>
+          <div class="ep-body"><div class="prose"><p>Any of <code>role</code>, <code>bank_name</code>, <code>account_number</code>, <code>account_holder</code>, <code>label</code>, <code>current_balance</code>, <code>status</code>.</p></div></div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m patch">Del</span><span class="ep-path">/api/bot/bank-accounts/:id</span><span class="use-tag">Delete</span></div>
+          <div class="ep-body">
+            <div class="codes">
+              <div><span class="sc ok">200</span><span>Deleted.</span></div>
+              <div><span class="sc warn">422</span><span>Account still holds a balance — move it out first.</span></div>
+              <div><span class="sc warn">409</span><span>Referenced by transfers or transactions.</span></div>
             </div>
           </div>
         </div>
