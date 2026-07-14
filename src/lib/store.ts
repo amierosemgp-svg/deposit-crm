@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 import type {
+  ApiKeyRow,
   AuditEntry,
   BankAccount,
   BankTransfer,
@@ -226,6 +227,49 @@ type Store = {
     role: "company_leader" | "cs_agent" | "viewer";
     entity_id: number;
   }) => Promise<MutationResult>;
+
+  // --- admin / settings ---
+  apiKeys: ApiKeyRow[];
+  fetchApiKeys: () => Promise<void>;
+  createApiKey: (input: {
+    label: string;
+    allowed_ips?: string[];
+  }) => Promise<{ ok: boolean; key?: string; error?: string }>;
+  updateApiKey: (
+    keyId: number,
+    patch: { label?: string; status?: "active" | "inactive"; allowed_ips?: string[] | null },
+  ) => Promise<MutationResult>;
+  deleteApiKey: (keyId: number) => Promise<MutationResult>;
+  addCsAgent: (input: {
+    company_entity_id: number;
+    full_name: string;
+    username: string;
+    email: string;
+    password: string;
+  }) => Promise<MutationResult>;
+  addLeader: (input: {
+    full_name: string;
+    company_name?: string;
+    username: string;
+    email: string;
+    password: string;
+  }) => Promise<MutationResult>;
+  updateUser: (
+    userId: number,
+    patch: { full_name?: string; status?: "active" | "inactive" },
+  ) => Promise<MutationResult>;
+  deleteUser: (userId: number) => Promise<MutationResult>;
+  changePassword: (input: {
+    current_password: string;
+    new_password: string;
+  }) => Promise<MutationResult>;
+  updateSetting: (patch: {
+    transfer_auto_confirm_hours?: number;
+    games?: string[];
+    banks?: string[];
+    bonus_options?: number[];
+  }) => Promise<MutationResult>;
+
   uploadFile: (file: File) => Promise<{ ok: boolean; url?: string; error?: string }>;
   logout: () => Promise<void>;
 
@@ -489,6 +533,86 @@ export const useStore = create<Store>((set, get) => {
 
     addUser: (input) =>
       mutate("/api/users", { method: "POST", body: JSON.stringify(input) }),
+
+    // --- admin / settings ---
+    apiKeys: [],
+
+    fetchApiKeys: async () => {
+      const res = await api<{ apiKeys: ApiKeyRow[] }>("/api/api-keys");
+      if (res.ok && res.data) set({ apiKeys: res.data.apiKeys });
+    },
+
+    createApiKey: async (input) => {
+      const res = await api<{ key: string }>("/api/api-keys", {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+      if (!res.ok) return { ok: false, error: res.error };
+      await get().fetchApiKeys();
+      get().pushNotification({ kind: "system", message: `API key "${input.label}" created` });
+      return { ok: true, key: res.data?.key };
+    },
+
+    updateApiKey: async (keyId, patch) => {
+      const res = await api(`/api/api-keys/${keyId}`, {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) return { ok: false, error: res.error };
+      await get().fetchApiKeys();
+      return { ok: true };
+    },
+
+    deleteApiKey: async (keyId) => {
+      const res = await api(`/api/api-keys/${keyId}`, { method: "DELETE" });
+      if (!res.ok) return { ok: false, error: res.error };
+      await get().fetchApiKeys();
+      return { ok: true };
+    },
+
+    addCsAgent: (input) =>
+      mutate(
+        "/api/team/cs-agent",
+        { method: "POST", body: JSON.stringify(input) },
+        { kind: "system", message: `CS agent ${input.full_name} added` },
+      ),
+
+    addLeader: (input) =>
+      mutate(
+        "/api/team/leader",
+        { method: "POST", body: JSON.stringify(input) },
+        { kind: "system", message: `Leader ${input.full_name} added` },
+      ),
+
+    updateUser: (userId, patch) =>
+      mutate(`/api/users/${userId}`, {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+      }),
+
+    deleteUser: (userId) =>
+      mutate(`/api/users/${userId}`, { method: "DELETE" }),
+
+    changePassword: async (input) => {
+      const res = await api("/api/auth/change-password", {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+      if (!res.ok) return { ok: false, error: res.error };
+      get().pushNotification({ kind: "system", message: "Password changed" });
+      return { ok: true };
+    },
+
+    updateSetting: async (patch) => {
+      const res = await api("/api/settings", {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) return { ok: false, error: res.error };
+      await get().refresh();
+      get().pushNotification({ kind: "system", message: "Settings updated" });
+      return { ok: true };
+    },
 
     uploadFile: async (file) => {
       const form = new FormData();

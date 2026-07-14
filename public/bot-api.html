@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deposit CRM — Bot API Reference</title>
+<style>
+  :root {
+    --ground: #fbfcfd;
+    --surface: #ffffff;
+    --surface-2: #f4f6f9;
+    --ink: #18202c;
+    --ink-soft: #4a5566;
+    --ink-faint: #7c8798;
+    --border: #e4e8ee;
+    --border-strong: #d3d9e2;
+    --accent: #4f46e5;
+    --accent-soft: #eef0fe;
+    --code-bg: #10151d;
+    --code-ink: #dbe4ee;
+    --code-faint: #7d8ba0;
+    --m-get: #0284c7;
+    --m-get-bg: #e0f2fe;
+    --m-post: #059669;
+    --m-post-bg: #d7f5e8;
+    --m-patch: #b45309;
+    --m-patch-bg: #fcefd6;
+    --ok: #059669;
+    --warn: #b45309;
+    --err: #dc2626;
+    --radius: 10px;
+    --maxw: 1180px;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    --sans: "Inter var", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground: #0d1117;
+      --surface: #141a22;
+      --surface-2: #1a212b;
+      --ink: #e7edf4;
+      --ink-soft: #a9b4c2;
+      --ink-faint: #6e7a8a;
+      --border: #232c38;
+      --border-strong: #2e3846;
+      --accent: #8b86f5;
+      --accent-soft: #1c2033;
+      --code-bg: #0a0e14;
+      --code-ink: #d3dce8;
+      --code-faint: #6a7789;
+      --m-get: #38bdf8;
+      --m-get-bg: #10283a;
+      --m-post: #34d399;
+      --m-post-bg: #0f2a20;
+      --m-patch: #fbbf24;
+      --m-patch-bg: #2c2210;
+      --ok: #34d399;
+      --warn: #fbbf24;
+      --err: #f87171;
+    }
+  }
+  :root[data-theme="light"] {
+    --ground: #fbfcfd; --surface: #ffffff; --surface-2: #f4f6f9;
+    --ink: #18202c; --ink-soft: #4a5566; --ink-faint: #7c8798;
+    --border: #e4e8ee; --border-strong: #d3d9e2;
+    --accent: #4f46e5; --accent-soft: #eef0fe;
+    --code-bg: #10151d; --code-ink: #dbe4ee; --code-faint: #7d8ba0;
+    --m-get: #0284c7; --m-get-bg: #e0f2fe; --m-post: #059669; --m-post-bg: #d7f5e8;
+    --m-patch: #b45309; --m-patch-bg: #fcefd6; --ok: #059669; --warn: #b45309; --err: #dc2626;
+  }
+  :root[data-theme="dark"] {
+    --ground: #0d1117; --surface: #141a22; --surface-2: #1a212b;
+    --ink: #e7edf4; --ink-soft: #a9b4c2; --ink-faint: #6e7a8a;
+    --border: #232c38; --border-strong: #2e3846;
+    --accent: #8b86f5; --accent-soft: #1c2033;
+    --code-bg: #0a0e14; --code-ink: #d3dce8; --code-faint: #6a7789;
+    --m-get: #38bdf8; --m-get-bg: #10283a; --m-post: #34d399; --m-post-bg: #0f2a20;
+    --m-patch: #fbbf24; --m-patch-bg: #2c2210; --ok: #34d399; --warn: #fbbf24; --err: #f87171;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { font-family: var(--mono); font-size: 0.86em; }
+
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  /* header */
+  header {
+    border-bottom: 1px solid var(--border);
+    background: color-mix(in srgb, var(--ground) 88%, transparent);
+    backdrop-filter: blur(8px);
+    position: sticky; top: 0; z-index: 20;
+  }
+  .head-inner {
+    display: flex; align-items: center; gap: 16px;
+    padding: 15px 24px; max-width: var(--maxw); margin: 0 auto;
+  }
+  .logo {
+    width: 34px; height: 34px; border-radius: 9px; flex: none;
+    background: linear-gradient(145deg, var(--accent), color-mix(in srgb, var(--accent) 55%, #000));
+    display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 17px;
+    font-family: var(--mono);
+  }
+  .head-titles { display: flex; flex-direction: column; line-height: 1.25; }
+  .head-titles b { font-size: 15px; letter-spacing: -0.01em; }
+  .head-titles span { font-size: 12.5px; color: var(--ink-faint); }
+  .head-spacer { flex: 1; }
+  .head-base {
+    font-family: var(--mono); font-size: 12.5px; color: var(--ink-soft);
+    background: var(--surface-2); border: 1px solid var(--border);
+    padding: 6px 11px; border-radius: 8px; white-space: nowrap;
+  }
+  .head-base b { color: var(--m-post); font-weight: 600; }
+
+  /* layout */
+  .layout { display: grid; grid-template-columns: 232px 1fr; gap: 44px; padding: 40px 0 96px; }
+  nav.side { position: sticky; top: 78px; align-self: start; height: max-content; }
+  nav.side .grp { margin-bottom: 22px; }
+  nav.side .grp-label {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.09em;
+    color: var(--ink-faint); font-weight: 650; margin: 0 0 9px 10px;
+  }
+  nav.side a {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px; border-radius: 7px; color: var(--ink-soft);
+    font-size: 13.5px; font-weight: 500;
+  }
+  nav.side a:hover { background: var(--surface-2); text-decoration: none; color: var(--ink); }
+  nav.side a.active { background: var(--accent-soft); color: var(--accent); }
+
+  main { min-width: 0; }
+
+  /* method badges */
+  .m { font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: 0.03em;
+       padding: 2px 7px; border-radius: 5px; text-transform: uppercase; flex: none; }
+  .m.get { color: var(--m-get); background: var(--m-get-bg); }
+  .m.post { color: var(--m-post); background: var(--m-post-bg); }
+  .m.patch { color: var(--m-patch); background: var(--m-patch-bg); }
+
+  /* intro */
+  .lede h1 { font-size: 33px; letter-spacing: -0.025em; margin: 0 0 12px; text-wrap: balance; }
+  .lede p { color: var(--ink-soft); max-width: 64ch; margin: 0 0 16px; font-size: 15.5px; }
+  .pill-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+  .pill {
+    font-size: 12.5px; color: var(--ink-soft); background: var(--surface);
+    border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px;
+  }
+  .pill b { color: var(--ink); font-weight: 600; }
+
+  section { scroll-margin-top: 84px; padding-top: 46px; }
+  section > h2 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--accent); margin: 0 0 6px;
+  }
+  .block-title { font-size: 22px; letter-spacing: -0.015em; margin: 0 0 10px; }
+  .prose { color: var(--ink-soft); max-width: 68ch; }
+  .prose p { margin: 0 0 12px; }
+  .prose strong { color: var(--ink); font-weight: 600; }
+  .prose code, td code, li code { background: var(--surface-2); border: 1px solid var(--border);
+    padding: 1px 5px; border-radius: 5px; color: var(--ink); }
+
+  /* endpoint card */
+  .ep { border: 1px solid var(--border); border-radius: var(--radius);
+        background: var(--surface); margin-top: 20px; overflow: hidden; }
+  .ep-head { display: flex; align-items: center; gap: 11px; padding: 15px 18px;
+             border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  .ep-path { font-family: var(--mono); font-size: 14px; color: var(--ink); font-weight: 500; word-break: break-all; }
+  .ep-body { padding: 16px 18px; }
+  .ep-body > .prose { margin-bottom: 4px; }
+  .use-tag { margin-left: auto; font-size: 11.5px; color: var(--ink-faint);
+             font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+
+  .sub { font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em;
+         color: var(--ink-faint); font-weight: 650; margin: 18px 0 8px; }
+
+  /* param table */
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  .tbl-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
+  th { text-align: left; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.05em;
+       color: var(--ink-faint); font-weight: 650; padding: 9px 13px; background: var(--surface-2);
+       border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td { padding: 9px 13px; border-bottom: 1px solid var(--border); vertical-align: top; color: var(--ink-soft); }
+  tr:last-child td { border-bottom: none; }
+  td:first-child code { color: var(--accent); background: none; border: none; padding: 0; font-weight: 600; }
+  .req { color: var(--err); font-size: 11px; font-weight: 700; }
+  .opt { color: var(--ink-faint); font-size: 11px; }
+
+  /* code block */
+  .code { position: relative; background: var(--code-bg); border-radius: 9px; margin: 8px 0 0;
+          border: 1px solid color-mix(in srgb, var(--code-bg) 70%, var(--border)); }
+  .code pre { margin: 0; padding: 15px 16px; overflow-x: auto; }
+  .code code { color: var(--code-ink); font-size: 12.7px; line-height: 1.7; white-space: pre; display: block; }
+  .code .cmt { color: var(--code-faint); }
+  .code .k { color: #7dd3fc; }
+  .code .s { color: #86efac; }
+  .code .n { color: #fca5a5; }
+  .copy { position: absolute; top: 9px; right: 9px; font-family: var(--sans);
+          font-size: 11px; font-weight: 600; color: var(--code-faint);
+          background: color-mix(in srgb, var(--code-ink) 10%, transparent);
+          border: 1px solid color-mix(in srgb, var(--code-ink) 18%, transparent);
+          border-radius: 6px; padding: 4px 9px; cursor: pointer; transition: all .15s; }
+  .copy:hover { color: var(--code-ink); background: color-mix(in srgb, var(--code-ink) 18%, transparent); }
+  .copy.done { color: var(--m-post); border-color: var(--m-post); }
+
+  /* status codes */
+  .codes { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+  .codes div { display: flex; gap: 11px; align-items: baseline; font-size: 13.5px; }
+  .sc { font-family: var(--mono); font-weight: 700; font-size: 12.5px; padding: 2px 7px;
+        border-radius: 5px; flex: none; min-width: 40px; text-align: center; }
+  .sc.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); }
+  .sc.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 15%, transparent); }
+  .sc.err { color: var(--err); background: color-mix(in srgb, var(--err) 14%, transparent); }
+  .codes span { color: var(--ink-soft); }
+
+  /* callout */
+  .note { display: flex; gap: 11px; border: 1px solid var(--border); border-left: 3px solid var(--accent);
+          background: var(--surface); border-radius: 8px; padding: 13px 15px; margin: 16px 0;
+          font-size: 13.8px; color: var(--ink-soft); }
+  .note.warn { border-left-color: var(--warn); }
+  .note b { color: var(--ink); }
+  .note .ic { flex: none; font-family: var(--mono); font-weight: 700; color: var(--accent); }
+  .note.warn .ic { color: var(--warn); }
+
+  /* lifecycle diagram */
+  .flow { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin: 14px 0 4px;
+          font-family: var(--mono); font-size: 12.5px; }
+  .flow .st { padding: 6px 11px; border-radius: 7px; border: 1px solid var(--border-strong);
+              background: var(--surface); color: var(--ink); white-space: nowrap; }
+  .flow .st.done { border-color: var(--m-post); color: var(--m-post); }
+  .flow .st.fail { border-color: var(--err); color: var(--err); }
+  .flow .ar { color: var(--ink-faint); font-weight: 700; }
+
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 14px; }
+  .patcard { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 16px 17px; }
+  .patcard h4 { margin: 0 0 4px; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+  .patcard .tag { font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--accent);
+                  background: var(--accent-soft); padding: 2px 7px; border-radius: 5px; }
+  .patcard p { margin: 0; font-size: 13.6px; color: var(--ink-soft); }
+
+  footer { border-top: 1px solid var(--border); margin-top: 60px; padding: 26px 0 40px; }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center;
+                 font-size: 13px; color: var(--ink-faint); }
+  footer b { color: var(--ink-soft); font-weight: 600; }
+
+  @media (max-width: 860px) {
+    .layout { grid-template-columns: 1fr; gap: 0; }
+    nav.side { display: none; }
+    .two { grid-template-columns: 1fr; }
+    .head-base { display: none; }
+  }
+</style>
+</head>
+<body>
+
+
+<header>
+  <div class="head-inner">
+    <div class="logo">D</div>
+    <div class="head-titles">
+      <b>Deposit CRM</b>
+      <span>Bot Integration API · v1</span>
+    </div>
+    <div class="head-spacer"></div>
+    <div class="head-base">https://<b>deposit-crm</b>.vercel.app</div>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="layout">
+    <nav class="side" id="nav">
+      <div class="grp">
+        <p class="grp-label">Getting started</p>
+        <a href="#overview">Overview</a>
+        <a href="#auth">Authentication</a>
+        <a href="#conventions">Conventions</a>
+      </div>
+      <div class="grp">
+        <p class="grp-label">Endpoints</p>
+        <a href="#create"><span class="m post">Post</span> Create transaction</a>
+        <a href="#list"><span class="m get">Get</span> List pending</a>
+        <a href="#get-one"><span class="m get">Get</span> Get one</a>
+        <a href="#match"><span class="m patch">Patch</span> Match</a>
+        <a href="#members"><span class="m get">Get</span> Members</a>
+      </div>
+      <div class="grp">
+        <p class="grp-label">Reference</p>
+        <a href="#patterns">Integration patterns</a>
+        <a href="#lifecycle">Status lifecycle</a>
+        <a href="#errors">Error responses</a>
+      </div>
+    </nav>
+
+    <main>
+      <div class="lede">
+        <h1>OpenClaw Bot → Deposit CRM API</h1>
+        <p>Everything the bank-scraping bot needs to push detected deposits into the CRM and reconcile them against player records. These are the only endpoints the bot uses — the rest of the CRM sits behind human login and isn't your concern.</p>
+        <div class="pill-row">
+          <span class="pill"><b>5</b> endpoints</span>
+          <span class="pill">Auth: <b>API key</b></span>
+          <span class="pill">Format: <b>JSON</b></span>
+          <span class="pill">Idempotent writes</span>
+        </div>
+      </div>
+
+      <section id="overview">
+        <h2>Overview</h2>
+        <div class="block-title">What this API is for</div>
+        <div class="prose">
+          <p>The bot detects bank credit transactions and reports them here. The CRM then lets a Customer Service agent attach a bonus and a game, and auto-tops-up the player. Two integration styles are supported — see <a href="#patterns">Integration patterns</a> — and both use the same endpoints below.</p>
+          <p>You send us data; we never call back into your bot. Integration is pull/push over HTTPS only.</p>
+        </div>
+        <div class="sub">Base URL</div>
+        <div class="code" data-copy>
+          <button class="copy">Copy</button>
+          <pre><code>https://deposit-crm.vercel.app</code></pre>
+        </div>
+      </section>
+
+      <section id="auth">
+        <h2>Authentication</h2>
+        <div class="block-title">API key in a header</div>
+        <div class="prose">
+          <p>Every request carries the API key in the <code>X-API-Key</code> header. The key is issued once and stored hashed in the CRM — a missing or invalid key returns <code>401</code>.</p>
+        </div>
+        <div class="code" data-copy>
+          <button class="copy">Copy</button>
+          <pre><code><span class="k">X-API-Key</span>: dbk_••••••••••••••••••••••••••••••••</code></pre>
+        </div>
+        <div class="note warn">
+          <span class="ic">!</span>
+          <div>The live key is delivered <b>separately over a secure channel</b>, never in this document. Treat it as a secret — it grants full access to create and read transactions. If it leaks, tell the CRM team and we rotate it immediately.</div>
+        </div>
+        <div class="sub">Optional IP allowlist</div>
+        <div class="prose">
+          <p>If the bot runs from a fixed egress IP, the key can be locked to that IP so a leaked key is still useless from anywhere else — requests from other IPs then return <code>403</code>. This is opt-in; send the CRM team your IP to enable it. The API key stays the primary control; the allowlist is a second layer.</p>
+        </div>
+      </section>
+
+      <section id="conventions">
+        <h2>Conventions</h2>
+        <div class="block-title">Across every endpoint</div>
+        <div class="tbl-wrap">
+          <table>
+            <tr><th>Topic</th><th>Rule</th></tr>
+            <tr><td><b>Amounts</b></td><td>Plain numbers in Malaysian Ringgit (RM). <code>50</code> means RM 50.00.</td></tr>
+            <tr><td><b>Timestamps</b></td><td>ISO&nbsp;8601 strings, e.g. <code>2026-06-29T13:46:50.522Z</code>.</td></tr>
+            <tr><td><b>IDs</b></td><td><code>:id</code> in a path accepts either the CRM numeric id or your <code>external_id</code>.</td></tr>
+            <tr><td><b>Idempotency</b></td><td>Writes dedupe on <code>external_id</code> — retries never create duplicates.</td></tr>
+            <tr><td><b>Errors</b></td><td>Non-2xx responses return <code>{ "error": "human-readable reason" }</code>.</td></tr>
+          </table>
+        </div>
+      </section>
+
+      <!-- CREATE -->
+      <section id="create">
+        <h2>Endpoint</h2>
+        <div class="ep">
+          <div class="ep-head">
+            <span class="m post">Post</span>
+            <span class="ep-path">/api/bot/transactions</span>
+            <span class="use-tag">Create</span>
+          </div>
+          <div class="ep-body">
+            <div class="prose"><p>Report a detected bank credit. Send this the moment the bot sees a deposit. The body accepts your existing queue-item shape verbatim — either a flat object or your <code>{ id, transaction }</code> wrapper both work.</p></div>
+
+            <div class="sub">Body fields</div>
+            <div class="tbl-wrap">
+              <table>
+                <tr><th>Field</th><th>Type</th><th></th><th>Description</th></tr>
+                <tr><td><code>id</code></td><td>string</td><td><span class="req">req</span></td><td>Your queue item id — the idempotency key, e.g. <code>25_Jun_2026_MBB_CT-_CHAN_YIK_SOON_*Fund_Transfer_1.0</code>.</td></tr>
+                <tr><td><code>transaction.bank</code></td><td>string</td><td><span class="req">req</span></td><td>Bank name, e.g. <code>Maybank</code>.</td></tr>
+                <tr><td><code>transaction.amount</code></td><td>number</td><td><span class="req">req</span></td><td>Credit amount in RM. Must be positive.</td></tr>
+                <tr><td><code>transaction.type</code></td><td>string</td><td><span class="opt">opt</span></td><td>Only <code>credit</code> is accepted; anything else returns <code>422</code>.</td></tr>
+                <tr><td><code>transaction.description</code></td><td>string</td><td><span class="opt">opt</span></td><td>Raw bank statement text — used to auto-match the player by name.</td></tr>
+                <tr><td><code>transaction.date</code></td><td>string</td><td><span class="opt">opt</span></td><td><code>"25 Jun 2026"</code> or <code>"Today"</code>.</td></tr>
+                <tr><td><code>transaction.raw_amount</code></td><td>string</td><td><span class="opt">opt</span></td><td>Original string, e.g. <code>"RM 1.00"</code>.</td></tr>
+                <tr><td><code>transaction.extracted_at</code></td><td>string</td><td><span class="opt">opt</span></td><td>When the bot read it (ISO 8601).</td></tr>
+                <tr><td><code>telegram_username</code></td><td>string</td><td><span class="opt">opt</span></td><td>The player, if known — lets the CRM auto-match.</td></tr>
+                <tr><td><code>account_number</code></td><td>string</td><td><span class="opt">opt</span></td><td>Which company account received it — helps routing.</td></tr>
+                <tr><td><code>receipt_url</code></td><td>string</td><td><span class="opt">opt</span></td><td>Link to a receipt image, if captured.</td></tr>
+              </table>
+            </div>
+
+            <div class="sub">Request</div>
+            <div class="code" data-copy>
+              <button class="copy">Copy</button>
+              <pre><code><span class="k">curl</span> -X POST <span class="s">"$BASE/api/bot/transactions"</span> \
+  -H <span class="s">"X-API-Key: $KEY"</span> -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{
+    "id": "25_Jun_2026_MBB_CT-_CHAN_YIK_SOON_*Fund_Transfer_1.0",
+    "transaction": {
+      "bank": "Maybank",
+      "date": "25 Jun 2026",
+      "description": "MBB CT- CHAN YIK SOON *Fund Transfer",
+      "amount": 1.0,
+      "type": "credit",
+      "raw_amount": "RM 1.00",
+      "extracted_at": "2026-06-29T13:38:04.268Z"
+    }
+  }'</span></code></pre>
+            </div>
+
+            <div class="sub">Response · 201 Created</div>
+            <div class="code" data-copy>
+              <button class="copy">Copy</button>
+              <pre><code>{
+  <span class="k">"transaction"</span>: {
+    <span class="k">"id"</span>: <span class="n">42</span>,
+    <span class="k">"external_id"</span>: <span class="s">"25_Jun_2026_MBB_CT-_CHAN_YIK_SOON_*Fund_Transfer_1.0"</span>,
+    <span class="k">"status"</span>: <span class="s">"pending"</span>,
+    <span class="k">"amount"</span>: <span class="n">1.0</span>,
+    <span class="k">"player_username"</span>: <span class="n">null</span>,
+    <span class="k">"bank"</span>: <span class="s">"Maybank"</span>
+  }
+}</code></pre>
+            </div>
+            <div class="note">
+              <span class="ic">i</span>
+              <div>The CRM tries to auto-match the player from <code>telegram_username</code> or by matching the bank description against player names. If it can't, the deposit lands with <code>player_id: null</code> and a CS agent assigns the player in the UI.</div>
+            </div>
+
+            <div class="sub">Status codes</div>
+            <div class="codes">
+              <div><span class="sc ok">201</span><span>Created — new transaction.</span></div>
+              <div><span class="sc ok">200</span><span>Duplicate — same <code>id</code> already exists; returns <code>{ "duplicate": true, "transaction": {…} }</code>. Retries are safe.</span></div>
+              <div><span class="sc warn">422</span><span>Not a credit transaction (<code>type</code> ≠ <code>credit</code>).</span></div>
+              <div><span class="sc warn">400</span><span>Missing <code>bank</code> or a positive <code>amount</code>.</span></div>
+              <div><span class="sc err">401</span><span>Missing or invalid API key.</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- LIST -->
+      <section id="list">
+        <h2>Endpoint</h2>
+        <div class="ep">
+          <div class="ep-head">
+            <span class="m get">Get</span>
+            <span class="ep-path">/api/bot/transactions</span>
+            <span class="use-tag">List</span>
+          </div>
+          <div class="ep-body">
+            <div class="prose"><p>Fetch transactions the CRM is waiting on. Use this to find intents a CS agent created that need a bank match.</p></div>
+            <div class="sub">Query parameters</div>
+            <div class="tbl-wrap">
+              <table>
+                <tr><th>Param</th><th>Default</th><th>Description</th></tr>
+                <tr><td><code>status</code></td><td><code>pending_match</code></td><td>Comma-separated filter. Values: <code>pending_match</code>, <code>matched</code>, <code>pending</code>, <code>approved</code>, <code>processing</code>, <code>completed</code>, <code>failed</code>.</td></tr>
+                <tr><td><code>limit</code></td><td><code>100</code></td><td>Max rows (up to 500).</td></tr>
+              </table>
+            </div>
+            <div class="sub">Request &amp; response</div>
+            <div class="code" data-copy>
+              <button class="copy">Copy</button>
+              <pre><code><span class="k">curl</span> <span class="s">"$BASE/api/bot/transactions?status=pending_match"</span> -H <span class="s">"X-API-Key: $KEY"</span>
+
+<span class="cmt"># → 200 OK</span>
+{
+  <span class="k">"count"</span>: <span class="n">2</span>,
+  <span class="k">"transactions"</span>: [
+    { <span class="k">"id"</span>: <span class="n">7</span>, <span class="k">"amount"</span>: <span class="n">50</span>, <span class="k">"status"</span>: <span class="s">"pending_match"</span>, <span class="k">"player_username"</span>: <span class="s">"ahmadtan88"</span> }
+  ]
+}</code></pre>
+            </div>
+            <div class="note">
+              <span class="ic">i</span>
+              <div><b>pending_match</b> means a CS agent pre-created a deposit intent — "the player says they sent RM 50" — and it's waiting for you to confirm the matching bank credit landed. Reconcile it with <a href="#match">Match</a>.</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- GET ONE -->
+      <section id="get-one">
+        <h2>Endpoint</h2>
+        <div class="ep">
+          <div class="ep-head">
+            <span class="m get">Get</span>
+            <span class="ep-path">/api/bot/transactions/:id</span>
+            <span class="use-tag">Retrieve</span>
+          </div>
+          <div class="ep-body">
+            <div class="prose"><p>Fetch a single transaction for validation. <code>:id</code> is the CRM numeric id or your <code>external_id</code>.</p></div>
+            <div class="code" data-copy>
+              <button class="copy">Copy</button>
+              <pre><code><span class="k">curl</span> <span class="s">"$BASE/api/bot/transactions/7"</span> -H <span class="s">"X-API-Key: $KEY"</span></code></pre>
+            </div>
+            <div class="sub">Status codes</div>
+            <div class="codes">
+              <div><span class="sc ok">200</span><span>Returns <code>{ "transaction": {…} }</code>.</span></div>
+              <div><span class="sc err">404</span><span>No transaction with that id.</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- MATCH -->
+      <section id="match">
+        <h2>Endpoint</h2>
+        <div class="ep">
+          <div class="ep-head">
+            <span class="m patch">Patch</span>
+            <span class="ep-path">/api/bot/transactions/:id/match</span>
+            <span class="use-tag">Reconcile</span>
+          </div>
+          <div class="ep-body">
+            <div class="prose"><p>Confirm a <code>pending_match</code> intent against the bank credit the bot detected. Moves the deposit <code>pending_match → matched</code> and stores the bank details you extracted.</p></div>
+            <div class="sub">Body fields (all optional)</div>
+            <div class="tbl-wrap">
+              <table>
+                <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+                <tr><td><code>amount</code></td><td>number</td><td>If sent and it doesn't match the intent, returns <code>422</code> and nothing changes.</td></tr>
+                <tr><td><code>bank</code></td><td>string</td><td>Bank the credit came from.</td></tr>
+                <tr><td><code>description</code></td><td>string</td><td>Raw bank statement text.</td></tr>
+                <tr><td><code>external_id</code></td><td>string</td><td>Attach your queue id to the record.</td></tr>
+                <tr><td><code>extracted_at</code></td><td>string</td><td>When the bot read the credit.</td></tr>
+                <tr><td><code>receipt_url</code></td><td>string</td><td>Receipt image link.</td></tr>
+              </table>
+            </div>
+            <div class="sub">Request</div>
+            <div class="code" data-copy>
+              <button class="copy">Copy</button>
+              <pre><code><span class="k">curl</span> -X PATCH <span class="s">"$BASE/api/bot/transactions/7/match"</span> \
+  -H <span class="s">"X-API-Key: $KEY"</span> -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{
+    "bank": "Maybank",
+    "description": "MBB CT- TAN KIEN HUAT *Fund Transfer",
+    "amount": 50.0,
+    "external_id": "Today_MBB_CT-_TAN_KIEN_HUAT_*Fund_Transfer_50.0"
+  }'</span></code></pre>
+            </div>
+            <div class="sub">Status codes</div>
+            <div class="codes">
+              <div><span class="sc ok">200</span><span>Matched — returns the updated transaction.</span></div>
+              <div><span class="sc warn">422</span><span>Amount mismatch against the intent.</span></div>
+              <div><span class="sc warn">409</span><span>Transaction isn't <code>pending_match</code> (already matched or processed).</span></div>
+              <div><span class="sc err">404</span><span>No transaction with that id.</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- MEMBERS -->
+      <section id="members">
+        <h2>Endpoint</h2>
+        <div class="ep">
+          <div class="ep-head">
+            <span class="m get">Get</span>
+            <span class="ep-path">/api/bot/members</span>
+            <span class="use-tag">Lookup</span>
+          </div>
+          <div class="ep-body">
+            <div class="prose"><p>Verify a player (member) exists before creating a transaction. Query by one of three parameters.</p></div>
+            <div class="tbl-wrap">
+              <table>
+                <tr><th>Param</th><th>Example</th><th>Description</th></tr>
+                <tr><td><code>telegram_username</code></td><td><code>@ahmadtan88</code></td><td>Exact Telegram handle (with or without <code>@</code>).</td></tr>
+                <tr><td><code>player_id</code></td><td><code>1001</code></td><td>CRM player id.</td></tr>
+                <tr><td><code>q</code></td><td><code>Ahmad</code></td><td>Free-text name / username search (max 20 results).</td></tr>
+              </table>
+            </div>
+            <div class="code" data-copy>
+              <button class="copy">Copy</button>
+              <pre><code><span class="k">curl</span> <span class="s">"$BASE/api/bot/members?telegram_username=@ahmadtan88"</span> -H <span class="s">"X-API-Key: $KEY"</span>
+
+<span class="cmt"># → 200 OK</span>
+{
+  <span class="k">"count"</span>: <span class="n">1</span>,
+  <span class="k">"members"</span>: [
+    { <span class="k">"player_id"</span>: <span class="n">1001</span>, <span class="k">"username"</span>: <span class="s">"ahmadtan88"</span>,
+      <span class="k">"telegram_username"</span>: <span class="s">"@ahmadtan88"</span>, <span class="k">"status"</span>: <span class="s">"active"</span> }
+  ]
+}</code></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- PATTERNS -->
+      <section id="patterns">
+        <h2>Reference</h2>
+        <div class="block-title">Two integration patterns</div>
+        <div class="prose"><p>Both are supported — use whichever fits how the bot works. You can also mix them.</p></div>
+        <div class="two">
+          <div class="patcard">
+            <h4><span class="tag">A</span> Push</h4>
+            <p>The bot detects a credit → <code>POST /transactions</code> → it appears in the CRM as <code>pending</code> → a CS agent approves. Simplest path; nothing else required from the bot.</p>
+          </div>
+          <div class="patcard">
+            <h4><span class="tag">B</span> Intent + match</h4>
+            <p>A CS agent pre-creates an intent when the player messages → bot polls <code>GET ?status=pending_match</code> → finds the matching bank credit → <code>PATCH /match</code>. Use when you want the CS-entered expectation reconciled against the bank.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- LIFECYCLE -->
+      <section id="lifecycle">
+        <h2>Reference</h2>
+        <div class="block-title">Deposit status lifecycle</div>
+        <div class="prose"><p>A transaction created via <b>push</b> starts at <code>pending</code>; one created as an <b>intent</b> starts at <code>pending_match</code> and joins the queue once matched. A CS agent then approves it.</p></div>
+        <div class="flow">
+          <span class="st">pending_match</span>
+          <span class="ar">— match →</span>
+          <span class="st">matched</span>
+          <span class="ar">┐</span>
+        </div>
+        <div class="flow">
+          <span class="st" style="visibility:hidden">pending_match</span>
+          <span class="ar" style="visibility:hidden">— match →</span>
+          <span class="st">pending</span>
+          <span class="ar">→ CS approves →</span>
+          <span class="st done">completed</span>
+        </div>
+        <div class="flow">
+          <span class="st" style="visibility:hidden">pending_match</span>
+          <span class="ar" style="visibility:hidden">— match →</span>
+          <span class="st" style="visibility:hidden">pending</span>
+          <span class="ar">└ or →</span>
+          <span class="st fail">failed</span>
+        </div>
+      </section>
+
+      <!-- ERRORS -->
+      <section id="errors">
+        <h2>Reference</h2>
+        <div class="block-title">Error responses</div>
+        <div class="prose"><p>Every non-2xx response is JSON with a human-readable <code>error</code>. Codes used across the API:</p></div>
+        <div class="codes">
+          <div><span class="sc err">400</span><span>Bad request — a required field is missing or malformed.</span></div>
+          <div><span class="sc err">401</span><span>Unauthorized — missing or invalid <code>X-API-Key</code>.</span></div>
+          <div><span class="sc err">403</span><span>Forbidden — key is valid but the request IP isn't on its allowlist.</span></div>
+          <div><span class="sc err">404</span><span>Not found — no transaction or member for that identifier.</span></div>
+          <div><span class="sc err">409</span><span>Conflict — the transaction isn't in a state that allows this action.</span></div>
+          <div><span class="sc err">422</span><span>Unprocessable — e.g. a non-credit type or an amount that doesn't reconcile.</span></div>
+        </div>
+        <div class="note" style="margin-top:22px">
+          <span class="ic">i</span>
+          <div>Set two shell variables and every example on this page runs as-is:<br>
+          <code>BASE=https://deposit-crm.vercel.app</code> · <code>KEY=&lt;your bot key&gt;</code></div>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<footer>
+  <div class="wrap">
+    <b>Deposit CRM Bot API</b>
+    <span>·</span>
+    <span>Base: deposit-crm.vercel.app</span>
+    <span>·</span>
+    <span>Questions on integration → the CRM team</span>
+  </div>
+</footer>
+
+<script>
+  // Copy buttons
+  document.querySelectorAll('.code[data-copy]').forEach(function (block) {
+    var btn = block.querySelector('.copy');
+    var code = block.querySelector('code');
+    if (!btn || !code) return;
+    btn.addEventListener('click', function () {
+      navigator.clipboard.writeText(code.innerText).then(function () {
+        btn.textContent = 'Copied';
+        btn.classList.add('done');
+        setTimeout(function () { btn.textContent = 'Copy'; btn.classList.remove('done'); }, 1400);
+      });
+    });
+  });
+
+  // Active nav on scroll
+  var links = Array.prototype.slice.call(document.querySelectorAll('nav.side a'));
+  var map = {};
+  links.forEach(function (a) {
+    var id = a.getAttribute('href').slice(1);
+    var el = document.getElementById(id);
+    if (el) map[id] = a;
+  });
+  var sections = Object.keys(map).map(function (id) { return document.getElementById(id); });
+  var obs = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (e.isIntersecting) {
+        links.forEach(function (l) { l.classList.remove('active'); });
+        if (map[e.target.id]) map[e.target.id].classList.add('active');
+      }
+    });
+  }, { rootMargin: '-20% 0px -70% 0px', threshold: 0 });
+  sections.forEach(function (s) { if (s) obs.observe(s); });
+</script>
+
+</body>
+</html>

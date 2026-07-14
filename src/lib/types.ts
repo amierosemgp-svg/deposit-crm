@@ -237,6 +237,16 @@ export type AuditEntry = {
   created_at: string;
 };
 
+export type ApiKeyRow = {
+  key_id: number;
+  label: string;
+  hint: string | null;
+  status: "active" | "inactive";
+  allowed_ips: string[] | null;
+  last_used_at?: string | null;
+  created_at: string;
+};
+
 export type ServerSettings = {
   transfer_auto_confirm_hours?: number;
   bonus_options?: number[];

@@ -1,5 +1,4 @@
 import {
-  boolean,
   integer,
   jsonb,
   numeric,
@@ -402,6 +401,7 @@ export const transactions = pgTable("transactions", {
 export const apiKeys = pgTable("api_keys", {
   key_id: serial("key_id").primaryKey(),
   key_hash: varchar("key_hash", { length: 64 }).notNull().unique(), // sha256 hex
+  hint: varchar("hint", { length: 24 }), // display-only, e.g. "dbk_48d8…5ea0"
   label: varchar("label", { length: 80 }).notNull(),
   // Optional IP allowlist; when non-empty, requests from other IPs are
   // rejected even with a valid key. Requires the bot to have a static egress IP.

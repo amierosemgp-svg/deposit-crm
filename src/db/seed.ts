@@ -97,6 +97,7 @@ async function main() {
   if (!botKey) throw new Error("BOT_API_KEY missing from env");
   await db.insert(apiKeys).values({
     key_hash: createHash("sha256").update(botKey).digest("hex"),
+    hint: `${botKey.slice(0, 8)}…${botKey.slice(-4)}`,
     label: "OpenClaw deposit bot",
   });
 
