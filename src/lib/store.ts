@@ -427,9 +427,12 @@ export const useStore = create<Store>((set, get) => {
     },
 
     updateDepositDraft: async (depositId, patch) => {
-      // Optimistic: reflect the pick immediately instead of waiting for the
-      // full /api/state refresh (which sweeps + re-queries everything and can
-      // lag by seconds). mutate() reconciles on success; we revert on failure.
+      // Fully optimistic: reflect the change in the row immediately and do NOT
+      // block on a full /api/state refresh (which sweeps + re-queries everything
+      // and round-trips the DB — the source of the seconds-long lag when picking
+      // a game/bonus or assigning a player). The 10s poll reconciles; on failure
+      // we refresh to revert.
+      const players = get().players;
       set({
         deposits: get().deposits.map((d) => {
           if (d.deposit_id !== depositId) return d;
@@ -442,15 +445,25 @@ export const useStore = create<Store>((set, get) => {
             next.bonus_amount = bonusAmt;
             next.total_amount = +(d.deposit_amount + bonusAmt).toFixed(2);
           }
+          if (patch.player_id !== undefined) {
+            const p = players.find((x) => x.player_id === patch.player_id);
+            if (p) {
+              next.player_username = p.username;
+              next.company_entity_id = p.company_entity_id;
+            }
+          }
           return next;
         }),
       });
-      const result = await mutate(`/api/deposits/${depositId}`, {
+      const res = await api(`/api/deposits/${depositId}`, {
         method: "PATCH",
         body: JSON.stringify(patch),
       });
-      if (!result.ok) await get().refresh();
-      return result;
+      if (!res.ok) {
+        await get().refresh(); // revert the optimistic row to server truth
+        return { ok: false, error: res.error };
+      }
+      return { ok: true };
     },
 
     approveDeposit: async (depositId) => {
