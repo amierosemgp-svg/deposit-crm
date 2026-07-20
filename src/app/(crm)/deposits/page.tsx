@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
-import { formatRM, formatDateTime, formatRelative } from "@/lib/format";
+import { formatRM, formatDateTime } from "@/lib/format";
 import {
   Select,
   SelectContent,
@@ -501,8 +501,10 @@ export default function DepositsPage() {
                       )}
                       <td className="px-3 py-2 whitespace-nowrap">
                         <div className="text-[12px]">{formatDateTime(d.deposit_date)}</div>
-                        <div className="text-[10px] text-muted-foreground">
-                          {formatRelative(d.deposit_date)} · {d.transaction_ref}
+                        <div className="text-[10px] text-muted-foreground" title={d.transaction_ref}>
+                          {d.transaction_ref.length > 10
+                            ? `${d.transaction_ref.slice(0, 10)}…`
+                            : d.transaction_ref}
                         </div>
                       </td>
                       <td className="px-3 py-2">
