@@ -51,7 +51,6 @@ export default function WithdrawalsPage() {
   const bankAccounts = useStore((s) => s.bankAccounts);
   const getBalance = useStore((s) => s.getCreditBalance);
   const playerById = useStore((s) => s.playerById);
-  const kioskGames = useStore((s) => s.kioskGames);
   const markPaid = useStore((s) => s.markWithdrawalPaid);
   const createWithdrawal = useStore((s) => s.createWithdrawal);
   const uploadFile = useStore((s) => s.uploadFile);
@@ -162,10 +161,8 @@ export default function WithdrawalsPage() {
   );
 
   const newPlayer = newPlayerId ? playerById(Number(newPlayerId)) : undefined;
-  // Only games the player's company has an active kiosk for; none until a player is picked.
-  const newGames = newPlayer
-    ? kioskGames(newPlayer.company_entity_id)
-    : [];
+  // Games the selected player has linked accounts for; none until a player is picked.
+  const newGames = (newPlayer?.game_accounts ?? []).map((g) => g.game_name);
   const newBalance =
     newPlayer && newGame ? getBalance(newPlayer.player_id, newGame) : 0;
   const newAmt = Number(newAmount) || 0;
@@ -502,7 +499,7 @@ export default function WithdrawalsPage() {
                   {newGames.length === 0 ? (
                     <div className="px-2 py-1.5 text-[11px] text-muted-foreground">
                       {newPlayer
-                        ? "No active kiosk for this player's company"
+                        ? "No games linked to this player"
                         : "Select a player first"}
                     </div>
                   ) : (

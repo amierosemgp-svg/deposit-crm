@@ -64,7 +64,7 @@ export default function DepositsPage() {
   const refresh = useStore((s) => s.refresh);
   const companiesFn = useStore((s) => s.companies);
   const banksFn = useStore((s) => s.banks);
-  const kioskGames = useStore((s) => s.kioskGames);
+  const playerById = useStore((s) => s.playerById);
   const bonusOptionsFn = useStore((s) => s.bonusOptions);
 
   const banks = banksFn();
@@ -606,12 +606,20 @@ export default function DepositsPage() {
                       <td className="px-3 py-2">
                         {editable ? (
                           (() => {
-                            const rowGames = kioskGames(d.company_entity_id);
-                            // Keep an already-picked game visible even if its kiosk was since removed.
+                            const rowPlayer =
+                              d.player_id != null ? playerById(d.player_id) : undefined;
+                            // Games the selected player has linked accounts for.
+                            const rowGames = (rowPlayer?.game_accounts ?? []).map(
+                              (g) => g.game_name,
+                            );
+                            // Keep an already-picked game visible even if it's since dropped off the list.
                             const options =
                               d.selected_game && !rowGames.includes(d.selected_game)
                                 ? [...rowGames, d.selected_game]
                                 : rowGames;
+                            const emptyMsg = !rowPlayer
+                              ? "Assign a player first"
+                              : "No games linked to this player";
                             return (
                               <Select
                                 value={d.selected_game ?? null}
@@ -625,7 +633,7 @@ export default function DepositsPage() {
                                 <SelectContent>
                                   {options.length === 0 ? (
                                     <div className="px-2 py-1.5 text-[11px] text-muted-foreground">
-                                      No active kiosk for this company
+                                      {emptyMsg}
                                     </div>
                                   ) : (
                                     options.map((g) => (

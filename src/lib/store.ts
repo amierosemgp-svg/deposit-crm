@@ -426,11 +426,32 @@ export const useStore = create<Store>((set, get) => {
         .filter((g) => seen.has(g));
     },
 
-    updateDepositDraft: (depositId, patch) =>
-      mutate(`/api/deposits/${depositId}`, {
+    updateDepositDraft: async (depositId, patch) => {
+      // Optimistic: reflect the pick immediately instead of waiting for the
+      // full /api/state refresh (which sweeps + re-queries everything and can
+      // lag by seconds). mutate() reconciles on success; we revert on failure.
+      set({
+        deposits: get().deposits.map((d) => {
+          if (d.deposit_id !== depositId) return d;
+          const next = { ...d, ...patch };
+          if (patch.bonus_percentage !== undefined) {
+            const bonusAmt = +(
+              (d.deposit_amount * patch.bonus_percentage) /
+              100
+            ).toFixed(2);
+            next.bonus_amount = bonusAmt;
+            next.total_amount = +(d.deposit_amount + bonusAmt).toFixed(2);
+          }
+          return next;
+        }),
+      });
+      const result = await mutate(`/api/deposits/${depositId}`, {
         method: "PATCH",
         body: JSON.stringify(patch),
-      }),
+      });
+      if (!result.ok) await get().refresh();
+      return result;
+    },
 
     approveDeposit: async (depositId) => {
       const d = get().deposits.find((x) => x.deposit_id === depositId);
