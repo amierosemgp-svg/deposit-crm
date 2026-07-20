@@ -1,6 +1,12 @@
 import { eq, ilike, inArray } from "drizzle-orm";
 import { db } from "@/db";
-import { bankAccounts, deposits, players } from "@/db/schema";
+import {
+  bankAccounts,
+  deposits,
+  players,
+  transactions,
+  withdrawals,
+} from "@/db/schema";
 
 /** The bot's native transaction shape (see sources/transaction_queue.json). */
 export type BotTransactionInput = {
@@ -119,6 +125,7 @@ export function depositToBotJson(
       : null;
 
   return {
+    type: "deposit" as const,
     id: d.deposit_id,
     external_id: d.external_id,
     transaction_ref: d.transaction_ref,
@@ -143,4 +150,57 @@ export function depositToBotJson(
     created_at: d.created_at,
     updated_at: d.updated_at,
   };
+}
+
+/** A withdrawal request created via the bot API. */
+export type BotWithdrawalInput = {
+  player_id: number;
+  requested_amount: number;
+  game_name: string;
+  bank_name?: string;
+  bank_account_number?: string;
+};
+
+/**
+ * Create a withdrawal request (starts as "requested") and write the matching
+ * audit-log entry. Shared by the merged /api/bot/transactions POST handler.
+ */
+export async function createBotWithdrawal(
+  input: BotWithdrawalInput,
+  meta: { apiKeyLabel?: string },
+): Promise<
+  | { ok: true; withdrawal: typeof withdrawals.$inferSelect }
+  | { ok: false; status: number; error: string }
+> {
+  const [player] = await db
+    .select()
+    .from(players)
+    .where(eq(players.player_id, input.player_id));
+  if (!player) return { ok: false, status: 404, error: "Player not found" };
+
+  const [created] = await db
+    .insert(withdrawals)
+    .values({
+      player_id: input.player_id,
+      requested_amount: input.requested_amount,
+      game_name: input.game_name,
+      bank_name: input.bank_name,
+      bank_account_number: input.bank_account_number,
+    })
+    .returning();
+
+  await db.insert(transactions).values({
+    player_id: input.player_id,
+    type: "withdrawal",
+    amount: input.requested_amount,
+    game_name: input.game_name,
+    reference_id: created.withdrawal_id,
+    details: {
+      action: "requested",
+      source: "bot",
+      api_key_label: meta.apiKeyLabel ?? null,
+    },
+  });
+
+  return { ok: true, withdrawal: created };
 }

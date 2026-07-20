@@ -117,6 +117,8 @@ export function kioskJson(k: typeof providerBoAccounts.$inferSelect) {
 
 export function withdrawalJson(w: typeof withdrawals.$inferSelect) {
   return {
+    type: "withdrawal" as const,
+    id: w.withdrawal_id,
     withdrawal_id: w.withdrawal_id,
     player_id: w.player_id,
     requested_amount: w.requested_amount,

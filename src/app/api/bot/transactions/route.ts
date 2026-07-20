@@ -1,9 +1,11 @@
 import { desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { deposits, transactions } from "@/db/schema";
+import { deposits, transactions, withdrawals } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
+import { withdrawalJson } from "@/lib/bot-crud";
 import {
+  createBotWithdrawal,
   depositToBotJson,
   findPlayerByTelegram,
   matchPlayerByDescription,
@@ -23,50 +25,125 @@ const DEPOSIT_STATUSES = [
   "failed",
 ] as const;
 
+const WITHDRAWAL_STATUSES = [
+  "requested",
+  "credits_pulled",
+  "paid",
+  "failed",
+] as const;
+
 /**
- * GET /api/bot/transactions?status=pending_match&limit=50
- * Bot use-case #1: fetch transactions waiting for a bank match
- * (or any other status the bot wants to inspect).
+ * GET /api/bot/transactions?type=deposit|withdrawal|all&status=...&limit=50
+ *
+ * Deposits and withdrawals live in separate tables but are exposed here as one
+ * transaction stream. Every item carries a `type` ("deposit" | "withdrawal").
+ *   - type=deposit (default): deposits; status defaults to pending_match.
+ *   - type=withdrawal: withdrawal requests.
+ *   - type=all: both, merged and sorted newest-first.
+ * `status` accepts a comma list; values are matched against whichever type(s)
+ * they're valid for.
  */
 export async function GET(request: Request) {
   const auth = await requireBotKey(request);
   if (!auth.ok) return auth.response;
 
   const url = new URL(request.url);
+  const type = (url.searchParams.get("type") ?? "deposit").toLowerCase();
   const statusParam = url.searchParams.get("status");
   const limit = Math.min(Number(url.searchParams.get("limit") ?? 100), 500);
 
-  const statuses = statusParam
-    ? (statusParam.split(",") as (typeof DEPOSIT_STATUSES)[number][]).filter(
-        (s) => DEPOSIT_STATUSES.includes(s),
-      )
-    : ["pending_match" as const];
-
-  if (!statuses.length) {
+  if (!["deposit", "withdrawal", "all"].includes(type)) {
     return Response.json(
-      { error: `Invalid status. Use: ${DEPOSIT_STATUSES.join(", ")}` },
+      { error: "Invalid type. Use: deposit, withdrawal, all" },
       { status: 400 },
     );
   }
 
-  const rows = await db
-    .select()
-    .from(deposits)
-    .where(inArray(deposits.status, statuses))
-    .orderBy(desc(deposits.created_at))
-    .limit(limit);
+  const wantDeposits = type === "deposit" || type === "all";
+  const wantWithdrawals = type === "withdrawal" || type === "all";
+  const statusList = statusParam
+    ? statusParam.split(",").map((s) => s.trim()).filter(Boolean)
+    : null;
 
-  const gameInfo = await playerGameInfoMap(rows.map((r) => r.player_id));
+  const items: Array<
+    ReturnType<typeof depositToBotJson> | ReturnType<typeof withdrawalJson>
+  > = [];
 
-  return Response.json({
-    count: rows.length,
-    transactions: rows.map((r) =>
-      depositToBotJson(r, r.player_id ? gameInfo.get(r.player_id) : null),
-    ),
-  });
+  if (wantDeposits) {
+    const valid = statusList
+      ? statusList.filter((s) =>
+          (DEPOSIT_STATUSES as readonly string[]).includes(s),
+        )
+      : null;
+    // Backward compat: a pure deposit query with a bad status is a 400.
+    if (type === "deposit" && statusList && valid && valid.length === 0) {
+      return Response.json(
+        { error: `Invalid status. Use: ${DEPOSIT_STATUSES.join(", ")}` },
+        { status: 400 },
+      );
+    }
+    // No status given: default to pending_match for a pure deposit query,
+    // otherwise (type=all) return every status.
+    const statuses = valid ?? (type === "deposit" ? ["pending_match"] : null);
+    if (!(statusList && statuses && statuses.length === 0)) {
+      const rows = await db
+        .select()
+        .from(deposits)
+        .where(
+          statuses
+            ? inArray(
+                deposits.status,
+                statuses as (typeof DEPOSIT_STATUSES)[number][],
+              )
+            : undefined,
+        )
+        .orderBy(desc(deposits.created_at))
+        .limit(limit);
+      const gameInfo = await playerGameInfoMap(rows.map((r) => r.player_id));
+      items.push(
+        ...rows.map((r) =>
+          depositToBotJson(r, r.player_id ? gameInfo.get(r.player_id) : null),
+        ),
+      );
+    }
+  }
+
+  if (wantWithdrawals) {
+    const valid = statusList
+      ? statusList.filter((s) =>
+          (WITHDRAWAL_STATUSES as readonly string[]).includes(s),
+        )
+      : null;
+    if (!(statusList && valid && valid.length === 0)) {
+      const rows = await db
+        .select()
+        .from(withdrawals)
+        .where(
+          valid
+            ? inArray(
+                withdrawals.status,
+                valid as (typeof WITHDRAWAL_STATUSES)[number][],
+              )
+            : undefined,
+        )
+        .orderBy(desc(withdrawals.created_at))
+        .limit(limit);
+      items.push(...rows.map(withdrawalJson));
+    }
+  }
+
+  // Merge newest-first when returning both types, then cap to the limit.
+  if (type === "all") {
+    items.sort((a, b) =>
+      String(b.created_at).localeCompare(String(a.created_at)),
+    );
+  }
+  const out = items.slice(0, limit);
+
+  return Response.json({ count: out.length, transactions: out });
 }
 
-const createSchema = z.object({
+const depositSchema = z.object({
   // Accept both our field names and the bot's queue-item shape
   id: z.string().optional(),
   external_id: z.string().optional(),
@@ -93,17 +170,57 @@ const createSchema = z.object({
   receipt_url: z.string().url().optional(),
 });
 
+const withdrawalSchema = z.object({
+  type: z.literal("withdrawal"),
+  player_id: z.number().int().positive(),
+  requested_amount: z.number().positive(),
+  game_name: z.string().min(1),
+  bank_name: z.string().optional(),
+  bank_account_number: z.string().optional(),
+});
+
 /**
  * POST /api/bot/transactions
- * Bot use-case #5: create a transaction from a detected bank credit.
- * Idempotent on external_id — re-sending the same queue item returns the
- * existing row (200) instead of creating a duplicate (201).
+ * Create a transaction. Routed by top-level `type`:
+ *   - `type: "withdrawal"` → logs a withdrawal request (starts "requested").
+ *   - otherwise → a deposit from a detected bank credit. Idempotent on
+ *     external_id (re-sending the same queue item returns the existing row).
+ * Legacy deposit callers send bank direction as `type: "credit"` (or nested
+ * `transaction.type`); those stay on the deposit path.
  */
 export async function POST(request: Request) {
   const auth = await requireBotKey(request);
   if (!auth.ok) return auth.response;
 
-  const parsed = createSchema.safeParse(await request.json().catch(() => null));
+  const body = await request.json().catch(() => null);
+  const topType =
+    body && typeof body === "object"
+      ? (body as { type?: unknown }).type
+      : undefined;
+
+  // ---- Withdrawal branch ----
+  if (topType === "withdrawal") {
+    const parsed = withdrawalSchema.safeParse(body);
+    if (!parsed.success) {
+      return Response.json(
+        { error: parsed.error.issues[0]?.message ?? "Invalid payload" },
+        { status: 400 },
+      );
+    }
+    const res = await createBotWithdrawal(parsed.data, {
+      apiKeyLabel: auth.label,
+    });
+    if (!res.ok) {
+      return Response.json({ error: res.error }, { status: res.status });
+    }
+    return Response.json(
+      { transaction: withdrawalJson(res.withdrawal) },
+      { status: 201 },
+    );
+  }
+
+  // ---- Deposit branch (bank credit) ----
+  const parsed = depositSchema.safeParse(body);
   if (!parsed.success) {
     return Response.json(
       { error: "Invalid payload", details: parsed.error.flatten() },

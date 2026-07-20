@@ -423,6 +423,7 @@
               <button class="copy">Copy</button>
               <pre><code>{
   <span class="k">"transaction"</span>: {
+    <span class="k">"type"</span>: <span class="s">"deposit"</span>,
     <span class="k">"id"</span>: <span class="n">42</span>,
     <span class="k">"external_id"</span>: <span class="s">"25_Jun_2026_MBB_CT-_CHAN_YIK_SOON_*Fund_Transfer_1.0"</span>,
     <span class="k">"status"</span>: <span class="s">"pending"</span>,
@@ -459,12 +460,13 @@
             <span class="use-tag">List</span>
           </div>
           <div class="ep-body">
-            <div class="prose"><p>Fetch transactions the CRM is waiting on. Use this to find intents a CS agent created that need a bank match.</p></div>
+            <div class="prose"><p>Fetch transactions the CRM is waiting on. Deposits and withdrawals are returned as one stream — every item carries a <code>type</code> field (<code>"deposit"</code> or <code>"withdrawal"</code>).</p></div>
             <div class="sub">Query parameters</div>
             <div class="tbl-wrap">
               <table>
                 <tr><th>Param</th><th>Default</th><th>Description</th></tr>
-                <tr><td><code>status</code></td><td><code>pending_match</code></td><td>Comma-separated filter. Values: <code>pending_match</code>, <code>matched</code>, <code>pending</code>, <code>approved</code>, <code>processing</code>, <code>completed</code>, <code>failed</code>.</td></tr>
+                <tr><td><code>type</code></td><td><code>deposit</code></td><td><code>deposit</code>, <code>withdrawal</code>, or <code>all</code> (both, merged newest-first).</td></tr>
+                <tr><td><code>status</code></td><td><code>pending_match</code></td><td>Comma-separated; matched against whichever type(s) it's valid for. Deposit: <code>pending_match</code>, <code>matched</code>, <code>pending</code>, <code>approved</code>, <code>processing</code>, <code>completed</code>, <code>failed</code>. Withdrawal: <code>requested</code>, <code>credits_pulled</code>, <code>paid</code>, <code>failed</code>.</td></tr>
                 <tr><td><code>limit</code></td><td><code>100</code></td><td>Max rows (up to 500).</td></tr>
               </table>
             </div>
@@ -478,6 +480,7 @@
   <span class="k">"count"</span>: <span class="n">1</span>,
   <span class="k">"transactions"</span>: [
     {
+      <span class="k">"type"</span>: <span class="s">"deposit"</span>,
       <span class="k">"id"</span>: <span class="n">7</span>,
       <span class="k">"amount"</span>: <span class="n">50</span>,
       <span class="k">"total_amount"</span>: <span class="n">55</span>,
@@ -818,29 +821,25 @@
       <section id="withdrawals">
         <h2>Resource</h2>
         <div class="block-title">Withdrawals</div>
-        <div class="prose"><p>Player cashouts. Lifecycle: <code>requested → credits_pulled → paid</code> (or <code>failed</code>). The two action endpoints move money and run in a single database transaction.</p></div>
+        <div class="prose"><p>Player cashouts. Lifecycle: <code>requested → credits_pulled → paid</code> (or <code>failed</code>). The two action endpoints move money and run in a single database transaction.</p>
+        <p><strong>Listing and creating are merged into <code>/api/bot/transactions</code>:</strong> list with <code>GET /api/bot/transactions?type=withdrawal</code>, create with <code>POST /api/bot/transactions</code> and <code>{"type":"withdrawal", …}</code>. The old <code>GET</code>/<code>POST /api/bot/withdrawals</code> collection routes were removed. The lifecycle routes below (<code>/:id/*</code>) are unchanged.</p></div>
 
         <div class="ep">
-          <div class="ep-head"><span class="m get">Get</span><span class="ep-path">/api/bot/withdrawals</span><span class="use-tag">List</span></div>
-          <div class="ep-body"><div class="prose"><p>Filter with <code>?player_id=</code>, <code>?status=</code> (comma-separated), <code>?limit=</code>, <code>?offset=</code>.</p></div></div>
-        </div>
-
-        <div class="ep">
-          <div class="ep-head"><span class="m post">Post</span><span class="ep-path">/api/bot/withdrawals</span><span class="use-tag">Create</span></div>
+          <div class="ep-head"><span class="m post">Post</span><span class="ep-path">/api/bot/transactions</span><span class="use-tag">Create withdrawal</span></div>
           <div class="ep-body">
-            <div class="prose"><p>Body: <code>player_id</code>, <code>requested_amount</code>, <code>game_name</code>, optional <code>bank_name</code>, <code>bank_account_number</code>. Starts as <code>requested</code>.</p></div>
+            <div class="prose"><p>Set <code>type: "withdrawal"</code>. Body: <code>player_id</code>, <code>requested_amount</code>, <code>game_name</code>, optional <code>bank_name</code>, <code>bank_account_number</code>. Starts as <code>requested</code>.</p></div>
             <div class="code" data-copy>
               <button class="copy">Copy</button>
-              <pre><code><span class="k">curl</span> -X POST <span class="s">"$BASE/api/bot/withdrawals"</span> -H <span class="s">"X-API-Key: $KEY"</span> \
+              <pre><code><span class="k">curl</span> -X POST <span class="s">"$BASE/api/bot/transactions"</span> -H <span class="s">"X-API-Key: $KEY"</span> \
   -H <span class="s">"Content-Type: application/json"</span> \
-  -d <span class="s">'{ "player_id": 1001, "requested_amount": 50, "game_name": "918kiss" }'</span></code></pre>
+  -d <span class="s">'{ "type": "withdrawal", "player_id": 1001, "requested_amount": 50, "game_name": "918kiss" }'</span></code></pre>
             </div>
           </div>
         </div>
 
         <div class="ep">
           <div class="ep-head"><span class="m get">Get</span><span class="ep-path">/api/bot/withdrawals/:id</span><span class="use-tag">Retrieve</span></div>
-          <div class="ep-body"><div class="prose"><p>Numeric id.</p></div></div>
+          <div class="ep-body"><div class="prose"><p>Numeric id. Response includes <code>"type": "withdrawal"</code>.</p></div></div>
         </div>
 
         <div class="ep">
