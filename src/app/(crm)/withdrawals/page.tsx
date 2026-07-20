@@ -32,8 +32,18 @@ import {
   Loader2,
   Paperclip,
   Plus,
+  Search,
 } from "lucide-react";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
+
+const STATUS_FILTERS: { value: string; tab: string }[] = [
+  { value: "requested", tab: "Requested" },
+  { value: "credits_pulled", tab: "Credits Pulled" },
+  { value: "paid", tab: "Paid" },
+  { value: "failed", tab: "Failed" },
+  { value: "all", tab: "All" },
+];
 
 export default function WithdrawalsPage() {
   const withdrawals = useStore((s) => s.withdrawals);
@@ -53,6 +63,8 @@ export default function WithdrawalsPage() {
   const games = gamesFn();
 
   const [pullingId, setPullingId] = useState<number | null>(null);
+  const [statusFilter, setStatusFilter] = useState<string>("requested");
+  const [searchQuery, setSearchQuery] = useState("");
 
   // --- New Withdrawal dialog state ---
   const [newOpen, setNewOpen] = useState(false);
@@ -80,23 +92,53 @@ export default function WithdrawalsPage() {
     [withdrawals, selectedCompanyId, playerById],
   );
 
+  // Search applied first; the status tabs show counts from this set.
+  const searched = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return scoped;
+    return scoped.filter((w) => {
+      const player = playerById(w.player_id);
+      return [
+        player?.full_name,
+        player?.username,
+        player?.telegram_username,
+        w.game_name,
+        w.bank_name,
+        w.bank_account_number,
+        String(w.requested_amount),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(q);
+    });
+  }, [scoped, searchQuery, playerById]);
+
+  const statusCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const w of searched) m.set(w.status, (m.get(w.status) ?? 0) + 1);
+    return m;
+  }, [searched]);
+
   const sorted = useMemo(
     () =>
-      [...scoped].sort((a, b) => {
-        // requested first, then credits_pulled, then paid, then failed
-        const rank = (s: string) =>
-          s === "requested"
-            ? 0
-            : s === "credits_pulled"
-              ? 1
-              : s === "paid"
-                ? 2
-                : 3;
-        const d = rank(a.status) - rank(b.status);
-        if (d !== 0) return d;
-        return b.created_at.localeCompare(a.created_at);
-      }),
-    [scoped],
+      [...searched]
+        .filter((w) => statusFilter === "all" || w.status === statusFilter)
+        .sort((a, b) => {
+          // requested first, then credits_pulled, then paid, then failed
+          const rank = (s: string) =>
+            s === "requested"
+              ? 0
+              : s === "credits_pulled"
+                ? 1
+                : s === "paid"
+                  ? 2
+                  : 3;
+          const d = rank(a.status) - rank(b.status);
+          if (d !== 0) return d;
+          return b.created_at.localeCompare(a.created_at);
+        }),
+    [searched, statusFilter],
   );
 
   const pending = scoped.filter(
@@ -226,6 +268,55 @@ export default function WithdrawalsPage() {
       </div>
 
       <Card className="overflow-hidden p-0 gap-0">
+        <div className="flex flex-wrap items-center gap-2 border-b bg-muted/30 px-4 py-2.5">
+          <div className="relative">
+            <Search className="absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search player, game, bank, amount…"
+              className="h-8 w-[240px] pl-8"
+            />
+          </div>
+        </div>
+
+        {/* Status tabs */}
+        <div className="flex flex-wrap gap-1 border-b px-4 py-2">
+          {STATUS_FILTERS.map((s) => {
+            const count =
+              s.value === "all"
+                ? searched.length
+                : (statusCounts.get(s.value) ?? 0);
+            const active = statusFilter === s.value;
+            return (
+              <button
+                key={s.value}
+                onClick={() => setStatusFilter(s.value)}
+                className={cn(
+                  "inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium transition-colors",
+                  active
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                )}
+              >
+                {s.tab}
+                {count > 0 && (
+                  <span
+                    className={cn(
+                      "inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold tabular-nums",
+                      active
+                        ? "bg-primary-foreground/20"
+                        : "bg-muted text-muted-foreground",
+                    )}
+                  >
+                    {count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-muted/50 text-muted-foreground">
@@ -247,8 +338,9 @@ export default function WithdrawalsPage() {
                     colSpan={8}
                     className="px-3 py-10 text-center text-sm text-muted-foreground"
                   >
-                    No withdrawal requests yet
-                    {activeCompany ? ` for ${activeCompany.company_name}` : ""}.
+                    {scoped.length === 0
+                      ? `No withdrawal requests yet${activeCompany ? ` for ${activeCompany.company_name}` : ""}.`
+                      : "No withdrawals match the current search and filters."}
                   </td>
                 </tr>
               )}

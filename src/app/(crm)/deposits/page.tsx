@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import {
   Tooltip,
@@ -28,6 +29,7 @@ import {
   RefreshCw,
   Download,
   Filter,
+  Search,
   Zap,
   CheckCircle2,
   Paperclip,
@@ -40,15 +42,15 @@ import {
 import { cn } from "@/lib/utils";
 import type { Deposit } from "@/lib/types";
 
-const STATUS_FILTERS: { value: string; label: string }[] = [
-  { value: "all", label: "All statuses" },
-  { value: "pending_match", label: "Awaiting Bank Match" },
-  { value: "matched", label: "Bank Matched" },
-  { value: "pending", label: "Pending" },
-  { value: "approved", label: "Approved" },
-  { value: "processing", label: "Processing" },
-  { value: "completed", label: "Completed" },
-  { value: "failed", label: "Failed" },
+const STATUS_FILTERS: { value: string; tab: string }[] = [
+  { value: "pending", tab: "Pending" },
+  { value: "pending_match", tab: "Awaiting Match" },
+  { value: "matched", tab: "Matched" },
+  { value: "approved", tab: "Approved" },
+  { value: "processing", tab: "Processing" },
+  { value: "completed", tab: "Completed" },
+  { value: "failed", tab: "Failed" },
+  { value: "all", tab: "All" },
 ];
 
 export default function DepositsPage() {
@@ -71,7 +73,8 @@ export default function DepositsPage() {
   const isViewer = me?.role === "viewer";
 
   const [bankFilter, setBankFilter] = useState<string>("all");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<string>("pending");
+  const [searchQuery, setSearchQuery] = useState("");
   const [approvingId, setApprovingId] = useState<number | null>(null);
   const [receiptUrl, setReceiptUrl] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -91,12 +94,43 @@ export default function DepositsPage() {
     [deposits, selectedCompanyId],
   );
 
-  const filtered = useMemo(() => {
-    return [...scopedDeposits]
+  // Bank + search applied first; the status tabs show counts from this set.
+  const searched = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return scopedDeposits
       .filter((d) => bankFilter === "all" || d.bank_name === bankFilter)
-      .filter((d) => statusFilter === "all" || d.status === statusFilter)
-      .sort((a, b) => b.created_at.localeCompare(a.created_at));
-  }, [scopedDeposits, bankFilter, statusFilter]);
+      .filter((d) => {
+        if (!q) return true;
+        return [
+          d.transaction_ref,
+          d.player_username,
+          d.bank_description,
+          d.bank_account_holder,
+          d.bank_account_number,
+          d.bank_name,
+          d.selected_game,
+          String(d.deposit_amount),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+          .includes(q);
+      });
+  }, [scopedDeposits, bankFilter, searchQuery]);
+
+  const statusCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const d of searched) m.set(d.status, (m.get(d.status) ?? 0) + 1);
+    return m;
+  }, [searched]);
+
+  const filtered = useMemo(
+    () =>
+      [...searched]
+        .filter((d) => statusFilter === "all" || d.status === statusFilter)
+        .sort((a, b) => b.created_at.localeCompare(a.created_at)),
+    [searched, statusFilter],
+  );
 
   // Rows that can be selected for bulk actions: pending/matched and writable.
   const selectableIds = useMemo(
@@ -277,18 +311,15 @@ export default function DepositsPage() {
               ))}
             </SelectContent>
           </Select>
-          <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v ?? "all")}>
-            <SelectTrigger className="h-8 w-[170px] cursor-pointer">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {STATUS_FILTERS.map((s) => (
-                <SelectItem key={s.value} value={s.value}>
-                  {s.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <div className="relative">
+            <Search className="absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search ref, player, bank, game…"
+              className="h-8 w-[230px] pl-8"
+            />
+          </div>
           <div className="ml-auto flex items-center gap-1.5">
             {selected.length > 0 ? (
               <>
@@ -357,6 +388,43 @@ export default function DepositsPage() {
               </>
             )}
           </div>
+        </div>
+
+        {/* Status tabs */}
+        <div className="flex flex-wrap gap-1 border-b px-4 py-2">
+          {STATUS_FILTERS.map((s) => {
+            const count =
+              s.value === "all"
+                ? searched.length
+                : (statusCounts.get(s.value) ?? 0);
+            const active = statusFilter === s.value;
+            return (
+              <button
+                key={s.value}
+                onClick={() => setStatusFilter(s.value)}
+                className={cn(
+                  "inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium transition-colors",
+                  active
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                )}
+              >
+                {s.tab}
+                {count > 0 && (
+                  <span
+                    className={cn(
+                      "inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold tabular-nums",
+                      active
+                        ? "bg-primary-foreground/20"
+                        : "bg-muted text-muted-foreground",
+                    )}
+                  >
+                    {count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
 
         <div className="overflow-x-auto">
