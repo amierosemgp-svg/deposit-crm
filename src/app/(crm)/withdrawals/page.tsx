@@ -33,9 +33,11 @@ import {
   Paperclip,
   Plus,
   Search,
+  Users,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { PlayerPickerSheet } from "@/components/player-picker-sheet";
 
 const STATUS_FILTERS: { value: string; tab: string }[] = [
   { value: "requested", tab: "Requested" },
@@ -71,6 +73,7 @@ export default function WithdrawalsPage() {
   const [newAmount, setNewAmount] = useState("");
   const [newBankName, setNewBankName] = useState("");
   const [newBankAccount, setNewBankAccount] = useState("");
+  const [playerPickerOpen, setPlayerPickerOpen] = useState(false);
   const [newSubmitting, setNewSubmitting] = useState(false);
 
   // --- Mark Paid dialog state ---
@@ -470,18 +473,23 @@ export default function WithdrawalsPage() {
           <div className="space-y-4">
             <div className="space-y-1.5">
               <Label>Player</Label>
-              <Select value={newPlayerId} onValueChange={(v) => setNewPlayerId(v ?? "")}>
-                <SelectTrigger className="h-9 w-full">
-                  <SelectValue placeholder="Select player" />
-                </SelectTrigger>
-                <SelectContent>
-                  {eligiblePlayers.map((p) => (
-                    <SelectItem key={p.player_id} value={String(p.player_id)}>
-                      {p.full_name} (@{p.username})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <button
+                type="button"
+                onClick={() => setPlayerPickerOpen(true)}
+                className="flex h-9 w-full cursor-pointer items-center justify-between rounded-md border border-input bg-background px-3 text-sm outline-none transition-colors hover:bg-muted/40 focus:border-ring focus:ring-2 focus:ring-ring/30"
+              >
+                {newPlayer ? (
+                  <span className="truncate">
+                    {newPlayer.full_name}{" "}
+                    <span className="text-muted-foreground">
+                      @{newPlayer.username}
+                    </span>
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground">Select player</span>
+                )}
+                <Users className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              </button>
               {eligiblePlayers.length === 0 && (
                 <p className="text-[11px] text-muted-foreground">
                   No players available — create a player first.
@@ -580,6 +588,18 @@ export default function WithdrawalsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <PlayerPickerSheet
+        open={playerPickerOpen}
+        onOpenChange={setPlayerPickerOpen}
+        players={eligiblePlayers}
+        title="Select player"
+        description="Choose the player requesting the withdrawal"
+        onSelect={(p) => {
+          setNewPlayerId(String(p.player_id));
+          setNewGame(""); // reset game — options depend on the player
+        }}
+      />
 
       {/* Mark Paid dialog */}
       <Dialog
