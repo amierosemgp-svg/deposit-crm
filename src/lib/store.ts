@@ -113,6 +113,8 @@ type Store = {
   games: () => string[];
   banks: () => string[];
   bonusOptions: () => number[];
+  /** Games with an active BO/kiosk login for a company; null → full catalog. */
+  kioskGames: (companyId: number | null) => string[];
 
   // --- mutations (API-backed; refresh() after success) ---
   updateDepositDraft: (
@@ -407,6 +409,22 @@ export const useStore = create<Store>((set, get) => {
     banks: () =>
       get().settings.banks ?? ["Maybank", "CIMB", "Hong Leong", "Public Bank"],
     bonusOptions: () => get().settings.bonus_options ?? [0, 5, 10, 20, 30, 50, 100],
+
+    // Games a company can actually be topped up with: those with an active
+    // provider back-office (kiosk) login the bot can sign in to. Pass null
+    // (company not yet known) to fall back to the full games catalog.
+    kioskGames: (companyId) => {
+      if (companyId == null) return get().games();
+      const seen = new Set<string>();
+      for (const bo of get().boAccounts) {
+        if (bo.company_entity_id === companyId && bo.status === "active") {
+          seen.add(bo.game_name);
+        }
+      }
+      return get()
+        .games()
+        .filter((g) => seen.has(g));
+    },
 
     updateDepositDraft: (depositId, patch) =>
       mutate(`/api/deposits/${depositId}`, {

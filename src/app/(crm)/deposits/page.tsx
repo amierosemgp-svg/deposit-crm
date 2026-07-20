@@ -64,11 +64,10 @@ export default function DepositsPage() {
   const refresh = useStore((s) => s.refresh);
   const companiesFn = useStore((s) => s.companies);
   const banksFn = useStore((s) => s.banks);
-  const gamesFn = useStore((s) => s.games);
+  const kioskGames = useStore((s) => s.kioskGames);
   const bonusOptionsFn = useStore((s) => s.bonusOptions);
 
   const banks = banksFn();
-  const games = gamesFn();
   const bonusOptions = bonusOptionsFn();
   const isViewer = me?.role === "viewer";
 
@@ -606,23 +605,39 @@ export default function DepositsPage() {
                       </td>
                       <td className="px-3 py-2">
                         {editable ? (
-                          <Select
-                            value={d.selected_game ?? null}
-                            onValueChange={(v) => {
-                              if (v) void handleDraft(d.deposit_id, { selected_game: v });
-                            }}
-                          >
-                            <SelectTrigger className="h-7 w-[120px] cursor-pointer">
-                              <SelectValue placeholder="Pick game" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {games.map((g) => (
-                                <SelectItem key={g} value={g}>
-                                  {g}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                          (() => {
+                            const rowGames = kioskGames(d.company_entity_id);
+                            // Keep an already-picked game visible even if its kiosk was since removed.
+                            const options =
+                              d.selected_game && !rowGames.includes(d.selected_game)
+                                ? [...rowGames, d.selected_game]
+                                : rowGames;
+                            return (
+                              <Select
+                                value={d.selected_game ?? null}
+                                onValueChange={(v) => {
+                                  if (v) void handleDraft(d.deposit_id, { selected_game: v });
+                                }}
+                              >
+                                <SelectTrigger className="h-7 w-[120px] cursor-pointer">
+                                  <SelectValue placeholder="Pick game" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {options.length === 0 ? (
+                                    <div className="px-2 py-1.5 text-[11px] text-muted-foreground">
+                                      No active kiosk for this company
+                                    </div>
+                                  ) : (
+                                    options.map((g) => (
+                                      <SelectItem key={g} value={g}>
+                                        {g}
+                                      </SelectItem>
+                                    ))
+                                  )}
+                                </SelectContent>
+                              </Select>
+                            );
+                          })()
                         ) : (
                           <span className="text-[12px]">{d.selected_game ?? "—"}</span>
                         )}

@@ -51,7 +51,7 @@ export default function WithdrawalsPage() {
   const bankAccounts = useStore((s) => s.bankAccounts);
   const getBalance = useStore((s) => s.getCreditBalance);
   const playerById = useStore((s) => s.playerById);
-  const gamesFn = useStore((s) => s.games);
+  const kioskGames = useStore((s) => s.kioskGames);
   const markPaid = useStore((s) => s.markWithdrawalPaid);
   const createWithdrawal = useStore((s) => s.createWithdrawal);
   const uploadFile = useStore((s) => s.uploadFile);
@@ -60,7 +60,6 @@ export default function WithdrawalsPage() {
   const companiesFn = useStore((s) => s.companies);
 
   const isViewer = me?.role === "viewer";
-  const games = gamesFn();
 
   const [pullingId, setPullingId] = useState<number | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>("requested");
@@ -163,6 +162,10 @@ export default function WithdrawalsPage() {
   );
 
   const newPlayer = newPlayerId ? playerById(Number(newPlayerId)) : undefined;
+  // Only games the player's company has an active kiosk for; none until a player is picked.
+  const newGames = newPlayer
+    ? kioskGames(newPlayer.company_entity_id)
+    : [];
   const newBalance =
     newPlayer && newGame ? getBalance(newPlayer.player_id, newGame) : 0;
   const newAmt = Number(newAmount) || 0;
@@ -496,11 +499,19 @@ export default function WithdrawalsPage() {
                   <SelectValue placeholder="Select game" />
                 </SelectTrigger>
                 <SelectContent>
-                  {games.map((g) => (
-                    <SelectItem key={g} value={g}>
-                      {g}
-                    </SelectItem>
-                  ))}
+                  {newGames.length === 0 ? (
+                    <div className="px-2 py-1.5 text-[11px] text-muted-foreground">
+                      {newPlayer
+                        ? "No active kiosk for this player's company"
+                        : "Select a player first"}
+                    </div>
+                  ) : (
+                    newGames.map((g) => (
+                      <SelectItem key={g} value={g}>
+                        {g}
+                      </SelectItem>
+                    ))
+                  )}
                 </SelectContent>
               </Select>
               {newPlayer && newGame && (

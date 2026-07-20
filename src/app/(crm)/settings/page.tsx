@@ -644,20 +644,55 @@ function SystemTab() {
   const [bonus, setBonus] = useState((settings.bonus_options ?? []).join(", "));
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    setHours(String(settings.transfer_auto_confirm_hours ?? 24));
+  // Per-field re-sync: overwrite a local field only when the server's value for
+  // THAT field actually changes (another admin saved, or our own auto-save came
+  // back). Keying on per-field content — not the settings object reference —
+  // means the 10s polling refresh never clobbers in-progress edits, and
+  // auto-saving one field never wipes another field's unsaved edit.
+  const srvHours = String(settings.transfer_auto_confirm_hours ?? 24);
+  const srvGamesSig = JSON.stringify(settings.games ?? []);
+  const srvBanksSig = JSON.stringify(settings.banks ?? []);
+  const srvBonus = (settings.bonus_options ?? []).join(", ");
+  const [synced, setSynced] = useState({
+    hours: srvHours,
+    games: srvGamesSig,
+    banks: srvBanksSig,
+    bonus: srvBonus,
+  });
+  if (srvHours !== synced.hours) {
+    setSynced((s) => ({ ...s, hours: srvHours }));
+    setHours(srvHours);
+  }
+  if (srvGamesSig !== synced.games) {
+    setSynced((s) => ({ ...s, games: srvGamesSig }));
     setGames(settings.games ?? []);
+  }
+  if (srvBanksSig !== synced.banks) {
+    setSynced((s) => ({ ...s, banks: srvBanksSig }));
     setBanks(settings.banks ?? []);
-    setBonus((settings.bonus_options ?? []).join(", "));
-  }, [settings]);
+  }
+  if (srvBonus !== synced.bonus) {
+    setSynced((s) => ({ ...s, bonus: srvBonus }));
+    setBonus(srvBonus);
+  }
+
+  // Games and Banks persist immediately on add/remove — "Add" is a commit.
+  async function commitGames(next: string[]) {
+    setGames(next);
+    const r = await updateSetting({ games: next.filter(Boolean) });
+    if (!r.ok) toast.error(r.error ?? "Failed to save games");
+  }
+  async function commitBanks(next: string[]) {
+    setBanks(next);
+    const r = await updateSetting({ banks: next.filter(Boolean) });
+    if (!r.ok) toast.error(r.error ?? "Failed to save banks");
+  }
 
   async function save() {
     const bonusArr = bonus.split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n));
     setBusy(true);
     const r = await updateSetting({
       transfer_auto_confirm_hours: Number(hours),
-      games: games.filter(Boolean),
-      banks: banks.filter(Boolean),
       bonus_options: bonusArr,
     });
     setBusy(false);
@@ -681,13 +716,25 @@ function SystemTab() {
       </Card>
 
       <Card className="p-5 space-y-4">
-        <h2 className="text-sm font-semibold">Games</h2>
-        <ChipEditor values={games} onChange={setGames} placeholder="Add a game (e.g. Mega888)" />
+        <div>
+          <h2 className="text-sm font-semibold">Games</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Master list of game providers. Saved instantly. A game becomes
+            selectable for deposits/withdrawals once a company has an active
+            kiosk (BO account) for it.
+          </p>
+        </div>
+        <ChipEditor values={games} onChange={commitGames} placeholder="Add a game (e.g. Mega888)" />
       </Card>
 
       <Card className="p-5 space-y-4">
-        <h2 className="text-sm font-semibold">Banks</h2>
-        <ChipEditor values={banks} onChange={setBanks} placeholder="Add a bank (e.g. Maybank)" />
+        <div>
+          <h2 className="text-sm font-semibold">Banks</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Bank names offered in deposit and account forms. Saved instantly.
+          </p>
+        </div>
+        <ChipEditor values={banks} onChange={commitBanks} placeholder="Add a bank (e.g. Maybank)" />
       </Card>
 
       <Card className="p-5 space-y-3">
