@@ -1,156 +1,12 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import Link from "next/link";
 import { useStore } from "@/lib/store";
-import { formatDateTime, formatRelative, initialsOf } from "@/lib/format";
-import type { CompanyView } from "@/lib/types";
+import { formatDateTime, formatRelative } from "@/lib/format";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  FileText,
-  Download,
-  RefreshCw,
-  Trash2,
-  Calendar,
-  Mail,
-  Clock,
-  Building2,
-  Wallet,
-  Banknote,
-  UserCog,
-  Gift,
-  ScrollText,
-  Play,
-  Loader2,
-} from "lucide-react";
-import { toast } from "sonner";
+import { ArrowRight, Calendar, Clock, Mail } from "lucide-react";
+import { REPORT_DEFS, REPORT_TONE_CLASSES } from "@/lib/report-defs";
 import { cn } from "@/lib/utils";
-
-type RowStats = {
-  deposits: number;
-  withdrawals: number;
-  companies: number;
-  users: number;
-};
-
-type Template = {
-  id: string;
-  title: string;
-  description: string;
-  icon: React.ComponentType<{ className?: string }>;
-  tone: "emerald" | "blue" | "amber" | "purple" | "rose" | "slate";
-  rows: (stats: RowStats) => number;
-};
-
-const TEMPLATES: Template[] = [
-  {
-    id: "daily_deposits",
-    title: "Daily Deposits Report",
-    description:
-      "Every completed deposit with player, bonus %, game, CS agent, and top-up reference.",
-    icon: Wallet,
-    tone: "emerald",
-    rows: (s) => s.deposits,
-  },
-  {
-    id: "daily_withdrawals",
-    title: "Daily Withdrawals Report",
-    description:
-      "All withdrawal requests with pulled amount, bank payout status, and processing CS agent.",
-    icon: Banknote,
-    tone: "blue",
-    rows: (s) => s.withdrawals,
-  },
-  {
-    id: "ggr_summary",
-    title: "GGR Summary",
-    description:
-      "Per-company gross gaming revenue: deposits − withdrawals − bonuses.",
-    icon: Building2,
-    tone: "purple",
-    rows: (s) => s.companies,
-  },
-  {
-    id: "cs_performance",
-    title: "CS Agent Performance",
-    description:
-      "Transactions handled, volume, and approval times per agent for the period.",
-    icon: UserCog,
-    tone: "amber",
-    rows: (s) => s.users,
-  },
-  {
-    id: "bonus_payout",
-    title: "Bonus Payout Report",
-    description:
-      "Total bonuses issued — broken down by bonus %, game provider, and company.",
-    icon: Gift,
-    tone: "rose",
-    rows: (s) => s.deposits,
-  },
-  {
-    id: "bank_reconciliation",
-    title: "Bank Reconciliation",
-    description:
-      "Bank-detected deposits vs CRM-recorded vs game top-ups, with discrepancy flags.",
-    icon: ScrollText,
-    tone: "slate",
-    rows: (s) => s.deposits,
-  },
-];
-
-const TONE_CLASSES: Record<Template["tone"], string> = {
-  emerald: "bg-emerald-500/10 text-emerald-600",
-  blue: "bg-blue-500/10 text-blue-600",
-  amber: "bg-amber-500/10 text-amber-600",
-  purple: "bg-purple-500/10 text-purple-600",
-  rose: "bg-rose-500/10 text-rose-600",
-  slate: "bg-slate-500/10 text-slate-600",
-};
-
-type Format = "PDF" | "CSV" | "Excel";
-
-type GeneratedReport = {
-  id: string;
-  templateId: string;
-  title: string;
-  dateFrom: string;
-  dateTo: string;
-  companyId: string;
-  format: Format;
-  size: string;
-  generatedBy: number;
-  generatedAt: string;
-  rows: number;
-};
-
-function todayStr() {
-  const d = new Date();
-  return d.toISOString().slice(0, 10);
-}
-function daysAgoStr(n: number) {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d.toISOString().slice(0, 10);
-}
 
 type ScheduledReport = {
   id: string;
@@ -170,54 +26,45 @@ export default function ReportsPage() {
   const deposits = useStore((s) => s.deposits);
   const withdrawals = useStore((s) => s.withdrawals);
   const users = useStore((s) => s.users);
-  const me = useStore((s) => s.me);
   const companies = useStore((s) => s.companies)();
 
-  const [openTpl, setOpenTpl] = useState<Template | null>(null);
-  const [reports, setReports] = useState<GeneratedReport[]>([]);
-
-  const rowStats: RowStats = {
-    deposits: deposits.length,
-    withdrawals: withdrawals.length,
-    companies: companies.length,
-    users: users.length,
+  const rowCounts: Record<string, number> = {
+    daily_deposits: deposits.length,
+    daily_withdrawals: withdrawals.length,
+    ggr_summary: companies.length,
+    cs_performance: users.length,
+    bonus_payout: deposits.filter((d) => d.bonus_amount > 0).length,
+    bank_reconciliation: deposits.length,
   };
-
-  function handleGenerated(r: GeneratedReport) {
-    setReports((prev) => [r, ...prev]);
-    toast.success(`${r.title} generated`, {
-      description: `${r.rows} rows · ${r.size} · ${r.format}`,
-    });
-  }
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold">Reports</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Generate, download, and schedule financial &amp; operational reports
+          Live financial &amp; operational reports — filter on the page, export
+          to CSV
         </p>
       </div>
 
-      {/* Templates */}
       <section className="space-y-3">
         <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Generate a new report
+          Reports
         </h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {TEMPLATES.map((t) => {
+          {REPORT_DEFS.map((t) => {
             const Icon = t.icon;
             return (
-              <button
+              <Link
                 key={t.id}
-                onClick={() => setOpenTpl(t)}
+                href={`/reports/${t.id}`}
                 className="group cursor-pointer rounded-lg border bg-card p-4 text-left transition-colors hover:border-primary/40 hover:shadow-sm"
               >
                 <div className="flex items-start gap-3">
                   <div
                     className={cn(
                       "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg",
-                      TONE_CLASSES[t.tone],
+                      REPORT_TONE_CLASSES[t.tone],
                     )}
                   >
                     <Icon className="h-5 w-5" />
@@ -230,141 +77,18 @@ export default function ReportsPage() {
                   </div>
                 </div>
                 <div className="mt-3 flex items-center justify-between text-[11px]">
-                  <span className="text-muted-foreground">PDF · CSV · Excel</span>
+                  <span className="text-muted-foreground">
+                    {(rowCounts[t.id] ?? 0).toLocaleString()} rows · CSV export
+                  </span>
                   <span className="inline-flex items-center gap-1 text-primary opacity-0 transition-opacity group-hover:opacity-100">
-                    Configure <Play className="h-3 w-3" />
+                    View report <ArrowRight className="h-3 w-3" />
                   </span>
                 </div>
-              </button>
+              </Link>
             );
           })}
         </div>
       </section>
-
-      {/* Recent reports */}
-      <Card className="p-0 gap-0 overflow-hidden">
-        <CardHeader className="border-b flex-row items-center justify-between space-y-0">
-          <div>
-            <CardTitle className="text-base flex items-center gap-2">
-              <FileText className="h-4 w-4 text-primary" />
-              Recent Reports
-            </CardTitle>
-            <p className="text-[11px] text-muted-foreground mt-0.5">
-              Generated in the last 30 days · {reports.length} total
-            </p>
-          </div>
-        </CardHeader>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/50 text-muted-foreground">
-              <tr>
-                <th className="px-3 py-2.5 text-left font-medium whitespace-nowrap">Report</th>
-                <th className="px-3 py-2.5 text-left font-medium whitespace-nowrap">Date Range</th>
-                <th className="px-3 py-2.5 text-left font-medium whitespace-nowrap">Company</th>
-                <th className="px-3 py-2.5 text-left font-medium">Format</th>
-                <th className="px-3 py-2.5 text-right font-medium whitespace-nowrap">Rows</th>
-                <th className="px-3 py-2.5 text-right font-medium">Size</th>
-                <th className="px-3 py-2.5 text-left font-medium">Generated</th>
-                <th className="px-3 py-2.5 text-right font-medium">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {reports.map((r) => {
-                const gen = users.find((u) => u.user_id === r.generatedBy);
-                const company = r.companyId === "all"
-                  ? "All Companies"
-                  : companies.find((c) => String(c.company_id) === r.companyId)?.company_name ?? r.companyId;
-                return (
-                  <tr key={r.id} className="border-t hover:bg-muted/30">
-                    <td className="px-3 py-2.5">
-                      <div className="font-medium text-[12px]">{r.title}</div>
-                      <div className="text-[10px] font-mono text-muted-foreground">
-                        {r.id}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2.5 text-[12px] whitespace-nowrap">
-                      {r.dateFrom === r.dateTo ? r.dateFrom : `${r.dateFrom} → ${r.dateTo}`}
-                    </td>
-                    <td className="px-3 py-2.5 text-[12px]">{company}</td>
-                    <td className="px-3 py-2.5">
-                      <span
-                        className={cn(
-                          "inline-flex items-center rounded-md px-1.5 py-0.5 text-[11px] font-medium",
-                          r.format === "PDF" && "bg-red-500/10 text-red-600",
-                          r.format === "CSV" && "bg-emerald-500/10 text-emerald-600",
-                          r.format === "Excel" && "bg-blue-500/10 text-blue-600",
-                        )}
-                      >
-                        {r.format}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2.5 text-right whitespace-nowrap text-[12px]">
-                      {r.rows.toLocaleString()}
-                    </td>
-                    <td className="px-3 py-2.5 text-right whitespace-nowrap text-[12px] text-muted-foreground">
-                      {r.size}
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <div className="flex items-center gap-2">
-                        <Avatar className="h-5 w-5">
-                          <AvatarFallback className="text-[9px]">
-                            {initialsOf(gen?.full_name ?? "?")}
-                          </AvatarFallback>
-                        </Avatar>
-                        <div>
-                          <div className="text-[11px]">{gen?.username ?? "—"}</div>
-                          <div className="text-[10px] text-muted-foreground">
-                            {formatRelative(r.generatedAt)}
-                          </div>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <div className="flex items-center justify-end gap-1">
-                        <Button
-                          size="icon-xs"
-                          variant="ghost"
-                          onClick={() =>
-                            toast.success(`Downloading ${r.id}.${r.format.toLowerCase()}…`)
-                          }
-                          title="Download"
-                        >
-                          <Download className="h-3 w-3" />
-                        </Button>
-                        <Button
-                          size="icon-xs"
-                          variant="ghost"
-                          onClick={() => toast.info("Re-running report…")}
-                          title="Re-run"
-                        >
-                          <RefreshCw className="h-3 w-3" />
-                        </Button>
-                        <Button
-                          size="icon-xs"
-                          variant="ghost"
-                          onClick={() =>
-                            setReports((prev) => prev.filter((x) => x.id !== r.id))
-                          }
-                          title="Delete"
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-              {reports.length === 0 && (
-                <tr>
-                  <td colSpan={8} className="px-3 py-10 text-center text-xs text-muted-foreground">
-                    No reports generated yet. Pick a template above to get started.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </Card>
 
       {/* Scheduled */}
       <Card className="p-0 gap-0 overflow-hidden">
@@ -451,191 +175,6 @@ export default function ReportsPage() {
           </table>
         </div>
       </Card>
-
-      <GenerateDialog
-        template={openTpl}
-        onOpenChange={(o) => !o && setOpenTpl(null)}
-        onGenerated={(r) => handleGenerated(r)}
-        stats={rowStats}
-        companies={companies}
-        currentUserId={me?.user_id ?? 0}
-      />
     </div>
-  );
-}
-
-function GenerateDialog({
-  template,
-  onOpenChange,
-  onGenerated,
-  stats,
-  companies,
-  currentUserId,
-}: {
-  template: Template | null;
-  onOpenChange: (open: boolean) => void;
-  onGenerated: (r: GeneratedReport) => void;
-  stats: RowStats;
-  companies: CompanyView[];
-  currentUserId: number;
-}) {
-  const [dateFrom, setDateFrom] = useState(daysAgoStr(7));
-  const [dateTo, setDateTo] = useState(todayStr());
-  const [companyId, setCompanyId] = useState<string>("all");
-  const [format, setFormat] = useState<Format>("PDF");
-  const [loading, setLoading] = useState(false);
-
-  const open = template !== null;
-  const Icon = template?.icon;
-
-  const rowEstimate = useMemo(() => {
-    if (!template) return 0;
-    return template.rows(stats);
-  }, [template, stats]);
-
-  function handleGenerate() {
-    if (!template) return;
-    setLoading(true);
-    setTimeout(() => {
-      const size =
-        format === "PDF"
-          ? `${80 + Math.floor(Math.random() * 120)} KB`
-          : format === "CSV"
-            ? `${20 + Math.floor(Math.random() * 80)} KB`
-            : `${150 + Math.floor(Math.random() * 250)} KB`;
-      onGenerated({
-        id: `RPT-${24020 + Math.floor(Math.random() * 99)}`,
-        templateId: template.id,
-        title: template.title,
-        dateFrom,
-        dateTo,
-        companyId,
-        format,
-        size,
-        generatedBy: currentUserId,
-        generatedAt: new Date().toISOString(),
-        rows: rowEstimate,
-      });
-      setLoading(false);
-      onOpenChange(false);
-    }, 1200);
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
-        {template && Icon && (
-          <>
-            <DialogHeader>
-              <div className="flex items-center gap-3">
-                <div
-                  className={cn(
-                    "flex h-10 w-10 items-center justify-center rounded-lg",
-                    TONE_CLASSES[template.tone],
-                  )}
-                >
-                  <Icon className="h-5 w-5" />
-                </div>
-                <div>
-                  <DialogTitle>{template.title}</DialogTitle>
-                  <DialogDescription>{template.description}</DialogDescription>
-                </div>
-              </div>
-            </DialogHeader>
-
-            <div className="space-y-4 py-2">
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <Label>From</Label>
-                  <Input
-                    type="date"
-                    value={dateFrom}
-                    onChange={(e) => setDateFrom(e.target.value)}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>To</Label>
-                  <Input
-                    type="date"
-                    value={dateTo}
-                    onChange={(e) => setDateTo(e.target.value)}
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-1.5">
-                <Label>Company</Label>
-                <Select value={companyId} onValueChange={(v) => setCompanyId(v ?? "all")}>
-                  <SelectTrigger className="h-9 w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all" className="cursor-pointer">
-                      All Companies
-                    </SelectItem>
-                    {companies.map((c) => (
-                      <SelectItem
-                        key={c.company_id}
-                        value={String(c.company_id)}
-                        className="cursor-pointer"
-                      >
-                        {c.company_name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-1.5">
-                <Label>Output format</Label>
-                <div className="grid grid-cols-3 gap-2">
-                  {(["PDF", "CSV", "Excel"] as Format[]).map((f) => (
-                    <button
-                      key={f}
-                      onClick={() => setFormat(f)}
-                      className={cn(
-                        "h-9 cursor-pointer rounded-md border text-sm font-medium transition-colors",
-                        format === f
-                          ? "border-primary bg-primary/10 text-primary"
-                          : "border-input bg-background hover:bg-muted",
-                      )}
-                    >
-                      {f}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="rounded-md border bg-muted/30 p-3 text-[11px] space-y-0.5">
-                <div className="font-medium text-foreground">Preview estimate</div>
-                <div className="text-muted-foreground">
-                  ~{rowEstimate.toLocaleString()} rows · {format} output · delivered to your
-                  browser
-                </div>
-              </div>
-            </div>
-
-            <DialogFooter>
-              <Button variant="outline" onClick={() => onOpenChange(false)} disabled={loading}>
-                Cancel
-              </Button>
-              <Button onClick={handleGenerate} disabled={loading}>
-                {loading ? (
-                  <>
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    Generating…
-                  </>
-                ) : (
-                  <>
-                    <FileText className="h-3.5 w-3.5" />
-                    Generate Report
-                  </>
-                )}
-              </Button>
-            </DialogFooter>
-          </>
-        )}
-      </DialogContent>
-    </Dialog>
   );
 }

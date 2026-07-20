@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Landmark, Loader2 } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -33,6 +33,9 @@ type FormState = {
   account_number: string;
   account_holder: string;
   label: string;
+  login_id: string;
+  login_password: string;
+  login_pin: string;
   current_balance: string;
   status: "active" | "inactive";
 };
@@ -45,6 +48,9 @@ const EMPTY: FormState = {
   account_number: "",
   account_holder: "",
   label: "",
+  login_id: "",
+  login_password: "",
+  login_pin: "",
   current_balance: "0",
   status: "active",
 };
@@ -78,7 +84,11 @@ export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
     [entities, me],
   );
 
-  useEffect(() => {
+  // Re-seed the form whenever the modal opens (state-during-render reset).
+  const [prevResetKey, setPrevResetKey] = useState("");
+  const resetKey = `${open}:${account?.account_id ?? "new"}`;
+  if (resetKey !== prevResetKey) {
+    setPrevResetKey(resetKey);
     if (open) {
       if (account) {
         const known = banks.includes(account.bank_name);
@@ -90,6 +100,9 @@ export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
           account_number: account.account_number,
           account_holder: account.account_holder,
           label: account.label ?? "",
+          login_id: account.login_id ?? "",
+          login_password: account.login_password ?? "",
+          login_pin: account.login_pin ?? "",
           current_balance: String(account.current_balance),
           status: account.status,
         });
@@ -97,8 +110,7 @@ export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
         setForm(EMPTY);
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, account]);
+  }
 
   const bankName =
     form.bank_select === OTHER_BANK ? form.bank_custom.trim() : form.bank_select;
@@ -134,6 +146,9 @@ export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
         account_number: form.account_number.trim(),
         account_holder: form.account_holder.trim(),
         label: form.label.trim() || undefined,
+        login_id: form.login_id.trim() || null,
+        login_password: form.login_password.trim() || null,
+        login_pin: form.login_pin.trim() || null,
         status: form.status,
       });
     } else {
@@ -144,6 +159,9 @@ export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
         account_number: form.account_number.trim(),
         account_holder: form.account_holder.trim(),
         label: form.label.trim() || undefined,
+        login_id: form.login_id.trim() || undefined,
+        login_password: form.login_password.trim() || undefined,
+        login_pin: form.login_pin.trim() || undefined,
         current_balance: Number(form.current_balance),
         status: form.status,
       });
@@ -316,6 +334,59 @@ export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
               placeholder="Leader Alpha Sdn Bhd"
               aria-invalid={!!errors.account_holder}
             />
+          </div>
+
+          <div className="rounded-md border bg-muted/20 p-3 space-y-2.5">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Online banking credentials
+              </p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                Used by the AI bot to log in and query this account.
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <Label htmlFor="ba-login-id" className="text-[11px]">
+                  Login ID
+                </Label>
+                <Input
+                  id="ba-login-id"
+                  value={form.login_id}
+                  onChange={(e) => update("login_id", e.target.value)}
+                  placeholder="Online banking user ID"
+                  autoComplete="off"
+                  className="h-8"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="ba-login-pw" className="text-[11px]">
+                  Password
+                </Label>
+                <Input
+                  id="ba-login-pw"
+                  value={form.login_password}
+                  onChange={(e) => update("login_password", e.target.value)}
+                  placeholder="Password"
+                  autoComplete="off"
+                  className="h-8 font-mono"
+                />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="ba-login-pin" className="text-[11px]">
+                PIN
+              </Label>
+              <Input
+                id="ba-login-pin"
+                value={form.login_pin}
+                onChange={(e) => update("login_pin", e.target.value)}
+                placeholder="Transaction / approval PIN"
+                autoComplete="off"
+                inputMode="numeric"
+                className="h-8 font-mono"
+              />
+            </div>
           </div>
 
           <div className="grid grid-cols-2 gap-3">

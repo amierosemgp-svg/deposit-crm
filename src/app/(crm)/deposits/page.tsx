@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
 import { formatRM, formatDateTime, formatRelative } from "@/lib/format";
 import {
@@ -12,8 +12,6 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import {
   Tooltip,
@@ -23,6 +21,7 @@ import {
 import { StatusBadge } from "@/components/status-badge";
 import { PlayerNameLink } from "@/components/player-name-link";
 import { ApprovalFlowModal } from "@/components/approval-flow-modal";
+import { AssignPlayerSheet } from "@/components/assign-player-sheet";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
 import {
@@ -31,10 +30,12 @@ import {
   Filter,
   Zap,
   CheckCircle2,
-  Plus,
   Paperclip,
   Inbox,
   Loader2,
+  RotateCcw,
+  UserPlus,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Deposit } from "@/lib/types";
@@ -52,11 +53,12 @@ const STATUS_FILTERS: { value: string; label: string }[] = [
 
 export default function DepositsPage() {
   const deposits = useStore((s) => s.deposits);
-  const players = useStore((s) => s.players);
   const me = useStore((s) => s.me);
   const hydrated = useStore((s) => s.hydrated);
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
   const updateDraft = useStore((s) => s.updateDepositDraft);
+  const approveDeposit = useStore((s) => s.approveDeposit);
+  const reprocessDeposit = useStore((s) => s.reprocessDeposit);
   const refresh = useStore((s) => s.refresh);
   const companiesFn = useStore((s) => s.companies);
   const banksFn = useStore((s) => s.banks);
@@ -71,8 +73,11 @@ export default function DepositsPage() {
   const [bankFilter, setBankFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [approvingId, setApprovingId] = useState<number | null>(null);
-  const [newDepositOpen, setNewDepositOpen] = useState(false);
+  const [receiptUrl, setReceiptUrl] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [assignTargets, setAssignTargets] = useState<number[] | null>(null);
+  const [bulkApproving, setBulkApproving] = useState(false);
 
   const scopedDeposits = useMemo(
     () =>
@@ -92,6 +97,69 @@ export default function DepositsPage() {
       .filter((d) => statusFilter === "all" || d.status === statusFilter)
       .sort((a, b) => b.created_at.localeCompare(a.created_at));
   }, [scopedDeposits, bankFilter, statusFilter]);
+
+  // Rows that can be selected for bulk actions: pending/matched and writable.
+  const selectableIds = useMemo(
+    () =>
+      isViewer
+        ? []
+        : filtered
+            .filter((d) => d.status === "pending" || d.status === "matched")
+            .map((d) => d.deposit_id),
+    [filtered, isViewer],
+  );
+  // Effective selection — drop rows that left the filter or became non-actionable.
+  const selected = useMemo(
+    () => selectableIds.filter((id) => selectedIds.has(id)),
+    [selectableIds, selectedIds],
+  );
+  const approvable = useMemo(
+    () =>
+      filtered
+        .filter(
+          (d) =>
+            selected.includes(d.deposit_id) &&
+            d.player_id !== null &&
+            !!d.selected_game,
+        )
+        .map((d) => d.deposit_id),
+    [filtered, selected],
+  );
+
+  function toggleRow(depositId: number) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(depositId)) next.delete(depositId);
+      else next.add(depositId);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    setSelectedIds((prev) =>
+      selected.length === selectableIds.length && selectableIds.length > 0
+        ? new Set()
+        : new Set([...prev, ...selectableIds]),
+    );
+  }
+
+  async function handleBulkApprove() {
+    if (approvable.length === 0 || bulkApproving) return;
+    setBulkApproving(true);
+    let ok = 0;
+    let failed = 0;
+    for (const id of approvable) {
+      const res = await approveDeposit(id);
+      if (res.ok) ok += 1;
+      else failed += 1;
+    }
+    setBulkApproving(false);
+    setSelectedIds(new Set());
+    if (ok > 0)
+      toast.success(`${ok} deposit${ok === 1 ? "" : "s"} approved — bot topping up`);
+    if (failed > 0)
+      toast.error(`${failed} deposit${failed === 1 ? "" : "s"} failed to approve`);
+  }
 
   const pendingCount = scopedDeposits.filter(
     (d) => d.status === "pending" || d.status === "matched",
@@ -168,7 +236,7 @@ export default function DepositsPage() {
         <div>
           <h1 className="text-2xl font-semibold">Deposits</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Bot-detected bank transactions — approve &amp; auto top-up to games
+            Bot-detected bank transactions — approve, then the bot tops up the game
             {activeCompany && (
               <>
                 {" "}
@@ -189,15 +257,6 @@ export default function DepositsPage() {
               </span>
               {pendingCount} pending approval
             </div>
-          )}
-          {!isViewer && (
-            <Button
-              onClick={() => setNewDepositOpen(true)}
-              className="cursor-pointer"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              New Deposit
-            </Button>
           )}
         </div>
       </div>
@@ -231,29 +290,72 @@ export default function DepositsPage() {
             </SelectContent>
           </Select>
           <div className="ml-auto flex items-center gap-1.5">
-            <span className="text-[11px] text-muted-foreground">
-              Auto-refresh: every 10s
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleRefresh}
-              disabled={refreshing}
-              className="cursor-pointer"
-            >
-              <RefreshCw className={cn("h-3.5 w-3.5", refreshing && "animate-spin")} />
-              Refresh
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={exportCsv}
-              disabled={filtered.length === 0}
-              className="cursor-pointer"
-            >
-              <Download className="h-3.5 w-3.5" />
-              Export CSV
-            </Button>
+            {selected.length > 0 ? (
+              <>
+                <span className="mr-1 text-[11px] font-medium">
+                  {selected.length} selected
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setAssignTargets(selected)}
+                  disabled={bulkApproving}
+                  className="cursor-pointer"
+                >
+                  <UserPlus className="h-3.5 w-3.5" />
+                  Assign player
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => void handleBulkApprove()}
+                  disabled={approvable.length === 0 || bulkApproving}
+                  className="cursor-pointer bg-emerald-600 text-white hover:bg-emerald-700 disabled:bg-emerald-600/30 disabled:text-white/70"
+                >
+                  {bulkApproving ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Zap className="h-3.5 w-3.5" />
+                  )}
+                  Approve ({approvable.length})
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setSelectedIds(new Set())}
+                  disabled={bulkApproving}
+                  className="cursor-pointer"
+                >
+                  <X className="h-3.5 w-3.5" />
+                  Clear
+                </Button>
+              </>
+            ) : (
+              <>
+                <span className="text-[11px] text-muted-foreground">
+                  Auto-refresh: every 10s
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleRefresh}
+                  disabled={refreshing}
+                  className="cursor-pointer"
+                >
+                  <RefreshCw className={cn("h-3.5 w-3.5", refreshing && "animate-spin")} />
+                  Refresh
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={exportCsv}
+                  disabled={filtered.length === 0}
+                  className="cursor-pointer"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  Export CSV
+                </Button>
+              </>
+            )}
           </div>
         </div>
 
@@ -261,6 +363,27 @@ export default function DepositsPage() {
           <table className="w-full text-sm">
             <thead className="bg-muted/50 text-muted-foreground">
               <tr>
+                {!isViewer && (
+                  <th className="w-9 px-3 py-2.5">
+                    <input
+                      type="checkbox"
+                      aria-label="Select all actionable deposits"
+                      checked={
+                        selectableIds.length > 0 &&
+                        selected.length === selectableIds.length
+                      }
+                      ref={(el) => {
+                        if (el)
+                          el.indeterminate =
+                            selected.length > 0 &&
+                            selected.length < selectableIds.length;
+                      }}
+                      onChange={toggleAll}
+                      disabled={selectableIds.length === 0 || bulkApproving}
+                      className="h-4 w-4 cursor-pointer accent-primary disabled:cursor-not-allowed"
+                    />
+                  </th>
+                )}
                 <th className="px-3 py-2.5 text-left font-medium whitespace-nowrap">Date &amp; Time</th>
                 <th className="px-3 py-2.5 text-left font-medium">Player</th>
                 <th className="px-3 py-2.5 text-right font-medium whitespace-nowrap">Deposit</th>
@@ -290,9 +413,25 @@ export default function DepositsPage() {
                       transition={{ duration: 0.45 }}
                       className={cn(
                         "border-t align-middle",
-                        editable ? "bg-amber-50/50 hover:bg-amber-50" : "hover:bg-muted/30",
+                        selectedIds.has(d.deposit_id) && editable
+                          ? "bg-primary/5 hover:bg-primary/10"
+                          : editable
+                            ? "bg-amber-50/50 hover:bg-amber-50"
+                            : "hover:bg-muted/30",
                       )}
                     >
+                      {!isViewer && (
+                        <td className="px-3 py-2">
+                          <input
+                            type="checkbox"
+                            aria-label={`Select deposit ${d.transaction_ref}`}
+                            checked={editable && selectedIds.has(d.deposit_id)}
+                            onChange={() => toggleRow(d.deposit_id)}
+                            disabled={!editable || bulkApproving}
+                            className="h-4 w-4 cursor-pointer accent-primary disabled:cursor-not-allowed disabled:opacity-30"
+                          />
+                        </td>
+                      )}
                       <td className="px-3 py-2 whitespace-nowrap">
                         <div className="text-[12px]">{formatDateTime(d.deposit_date)}</div>
                         <div className="text-[10px] text-muted-foreground">
@@ -326,31 +465,15 @@ export default function DepositsPage() {
                               </span>
                             )}
                             {editable && (
-                              <Select
-                                onValueChange={(v) => {
-                                  if (v) void handleDraft(d.deposit_id, { player_id: Number(v) });
-                                }}
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setAssignTargets([d.deposit_id])}
+                                className="h-7 cursor-pointer gap-1 text-[12px]"
                               >
-                                <SelectTrigger className="h-7 w-[150px] cursor-pointer">
-                                  <SelectValue placeholder="Assign player" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {players.length === 0 ? (
-                                    <SelectItem value="none" disabled>
-                                      No players yet
-                                    </SelectItem>
-                                  ) : (
-                                    players.map((p) => (
-                                      <SelectItem
-                                        key={p.player_id}
-                                        value={String(p.player_id)}
-                                      >
-                                        {p.full_name} (@{p.username})
-                                      </SelectItem>
-                                    ))
-                                  )}
-                                </SelectContent>
-                              </Select>
+                                <UserPlus className="h-3 w-3" />
+                                Assign player
+                              </Button>
                             )}
                           </div>
                         )}
@@ -362,15 +485,14 @@ export default function DepositsPage() {
                         <span className="inline-flex items-center gap-1 rounded-md border bg-card px-1.5 py-0.5 text-[11px]">
                           {d.bank_name}
                           {d.receipt_url && (
-                            <a
-                              href={d.receipt_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
+                            <button
+                              type="button"
+                              onClick={() => setReceiptUrl(d.receipt_url!)}
                               className="cursor-pointer text-muted-foreground hover:text-primary"
                               title="View receipt"
                             >
                               <Paperclip className="h-3 w-3" />
-                            </a>
+                            </button>
                           )}
                         </span>
                         {d.bank_account_holder && (
@@ -449,17 +571,40 @@ export default function DepositsPage() {
                             className="cursor-pointer bg-emerald-600 text-white hover:bg-emerald-700 disabled:bg-emerald-600/30 disabled:text-white/70"
                           >
                             <Zap className="h-3.5 w-3.5" />
-                            Approve &amp; Top-Up
+                            Approve
                           </Button>
                         ) : d.status === "completed" ? (
                           <span className="inline-flex items-center gap-1 text-[11px] text-emerald-700">
                             <CheckCircle2 className="h-3.5 w-3.5" />
                             Credited
                           </span>
+                        ) : d.status === "processing" || d.status === "approved" ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] text-blue-700">
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            Bot topping up…
+                          </span>
                         ) : d.status === "pending_match" ? (
                           <span className="text-[11px] text-muted-foreground">
                             Waiting for bot
                           </span>
+                        ) : d.status === "failed" ? (
+                          isViewer ? (
+                            <span className="text-[11px] text-red-600">Top-up failed</span>
+                          ) : (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="cursor-pointer gap-1 border-red-300 text-red-700 hover:bg-red-50 hover:text-red-800"
+                              onClick={async () => {
+                                const r = await reprocessDeposit(d.deposit_id);
+                                if (!r.ok) toast.error(r.error ?? "Reprocess failed");
+                                else toast.success("Deposit reopened — review and approve to retry");
+                              }}
+                            >
+                              <RotateCcw className="h-3.5 w-3.5" />
+                              Reprocess
+                            </Button>
+                          )
                         ) : (
                           <span className="text-[11px] text-muted-foreground">—</span>
                         )}
@@ -484,7 +629,7 @@ export default function DepositsPage() {
                   <p className="text-sm font-medium">No deposits yet</p>
                   <p className="max-w-sm text-xs text-muted-foreground">
                     Bank transactions detected by the bot will appear here
-                    automatically{isViewer ? "." : ", or create one manually with “New Deposit”."}
+                    automatically.
                   </p>
                 </>
               ) : (
@@ -519,214 +664,42 @@ export default function DepositsPage() {
         onOpenChange={(o) => !o && setApprovingId(null)}
       />
 
-      <NewDepositDialog open={newDepositOpen} onOpenChange={setNewDepositOpen} />
+      <AssignPlayerSheet
+        depositIds={assignTargets ?? []}
+        open={assignTargets !== null}
+        onOpenChange={(o) => !o && setAssignTargets(null)}
+      />
+
+      <ReceiptModal url={receiptUrl} onClose={() => setReceiptUrl(null)} />
     </div>
   );
 }
 
-function NewDepositDialog({
-  open,
-  onOpenChange,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}) {
-  const players = useStore((s) => s.players);
-  const banksFn = useStore((s) => s.banks);
-  const createDepositIntent = useStore((s) => s.createDepositIntent);
-  const uploadFile = useStore((s) => s.uploadFile);
-  const banks = banksFn();
-
-  const [playerId, setPlayerId] = useState<string>("");
-  const [amount, setAmount] = useState<string>("");
-  const [bank, setBank] = useState<string>("");
-  const [verified, setVerified] = useState(false);
-  const [file, setFile] = useState<File | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-
-  useEffect(() => {
-    if (!open) {
-      const t = setTimeout(() => {
-        setPlayerId("");
-        setAmount("");
-        setBank("");
-        setVerified(false);
-        setFile(null);
-        setSubmitting(false);
-      }, 200);
-      return () => clearTimeout(t);
-    }
-  }, [open]);
-
-  const amt = Number.parseFloat(amount);
-  const isValid = playerId !== "" && Number.isFinite(amt) && amt > 0 && bank !== "";
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!isValid || submitting) return;
-    setSubmitting(true);
-
-    let receipt_url: string | undefined;
-    if (file) {
-      const up = await uploadFile(file);
-      if (!up.ok) {
-        toast.error(up.error ?? "Receipt upload failed");
-        setSubmitting(false);
-        return;
-      }
-      receipt_url = up.url;
-    }
-
-    const res = await createDepositIntent({
-      player_id: Number(playerId),
-      amount: amt,
-      bank_name: bank,
-      status: verified ? "pending" : "pending_match",
-      receipt_url,
-    });
-    setSubmitting(false);
-    if (!res.ok) {
-      toast.error(res.error ?? "Failed to create deposit");
-      return;
-    }
-    toast.success(
-      verified
-        ? "Deposit created — ready for approval"
-        : "Deposit intent created — awaiting bank match",
-    );
-    onOpenChange(false);
-  }
-
+function ReceiptModal({ url, onClose }: { url: string | null; onClose: () => void }) {
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md p-0 overflow-hidden gap-0">
-        <DialogTitle className="sr-only">New deposit</DialogTitle>
-
-        <div className="flex items-center gap-3 border-b px-5 py-4">
-          <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary">
-            <Plus className="h-4.5 w-4.5" />
-          </div>
-          <div>
-            <h2 className="text-base font-semibold leading-tight">New deposit</h2>
-            <p className="text-[12px] text-muted-foreground leading-tight mt-0.5">
-              Record a deposit reported by a player
-            </p>
-          </div>
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-4 p-5">
-          <div className="space-y-1.5">
-            <Label>
-              Player <span className="text-rose-600">*</span>
-            </Label>
-            <Select value={playerId || null} onValueChange={(v) => setPlayerId(v ?? "")}>
-              <SelectTrigger className="h-8 w-full cursor-pointer">
-                <SelectValue placeholder="Select player" />
-              </SelectTrigger>
-              <SelectContent>
-                {players.length === 0 ? (
-                  <SelectItem value="none" disabled>
-                    No players yet — create one first
-                  </SelectItem>
-                ) : (
-                  players.map((p) => (
-                    <SelectItem key={p.player_id} value={String(p.player_id)}>
-                      {p.full_name} (@{p.username})
-                    </SelectItem>
-                  ))
-                )}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="nd-amount">
-                Amount (RM) <span className="text-rose-600">*</span>
-              </Label>
-              <Input
-                id="nd-amount"
-                type="number"
-                min="0.01"
-                step="0.01"
-                inputMode="decimal"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                placeholder="100.00"
+    <Dialog open={!!url} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-2xl">
+        <DialogTitle>Deposit receipt</DialogTitle>
+        {url && (
+          <div className="mt-2 space-y-3">
+            <div className="max-h-[70vh] overflow-auto rounded-md border bg-muted/30 p-2">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={url}
+                alt="Deposit receipt"
+                className="mx-auto max-w-full rounded"
               />
             </div>
-            <div className="space-y-1.5">
-              <Label>
-                Bank <span className="text-rose-600">*</span>
-              </Label>
-              <Select value={bank || null} onValueChange={(v) => setBank(v ?? "")}>
-                <SelectTrigger className="h-8 w-full cursor-pointer">
-                  <SelectValue placeholder="Select bank" />
-                </SelectTrigger>
-                <SelectContent>
-                  {banks.map((b) => (
-                    <SelectItem key={b} value={b}>
-                      {b}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          <label className="flex cursor-pointer items-start gap-2.5 rounded-md border bg-muted/20 p-3 select-none">
-            <input
-              type="checkbox"
-              checked={verified}
-              onChange={(e) => setVerified(e.target.checked)}
-              className="mt-0.5 h-4 w-4 cursor-pointer accent-primary"
-            />
-            <span>
-              <span className="block text-sm font-medium">
-                Receipt already verified
-              </span>
-              <span className="block text-[11px] text-muted-foreground mt-0.5">
-                {verified
-                  ? "Created as Pending — ready to approve immediately."
-                  : "Created as Awaiting Bank Match — the bot will confirm the bank transaction."}
-              </span>
-            </span>
-          </label>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="nd-receipt">Receipt (optional)</Label>
-            <input
-              id="nd-receipt"
-              type="file"
-              accept="image/*,.pdf"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-              className="block w-full cursor-pointer text-xs text-muted-foreground file:mr-3 file:cursor-pointer file:rounded-md file:border file:border-input file:bg-background file:px-2.5 file:py-1.5 file:text-xs file:font-medium file:text-foreground hover:file:bg-muted"
-            />
-          </div>
-
-          <div className="flex items-center justify-end gap-2 border-t pt-4">
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => onOpenChange(false)}
-              className="cursor-pointer"
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex cursor-pointer items-center gap-1 text-xs text-muted-foreground hover:text-primary"
             >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              disabled={!isValid || submitting}
-              className="cursor-pointer"
-            >
-              {submitting ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Plus className="h-3.5 w-3.5" />
-              )}
-              Create deposit
-            </Button>
+              <Paperclip className="h-3 w-3" /> Open original in new tab
+            </a>
           </div>
-        </form>
+        )}
       </DialogContent>
     </Dialog>
   );

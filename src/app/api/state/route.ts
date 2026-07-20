@@ -4,6 +4,7 @@ import {
   bankAccounts,
   bankTransfers,
   deposits,
+  expenses,
   gameCredits,
   gameTransfers,
   players,
@@ -169,6 +170,16 @@ export async function GET() {
       [...scopedBankTransfers, ...inboundIds].map((t) => [t.transfer_id, t]),
     );
 
+    // Operational expenses are admin-only.
+    const scopedExpenses =
+      user.role === "super_admin"
+        ? await db
+            .select()
+            .from(expenses)
+            .orderBy(desc(expenses.expense_date))
+            .limit(500)
+        : [];
+
     const boIds = scopedBoAccounts.map((b) => b.bo_account_id);
     const scopedAdjustments = boIds.length
       ? await db
@@ -194,6 +205,7 @@ export async function GET() {
       ),
       boAccounts: scopedBoAccounts,
       boAdjustments: scopedAdjustments,
+      expenses: scopedExpenses,
       auditLog,
       settings: Object.fromEntries(allSettings.map((s) => [s.key, s.value])),
     });

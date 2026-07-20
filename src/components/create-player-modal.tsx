@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import {
@@ -24,11 +24,22 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useStore } from "@/lib/store";
-import type { PlayerBankAccount, PlayerGameAccount } from "@/lib/types";
+import type { Player, PlayerBankAccount, PlayerGameAccount } from "@/lib/types";
 
 type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Seeds the form each time the modal opens (e.g. from a deposit's bank details). */
+  prefill?: {
+    full_name?: string;
+    company_entity_id?: number;
+    bank_accounts?: BankRow[];
+  };
+  /**
+   * When set, the "done" screen is skipped: the modal closes on success and the
+   * created player is handed back (e.g. to assign a deposit to them).
+   */
+  onCreated?: (player: Player) => void;
 };
 
 type BankRow = { bank_name: string; account_number: string; account_holder: string };
@@ -60,7 +71,12 @@ const EMPTY: FormState = {
 
 const FORM_ID = "create-player-form";
 
-export function CreatePlayerModal({ open, onOpenChange }: Props) {
+export function CreatePlayerModal({
+  open,
+  onOpenChange,
+  prefill,
+  onCreated,
+}: Props) {
   const createPlayer = useStore((s) => s.createPlayer);
   const players = useStore((s) => s.players);
   const companiesFn = useStore((s) => s.companies);
@@ -87,6 +103,24 @@ export function CreatePlayerModal({ open, onOpenChange }: Props) {
       return () => clearTimeout(t);
     }
   }, [open]);
+
+  // Seed the form from prefill only on the closed→open transition, so a caller
+  // passing a fresh prefill object each render can't clobber in-progress edits.
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (open && !wasOpen.current && prefill) {
+      setForm({
+        ...EMPTY,
+        full_name: prefill.full_name ?? "",
+        company_entity_id:
+          prefill.company_entity_id != null
+            ? String(prefill.company_entity_id)
+            : "",
+        bank_accounts: prefill.bank_accounts ?? [],
+      });
+    }
+    wasOpen.current = open;
+  }, [open, prefill]);
 
   const usernameTaken = useMemo(() => {
     const u = form.username.trim().toLowerCase();
@@ -197,6 +231,17 @@ export function CreatePlayerModal({ open, onOpenChange }: Props) {
 
     if (!res.ok) {
       toast.error(res.error ?? "Failed to create player");
+      return;
+    }
+    if (onCreated) {
+      const username = form.username.trim().toLowerCase();
+      const created = useStore
+        .getState()
+        .players.find((p) => p.username.toLowerCase() === username);
+      toast.success(`Player "${fullName}" created`);
+      setForm(EMPTY);
+      onOpenChange(false);
+      if (created) onCreated(created);
       return;
     }
     setCreatedName(fullName);

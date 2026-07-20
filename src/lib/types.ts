@@ -169,6 +169,9 @@ export type BankAccount = {
   account_number: string;
   account_holder: string;
   label?: string | null;
+  login_id?: string | null;
+  login_password?: string | null;
+  login_pin?: string | null;
   current_balance: number;
   status: "active" | "inactive";
   created_at: string;
@@ -201,6 +204,8 @@ export type ProviderBoAccount = {
   company_entity_id: number;
   game_name: string;
   bo_username: string;
+  bo_password?: string | null;
+  bo_pin?: string | null;
   bo_label?: string | null;
   current_credit: number;
   status: "active" | "inactive";
@@ -244,6 +249,31 @@ export type ApiKeyRow = {
   status: "active" | "inactive";
   allowed_ips: string[] | null;
   last_used_at?: string | null;
+  created_at: string;
+};
+
+export const EXPENSE_CATEGORIES = [
+  "salary",
+  "sim_card",
+  "subscription",
+  "rent",
+  "utilities",
+  "equipment",
+  "marketing",
+  "other",
+] as const;
+
+export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
+
+export type Expense = {
+  expense_id: number;
+  expense_date: string;
+  category: ExpenseCategory;
+  description: string;
+  amount: number;
+  company_entity_id: number | null;
+  recorded_by_user_id: number;
+  notes?: string | null;
   created_at: string;
 };
 

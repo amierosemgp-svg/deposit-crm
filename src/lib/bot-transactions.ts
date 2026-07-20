@@ -1,4 +1,4 @@
-import { eq, ilike } from "drizzle-orm";
+import { eq, ilike, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { bankAccounts, deposits, players } from "@/db/schema";
 
@@ -78,7 +78,46 @@ export async function resolveReceivingAccount(input: BotTransactionInput) {
   return byBank?.role === "deposit" ? byBank : (byBank ?? null);
 }
 
-export function depositToBotJson(d: typeof deposits.$inferSelect) {
+/** Minimal player fields the bot needs to perform the top-up in the provider. */
+export type PlayerGameInfo = {
+  player_id: number;
+  telegram_username: string;
+  game_accounts: Array<{ game_name: string; game_username: string }> | null;
+};
+
+/**
+ * Fetch the game-account info for the players referenced by a set of deposits,
+ * keyed by player_id. Used to enrich the bot's transaction responses with the
+ * player's in-game account id for the selected game.
+ */
+export async function playerGameInfoMap(
+  playerIds: Array<number | null>,
+): Promise<Map<number, PlayerGameInfo>> {
+  const ids = [...new Set(playerIds.filter((x): x is number => x != null))];
+  if (!ids.length) return new Map();
+  const rows = await db
+    .select({
+      player_id: players.player_id,
+      telegram_username: players.telegram_username,
+      game_accounts: players.game_accounts,
+    })
+    .from(players)
+    .where(inArray(players.player_id, ids));
+  return new Map(rows.map((r) => [r.player_id, r]));
+}
+
+export function depositToBotJson(
+  d: typeof deposits.$inferSelect,
+  player?: PlayerGameInfo | null,
+) {
+  // Resolve the player's account id in the selected game, so the bot knows
+  // exactly which in-game account to top up (not just the CRM player id).
+  const gameAccounts = player?.game_accounts ?? null;
+  const match =
+    d.selected_game && gameAccounts
+      ? (gameAccounts.find((g) => g.game_name === d.selected_game) ?? null)
+      : null;
+
   return {
     id: d.deposit_id,
     external_id: d.external_id,
@@ -87,12 +126,18 @@ export function depositToBotJson(d: typeof deposits.$inferSelect) {
     deposit_date: d.deposit_date,
     player_id: d.player_id,
     player_username: d.player_username,
+    telegram_username: player?.telegram_username ?? null,
     amount: d.deposit_amount,
     bank: d.bank_name,
     bank_description: d.bank_description,
     bonus_percentage: d.bonus_percentage,
     total_amount: d.total_amount,
     selected_game: d.selected_game,
+    // The player's login/ID in `selected_game` — what the bot tops up.
+    game_username: match?.game_username ?? null,
+    // Full list of the player's game accounts, for reference.
+    game_accounts: gameAccounts,
+    game_topup_reference: d.game_topup_reference,
     matched_at: d.matched_at,
     receipt_url: d.receipt_url,
     created_at: d.created_at,

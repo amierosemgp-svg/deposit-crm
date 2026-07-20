@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { deposits } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
-import { depositToBotJson } from "@/lib/bot-transactions";
+import { depositToBotJson, playerGameInfoMap } from "@/lib/bot-transactions";
 
 /**
  * GET /api/bot/transactions/:id
@@ -25,5 +25,11 @@ export async function GET(
   if (!row) {
     return Response.json({ error: "Transaction not found" }, { status: 404 });
   }
-  return Response.json({ transaction: depositToBotJson(row) });
+  const gameInfo = await playerGameInfoMap([row.player_id]);
+  return Response.json({
+    transaction: depositToBotJson(
+      row,
+      row.player_id ? gameInfo.get(row.player_id) : null,
+    ),
+  });
 }

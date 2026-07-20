@@ -8,6 +8,7 @@ import {
   findPlayerByTelegram,
   matchPlayerByDescription,
   parseBotDate,
+  playerGameInfoMap,
   resolveReceivingAccount,
   type BotTransactionInput,
 } from "@/lib/bot-transactions";
@@ -55,9 +56,13 @@ export async function GET(request: Request) {
     .orderBy(desc(deposits.created_at))
     .limit(limit);
 
+  const gameInfo = await playerGameInfoMap(rows.map((r) => r.player_id));
+
   return Response.json({
     count: rows.length,
-    transactions: rows.map(depositToBotJson),
+    transactions: rows.map((r) =>
+      depositToBotJson(r, r.player_id ? gameInfo.get(r.player_id) : null),
+    ),
   });
 }
 

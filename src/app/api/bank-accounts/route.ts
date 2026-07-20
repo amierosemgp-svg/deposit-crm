@@ -12,6 +12,9 @@ const createSchema = z.object({
   account_number: z.string().min(4),
   account_holder: z.string().min(1),
   label: z.string().optional(),
+  login_id: z.string().optional(),
+  login_password: z.string().optional(),
+  login_pin: z.string().optional(),
   current_balance: z.number().min(0).default(0),
   status: z.enum(["active", "inactive"]).default("active"),
 });

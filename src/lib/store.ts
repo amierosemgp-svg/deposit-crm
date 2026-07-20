@@ -9,6 +9,8 @@ import type {
   CompanyView,
   Deposit,
   Entity,
+  Expense,
+  ExpenseCategory,
   GameCredit,
   GameTransfer,
   Me,
@@ -69,6 +71,7 @@ type StateResponse = {
   bankTransfers: BankTransfer[];
   boAccounts: ProviderBoAccount[];
   boAdjustments: ProviderBoAdjustment[];
+  expenses: Expense[];
   auditLog: AuditEntry[];
   settings: ServerSettings;
 };
@@ -87,6 +90,7 @@ type Store = {
   bankTransfers: BankTransfer[];
   boAccounts: ProviderBoAccount[];
   boAdjustments: ProviderBoAdjustment[];
+  expenses: Expense[];
   auditLog: AuditEntry[];
   settings: ServerSettings;
   notifications: Notification[];
@@ -116,6 +120,7 @@ type Store = {
     patch: Partial<Pick<Deposit, "bonus_percentage" | "selected_game" | "player_id">>,
   ) => Promise<MutationResult>;
   approveDeposit: (depositId: number) => Promise<MutationResult>;
+  reprocessDeposit: (depositId: number) => Promise<MutationResult>;
   createDepositIntent: (input: {
     player_id: number;
     amount: number;
@@ -178,6 +183,9 @@ type Store = {
     account_number: string;
     account_holder: string;
     label?: string;
+    login_id?: string;
+    login_password?: string;
+    login_pin?: string;
     current_balance?: number;
     status?: "active" | "inactive";
   }) => Promise<MutationResult>;
@@ -199,6 +207,8 @@ type Store = {
     company_entity_id: number;
     game_name: string;
     bo_username: string;
+    bo_password: string;
+    bo_pin?: string;
     bo_label?: string;
     current_credit?: number;
     status?: "active" | "inactive";
@@ -214,6 +224,15 @@ type Store = {
     amount: number;
     reason: string;
   }) => Promise<MutationResult>;
+  createExpense: (input: {
+    expense_date: string;
+    category: ExpenseCategory;
+    description: string;
+    amount: number;
+    company_entity_id?: number | null;
+    notes?: string;
+  }) => Promise<MutationResult>;
+  deleteExpense: (expenseId: number) => Promise<MutationResult>;
   addEntity: (input: {
     parent_entity_id: number;
     entity_type: "leader" | "company" | "cs";
@@ -307,6 +326,7 @@ export const useStore = create<Store>((set, get) => {
     bankTransfers: [],
     boAccounts: [],
     boAdjustments: [],
+    expenses: [],
     auditLog: [],
     settings: {},
     notifications: [],
@@ -402,9 +422,28 @@ export const useStore = create<Store>((set, get) => {
       if (result.ok && d) {
         get().pushNotification({
           kind: "topup",
-          message: `RM ${d.total_amount.toFixed(2)} credited to ${d.selected_game} for ${d.player_username}`,
+          message: `Approved — RM ${d.total_amount.toFixed(2)} top-up dispatched to the bot for ${d.player_username} (${d.selected_game})`,
         });
       }
+      return result;
+    },
+
+    reprocessDeposit: async (depositId) => {
+      // Optimistic: flip the row to "pending" immediately so CS sees it become
+      // editable/approvable on click — not on the next 10s poll. mutate()
+      // refreshes on success to reconcile with the server; on failure we refresh
+      // to revert the row back to "failed".
+      set({
+        deposits: get().deposits.map((d) =>
+          d.deposit_id === depositId
+            ? { ...d, status: "pending", game_topup_reference: null }
+            : d,
+        ),
+      });
+      const result = await mutate(`/api/deposits/${depositId}/reprocess`, {
+        method: "POST",
+      });
+      if (!result.ok) await get().refresh();
       return result;
     },
 
@@ -527,6 +566,11 @@ export const useStore = create<Store>((set, get) => {
         method: "PATCH",
         body: JSON.stringify({ adjust_amount: amount, adjust_reason: reason }),
       }),
+
+    createExpense: (input) =>
+      mutate("/api/expenses", { method: "POST", body: JSON.stringify(input) }),
+    deleteExpense: (expenseId) =>
+      mutate(`/api/expenses/${expenseId}`, { method: "DELETE" }),
 
     addEntity: (input) =>
       mutate("/api/entities", { method: "POST", body: JSON.stringify(input) }),

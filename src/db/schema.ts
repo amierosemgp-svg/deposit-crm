@@ -163,6 +163,10 @@ export const bankAccounts = pgTable("bank_accounts", {
   account_number: varchar("account_number", { length: 60 }).notNull(),
   account_holder: varchar("account_holder", { length: 120 }).notNull(),
   label: varchar("label", { length: 60 }),
+  // Online-banking credentials the AI bot uses to query the account.
+  login_id: varchar("login_id", { length: 80 }),
+  login_password: varchar("login_password", { length: 120 }),
+  login_pin: varchar("login_pin", { length: 20 }),
   current_balance: numeric("current_balance", {
     precision: 14,
     scale: 2,
@@ -188,9 +192,10 @@ export const bankTransfers = pgTable("bank_transfers", {
   reference: varchar("reference", { length: 80 }),
   notes: text("notes"),
   status: bankTransferStatusEnum("status").notNull().default("pending_confirmation"),
-  initiated_by_user_id: integer("initiated_by_user_id")
-    .notNull()
-    .references(() => users.user_id),
+  // Nullable: bot/system-initiated transfers have no human user.
+  initiated_by_user_id: integer("initiated_by_user_id").references(
+    () => users.user_id,
+  ),
   confirmed_by_user_id: integer("confirmed_by_user_id").references(
     () => users.user_id,
   ),
@@ -333,9 +338,10 @@ export const gameTransfers = pgTable("game_transfers", {
     mode: "number",
   }).notNull(),
   status: gameTransferStatusEnum("status").notNull().default("completed"),
-  handled_by_user_id: integer("handled_by_user_id")
-    .notNull()
-    .references(() => users.user_id),
+  // Nullable: bot/system-initiated transfers have no human user.
+  handled_by_user_id: integer("handled_by_user_id").references(
+    () => users.user_id,
+  ),
   created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
     .notNull()
     .defaultNow(),
@@ -350,6 +356,9 @@ export const providerBoAccounts = pgTable("provider_bo_accounts", {
     .references(() => entities.entity_id),
   game_name: varchar("game_name", { length: 60 }).notNull(),
   bo_username: varchar("bo_username", { length: 80 }).notNull(),
+  // Back-office credentials the AI bot uses to log in and assign game credit.
+  bo_password: varchar("bo_password", { length: 120 }),
+  bo_pin: varchar("bo_pin", { length: 20 }),
   bo_label: varchar("bo_label", { length: 60 }),
   current_credit: numeric("current_credit", {
     precision: 14,
@@ -391,6 +400,39 @@ export const transactions = pgTable("transactions", {
   reference_id: integer("reference_id"),
   user_id: integer("user_id").references(() => users.user_id),
   details: jsonb("details").$type<Record<string, unknown>>(),
+  created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .notNull()
+    .defaultNow(),
+});
+
+// ---------- Expenses ----------
+
+export const expenseCategoryEnum = pgEnum("expense_category", [
+  "salary",
+  "sim_card",
+  "subscription",
+  "rent",
+  "utilities",
+  "equipment",
+  "marketing",
+  "other",
+]);
+
+export const expenses = pgTable("expenses", {
+  expense_id: serial("expense_id").primaryKey(),
+  expense_date: timestamp("expense_date", { withTimezone: true, mode: "string" })
+    .notNull()
+    .defaultNow(),
+  category: expenseCategoryEnum("category").notNull(),
+  description: varchar("description", { length: 200 }).notNull(),
+  amount: numeric("amount", { precision: 14, scale: 2, mode: "number" }).notNull(),
+  company_entity_id: integer("company_entity_id").references(
+    () => entities.entity_id,
+  ),
+  recorded_by_user_id: integer("recorded_by_user_id")
+    .notNull()
+    .references(() => users.user_id),
+  notes: text("notes"),
   created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
     .notNull()
     .defaultNow(),

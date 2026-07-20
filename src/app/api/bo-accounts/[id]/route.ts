@@ -7,6 +7,8 @@ import { jsonError } from "@/lib/api-helpers";
 
 const patchSchema = z.object({
   bo_username: z.string().min(1).optional(),
+  bo_password: z.string().min(1).optional(),
+  bo_pin: z.string().nullable().optional(),
   bo_label: z.string().nullable().optional(),
   status: z.enum(["active", "inactive"]).optional(),
   notes: z.string().nullable().optional(),

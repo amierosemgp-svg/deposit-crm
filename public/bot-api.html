@@ -259,9 +259,6 @@
     .head-base { display: none; }
   }
 </style>
-</head>
-<body>
-
 
 <header>
   <div class="head-inner">
@@ -290,6 +287,7 @@
         <a href="#list"><span class="m get">Get</span> List pending</a>
         <a href="#get-one"><span class="m get">Get</span> Get one</a>
         <a href="#match"><span class="m patch">Patch</span> Match</a>
+        <a href="#status"><span class="m patch">Patch</span> Update status</a>
         <a href="#members"><span class="m get">Get</span> Members</a>
       </div>
       <div class="grp">
@@ -297,6 +295,10 @@
         <a href="#players">Players</a>
         <a href="#entities">Entities</a>
         <a href="#bank-accounts">Bank accounts</a>
+        <a href="#withdrawals">Withdrawals</a>
+        <a href="#game-credits">Game credits</a>
+        <a href="#game-transfers">Game transfers</a>
+        <a href="#transfers">Bank transfers</a>
       </div>
       <div class="grp">
         <p class="grp-label">Reference</p>
@@ -471,17 +473,28 @@
               <button class="copy">Copy</button>
               <pre><code><span class="k">curl</span> <span class="s">"$BASE/api/bot/transactions?status=pending_match"</span> -H <span class="s">"X-API-Key: $KEY"</span>
 
-<span class="cmt"># → 200 OK</span>
+<span class="cmt"># → 200 OK  (poll ?status=processing to find deposits ready for top-up)</span>
 {
-  <span class="k">"count"</span>: <span class="n">2</span>,
+  <span class="k">"count"</span>: <span class="n">1</span>,
   <span class="k">"transactions"</span>: [
-    { <span class="k">"id"</span>: <span class="n">7</span>, <span class="k">"amount"</span>: <span class="n">50</span>, <span class="k">"status"</span>: <span class="s">"pending_match"</span>, <span class="k">"player_username"</span>: <span class="s">"ahmadtan88"</span> }
+    {
+      <span class="k">"id"</span>: <span class="n">7</span>,
+      <span class="k">"amount"</span>: <span class="n">50</span>,
+      <span class="k">"total_amount"</span>: <span class="n">55</span>,
+      <span class="k">"status"</span>: <span class="s">"processing"</span>,
+      <span class="k">"player_id"</span>: <span class="n">1001</span>,
+      <span class="k">"player_username"</span>: <span class="s">"ahmadtan88"</span>,
+      <span class="k">"telegram_username"</span>: <span class="s">"@ahmadtan88"</span>,
+      <span class="k">"selected_game"</span>: <span class="s">"Mega888"</span>,
+      <span class="k">"game_username"</span>: <span class="s">"MEGA_ahmad01"</span>,
+      <span class="k">"game_accounts"</span>: [{ <span class="k">"game_name"</span>: <span class="s">"Mega888"</span>, <span class="k">"game_username"</span>: <span class="s">"MEGA_ahmad01"</span> }]
+    }
   ]
 }</code></pre>
             </div>
             <div class="note">
               <span class="ic">i</span>
-              <div><b>pending_match</b> means a CS agent pre-created a deposit intent — "the player says they sent RM 50" — and it's waiting for you to confirm the matching bank credit landed. Reconcile it with <a href="#match">Match</a>.</div>
+              <div><code>game_username</code> is the player's login/ID in <code>selected_game</code> — the in-game account you top up (resolved from the player's <code>game_accounts</code>). It's <code>null</code> until a game is selected or if the player has no account recorded for that game. <code>pending_match</code> deposits are intents awaiting a bank-credit match — reconcile those with <a href="#match">Match</a>.</div>
             </div>
           </div>
         </div>
@@ -552,6 +565,61 @@
               <div><span class="sc warn">422</span><span>Amount mismatch against the intent.</span></div>
               <div><span class="sc warn">409</span><span>Transaction isn't <code>pending_match</code> (already matched or processed).</span></div>
               <div><span class="sc err">404</span><span>No transaction with that id.</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- STATUS -->
+      <section id="status">
+        <h2>Endpoint</h2>
+        <div class="ep">
+          <div class="ep-head">
+            <span class="m patch">Patch</span>
+            <span class="ep-path">/api/bot/transactions/:id/status</span>
+            <span class="use-tag">Complete</span>
+          </div>
+          <div class="ep-body">
+            <div class="prose"><p>Drive a deposit through the top-up lifecycle. <code>:id</code> is the numeric id or your <code>external_id</code>.</p>
+            <p><b>The flow:</b> a CS agent picks the game + bonus and clicks <b>Approve</b> in the web app → the deposit moves to <code>processing</code> (no money moves yet). Poll <code>GET /api/bot/transactions?status=processing</code> to find deposits waiting for top-up, do the real provider top-up, then <code>PATCH …/status</code> with <code>completed</code> (or <code>failed</code>). The row in the web app flips on its own — it auto-refreshes every 10s.</p>
+            <p><b>Where the money moves:</b> the <code>completed</code> transition is the only one that books the deposit — the CRM credits the player's game balance (+total), deducts the company BO pool if one exists, and bumps <code>total_deposits</code>. <code>failed</code> moves no money, so there's nothing to reverse. Re-sending <code>completed</code> is a safe no-op — it never credits twice.</p></div>
+            <div class="sub">Body fields</div>
+            <div class="tbl-wrap">
+              <table>
+                <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+                <tr><td><code>status</code></td><td>string</td><td><b>Required.</b> One of <code>approved</code>, <code>processing</code>, <code>completed</code>, <code>failed</code>.</td></tr>
+                <tr><td><code>game_topup_reference</code></td><td>string</td><td>Provider top-up receipt; stored on the record.</td></tr>
+                <tr><td><code>note</code></td><td>string</td><td>Free text, kept in the audit log.</td></tr>
+              </table>
+            </div>
+            <div class="sub">Allowed transitions (forward-only)</div>
+            <div class="tbl-wrap">
+              <table>
+                <tr><th>From</th><th>→ to</th></tr>
+                <tr><td><code>pending</code> / <code>matched</code></td><td><code>approved</code>, <code>processing</code>, <code>completed</code>, <code>failed</code></td></tr>
+                <tr><td><code>approved</code></td><td><code>processing</code>, <code>completed</code>, <code>failed</code></td></tr>
+                <tr><td><code>processing</code></td><td><code>completed</code>, <code>failed</code></td></tr>
+                <tr><td><code>completed</code> / <code>failed</code></td><td>terminal (no change)</td></tr>
+              </table>
+            </div>
+            <div class="sub">Request</div>
+            <div class="code" data-copy>
+              <button class="copy">Copy</button>
+              <pre><code><span class="k">curl</span> -X PATCH <span class="s">"$BASE/api/bot/transactions/42/status"</span> \
+  -H <span class="s">"X-API-Key: $KEY"</span> -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{ "status": "completed", "game_topup_reference": "PROV-99887" }'</span></code></pre>
+            </div>
+            <div class="sub">Status codes</div>
+            <div class="codes">
+              <div><span class="sc ok">200</span><span>Updated — returns the transaction. Re-sending the current status returns <code>"unchanged": true</code>.</span></div>
+              <div><span class="sc warn">409</span><span>Illegal transition; body includes <code>allowed_from_here</code>.</span></div>
+              <div><span class="sc warn">422</span><span>On <code>completed</code>: the company BO pool has insufficient credit for the game.</span></div>
+              <div><span class="sc err">400</span><span>Missing or invalid <code>status</code>.</span></div>
+              <div><span class="sc err">404</span><span>No transaction with that id.</span></div>
+            </div>
+            <div class="note" style="margin-top:16px">
+              <span class="ic">i</span>
+              <div><b>Failed → reprocess.</b> When you send <code>failed</code>, the web app shows the deposit as <b>Failed</b> with a <b>Reprocess</b> button for CS. Reprocess sends it back to <code>pending</code> so CS can adjust and re-approve — which re-dispatches it to you as <code>processing</code>. Nothing to call on your side; just keep polling <code>processing</code>. Since failure credits nothing, a reprocessed-then-completed deposit still credits exactly once.</div>
             </div>
           </div>
         </div>
@@ -744,6 +812,165 @@
               <div><span class="sc warn">409</span><span>Referenced by transfers or transactions.</span></div>
             </div>
           </div>
+        </div>
+      </section>
+
+      <section id="withdrawals">
+        <h2>Resource</h2>
+        <div class="block-title">Withdrawals</div>
+        <div class="prose"><p>Player cashouts. Lifecycle: <code>requested → credits_pulled → paid</code> (or <code>failed</code>). The two action endpoints move money and run in a single database transaction.</p></div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m get">Get</span><span class="ep-path">/api/bot/withdrawals</span><span class="use-tag">List</span></div>
+          <div class="ep-body"><div class="prose"><p>Filter with <code>?player_id=</code>, <code>?status=</code> (comma-separated), <code>?limit=</code>, <code>?offset=</code>.</p></div></div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m post">Post</span><span class="ep-path">/api/bot/withdrawals</span><span class="use-tag">Create</span></div>
+          <div class="ep-body">
+            <div class="prose"><p>Body: <code>player_id</code>, <code>requested_amount</code>, <code>game_name</code>, optional <code>bank_name</code>, <code>bank_account_number</code>. Starts as <code>requested</code>.</p></div>
+            <div class="code" data-copy>
+              <button class="copy">Copy</button>
+              <pre><code><span class="k">curl</span> -X POST <span class="s">"$BASE/api/bot/withdrawals"</span> -H <span class="s">"X-API-Key: $KEY"</span> \
+  -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{ "player_id": 1001, "requested_amount": 50, "game_name": "918kiss" }'</span></code></pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m get">Get</span><span class="ep-path">/api/bot/withdrawals/:id</span><span class="use-tag">Retrieve</span></div>
+          <div class="ep-body"><div class="prose"><p>Numeric id.</p></div></div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m patch">Patch</span><span class="ep-path">/api/bot/withdrawals/:id</span><span class="use-tag">Update</span></div>
+          <div class="ep-body"><div class="prose"><p>Edit <code>requested_amount</code>, <code>game_name</code>, <code>bank_name</code>, <code>bank_account_number</code> — only while still <code>requested</code> (<span class="sc warn">409</span> once credits move).</p></div></div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m patch">Del</span><span class="ep-path">/api/bot/withdrawals/:id</span><span class="use-tag">Cancel</span></div>
+          <div class="ep-body"><div class="prose"><p>Only while <code>requested</code>; <span class="sc warn">409</span> once credits are pulled or it was paid.</p></div></div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m post">Post</span><span class="ep-path">/api/bot/withdrawals/:id/pull</span><span class="use-tag">Action</span></div>
+          <div class="ep-body">
+            <div class="prose"><p>Deducts the player's <code>game_name</code> balance (up to <code>requested_amount</code>) and moves to <code>credits_pulled</code>.</p></div>
+            <div class="codes">
+              <div><span class="sc ok">200</span><span>Pulled; response has <code>credit_pulled_amount</code>.</span></div>
+              <div><span class="sc warn">409</span><span>Not in <code>requested</code> state.</span></div>
+              <div><span class="sc warn">422</span><span>No game balance to pull.</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m post">Post</span><span class="ep-path">/api/bot/withdrawals/:id/paid</span><span class="use-tag">Action</span></div>
+          <div class="ep-body">
+            <div class="prose"><p>Marks the payout done → <code>paid</code>. Optional body <code>paid_from_account_id</code> (debits that withdrawal-role account) and <code>proof_url</code>. Must be <code>credits_pulled</code> first.</p></div>
+            <div class="codes">
+              <div><span class="sc ok">200</span><span>Paid; player <code>total_withdrawals</code> updated.</span></div>
+              <div><span class="sc warn">409</span><span>Pull credits first.</span></div>
+              <div><span class="sc warn">422</span><span>Payout account is wrong role or underfunded.</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="game-credits">
+        <h2>Resource</h2>
+        <div class="block-title">Game credits</div>
+        <div class="prose"><p>A player's balance per game, keyed by <code>player_id + game_name</code>. Use the upsert to sync the real provider balance into the CRM.</p></div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m get">Get</span><span class="ep-path">/api/bot/game-credits</span><span class="use-tag">List</span></div>
+          <div class="ep-body"><div class="prose"><p>Filter with <code>?player_id=</code> and/or <code>?game_name=</code>.</p></div></div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m post">Post</span><span class="ep-path">/api/bot/game-credits</span><span class="use-tag">Upsert</span></div>
+          <div class="ep-body">
+            <div class="prose"><p>Sets the balance to an <b>absolute</b> value (not a delta): <code>player_id</code>, <code>game_name</code>, <code>current_balance</code>. Logs an audit adjustment.</p></div>
+            <div class="code" data-copy>
+              <button class="copy">Copy</button>
+              <pre><code><span class="k">curl</span> -X POST <span class="s">"$BASE/api/bot/game-credits"</span> -H <span class="s">"X-API-Key: $KEY"</span> \
+  -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{ "player_id": 1001, "game_name": "918kiss", "current_balance": 120.50 }'</span></code></pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m patch">Del</span><span class="ep-path">/api/bot/game-credits</span><span class="use-tag">Delete</span></div>
+          <div class="ep-body"><div class="prose"><p>Body <code>{ player_id, game_name }</code>. <span class="sc warn">422</span> if the balance is non-zero.</p></div></div>
+        </div>
+      </section>
+
+      <section id="game-transfers">
+        <h2>Resource</h2>
+        <div class="block-title">Game transfers</div>
+        <div class="prose"><p>Move a player's credits between two games, atomically.</p></div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m get">Get</span><span class="ep-path">/api/bot/game-transfers</span><span class="use-tag">List</span></div>
+          <div class="ep-body"><div class="prose"><p>Filter with <code>?player_id=</code>, <code>?limit=</code>, <code>?offset=</code>.</p></div></div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m post">Post</span><span class="ep-path">/api/bot/game-transfers</span><span class="use-tag">Create</span></div>
+          <div class="ep-body">
+            <div class="prose"><p>Body: <code>player_id</code>, <code>from_game</code>, <code>to_game</code>, <code>amount</code>. <span class="sc warn">422</span> if the <code>from_game</code> balance is insufficient.</p></div>
+            <div class="code" data-copy>
+              <button class="copy">Copy</button>
+              <pre><code><span class="k">curl</span> -X POST <span class="s">"$BASE/api/bot/game-transfers"</span> -H <span class="s">"X-API-Key: $KEY"</span> \
+  -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{ "player_id": 1001, "from_game": "918kiss", "to_game": "mega888", "amount": 50 }'</span></code></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="transfers">
+        <h2>Resource</h2>
+        <div class="block-title">Bank transfers</div>
+        <div class="prose"><p>Transfers between company/leader bank accounts, with recipient confirmation. <b>Rule:</b> company → company under the same leader, or leader → their own company. The sender is debited immediately; the recipient is credited on confirm — or automatically when the confirmation window expires (<code>transfer_auto_confirm_hours</code>, default 24h).</p></div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m get">Get</span><span class="ep-path">/api/bot/transfers</span><span class="use-tag">List</span></div>
+          <div class="ep-body"><div class="prose"><p>Filter with <code>?status=</code> (comma-separated), <code>?account_id=</code> (matches either side), <code>?limit=</code>, <code>?offset=</code>.</p></div></div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m post">Post</span><span class="ep-path">/api/bot/transfers</span><span class="use-tag">Create</span></div>
+          <div class="ep-body">
+            <div class="prose"><p>Body: <code>from_account_id</code>, <code>to_account_id</code>, <code>amount</code>, optional <code>reference</code>, <code>notes</code>. Creates a <code>pending_confirmation</code> transfer and debits the sender.</p></div>
+            <div class="code" data-copy>
+              <button class="copy">Copy</button>
+              <pre><code><span class="k">curl</span> -X POST <span class="s">"$BASE/api/bot/transfers"</span> -H <span class="s">"X-API-Key: $KEY"</span> \
+  -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{ "from_account_id": 12, "to_account_id": 8, "amount": 500, "reference": "rebalance" }'</span></code></pre>
+            </div>
+            <div class="codes">
+              <div><span class="sc ok">201</span><span>Created; sender debited.</span></div>
+              <div><span class="sc warn">422</span><span>Rule fails, inactive account, or insufficient balance.</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m get">Get</span><span class="ep-path">/api/bot/transfers/:id</span><span class="use-tag">Retrieve</span></div>
+          <div class="ep-body"><div class="prose"><p>Numeric id.</p></div></div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m post">Post</span><span class="ep-path">/api/bot/transfers/:id/confirm</span><span class="use-tag">Action</span></div>
+          <div class="ep-body"><div class="prose"><p>Credits the recipient account → <code>confirmed</code>. <span class="sc warn">409</span> if the transfer is already resolved.</p></div></div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m post">Post</span><span class="ep-path">/api/bot/transfers/:id/reject</span><span class="use-tag">Action</span></div>
+          <div class="ep-body"><div class="prose"><p>Refunds the sender → <code>rejected</code>. There is no delete for transfers — reject a pending one instead.</p></div></div>
         </div>
       </section>
 

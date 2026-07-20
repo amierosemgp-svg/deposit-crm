@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -13,9 +14,12 @@ import {
   Settings,
   Landmark,
   KeyRound,
+  ChevronRight,
+  Receipt,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useStore } from "@/lib/store";
+import { REPORT_DEFS } from "@/lib/report-defs";
 
 const NAV = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -27,12 +31,16 @@ const NAV = [
   { href: "/game-transfer", label: "Game Credit Transfer", icon: ArrowLeftRight },
   { href: "/history", label: "Transaction History", icon: History },
   { href: "/reports", label: "Reports", icon: BarChart3 },
+  { href: "/expenses", label: "Expenses", icon: Receipt },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
 export function Sidebar() {
   const pathname = usePathname();
   const me = useStore((s) => s.me);
+  // null = follow the route (open while inside /reports); true/false = user override.
+  const [reportsToggled, setReportsToggled] = useState<boolean | null>(null);
+  const reportsOpen = reportsToggled ?? pathname.startsWith("/reports");
   const pendingDeposits = useStore((s) =>
     s.deposits.filter((d) => d.status === "pending").length,
   );
@@ -43,7 +51,9 @@ export function Sidebar() {
   );
 
   const items = NAV.filter(
-    (item) => item.href !== "/settings" || me?.role === "super_admin",
+    (item) =>
+      (item.href !== "/settings" && item.href !== "/expenses") ||
+      me?.role === "super_admin",
   );
 
   return (
@@ -60,6 +70,66 @@ export function Sidebar() {
                 : item.badge === "pending_withdrawals"
                   ? pendingWithdrawals
                   : 0;
+            if (item.href === "/reports") {
+              return (
+                <div key={item.href}>
+                  <div
+                    className={cn(
+                      "group flex items-center gap-2.5 rounded-md py-2 pr-1 pl-2.5 text-sm font-medium transition-colors",
+                      pathname === item.href
+                        ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                        : "text-sidebar-foreground/75 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                    )}
+                  >
+                    <Link
+                      href={item.href}
+                      className="flex flex-1 items-center gap-2.5"
+                    >
+                      <Icon className="h-4 w-4 shrink-0" />
+                      <span className="flex-1">{item.label}</span>
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => setReportsToggled(!reportsOpen)}
+                      aria-label={
+                        reportsOpen ? "Collapse reports menu" : "Expand reports menu"
+                      }
+                      className="cursor-pointer rounded p-1 text-sidebar-foreground/60 hover:text-sidebar-accent-foreground"
+                    >
+                      <ChevronRight
+                        className={cn(
+                          "h-3.5 w-3.5 transition-transform",
+                          reportsOpen && "rotate-90",
+                        )}
+                      />
+                    </button>
+                  </div>
+                  {reportsOpen && (
+                    <div className="mt-0.5 flex flex-col gap-0.5">
+                      {REPORT_DEFS.map((r) => {
+                        const subActive = pathname === `/reports/${r.id}`;
+                        const SubIcon = r.icon;
+                        return (
+                          <Link
+                            key={r.id}
+                            href={`/reports/${r.id}`}
+                            className={cn(
+                              "flex items-center gap-2 rounded-md py-1.5 pr-2.5 pl-9 text-[13px] transition-colors",
+                              subActive
+                                ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+                                : "text-sidebar-foreground/65 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                            )}
+                          >
+                            <SubIcon className="h-3.5 w-3.5 shrink-0" />
+                            <span className="truncate">{r.shortTitle}</span>
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            }
             return (
               <Link
                 key={item.href}

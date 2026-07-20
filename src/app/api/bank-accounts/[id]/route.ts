@@ -11,6 +11,9 @@ const patchSchema = z.object({
   account_number: z.string().min(4).optional(),
   account_holder: z.string().min(1).optional(),
   label: z.string().nullable().optional(),
+  login_id: z.string().nullable().optional(),
+  login_password: z.string().nullable().optional(),
+  login_pin: z.string().nullable().optional(),
   current_balance: z.number().min(0).optional(),
   status: z.enum(["active", "inactive"]).optional(),
 });

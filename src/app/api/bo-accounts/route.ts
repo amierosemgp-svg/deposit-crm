@@ -9,6 +9,8 @@ const createSchema = z.object({
   company_entity_id: z.number().int().positive(),
   game_name: z.string().min(1),
   bo_username: z.string().min(1),
+  bo_password: z.string().min(1),
+  bo_pin: z.string().optional(),
   bo_label: z.string().optional(),
   current_credit: z.number().min(0).default(0),
   status: z.enum(["active", "inactive"]).default("active"),

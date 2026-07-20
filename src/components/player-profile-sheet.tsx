@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { useStore } from "@/lib/store";
 import { formatRM, formatShortDateTime, formatRelative, initialsOf } from "@/lib/format";
@@ -13,6 +13,14 @@ import {
 } from "@/components/ui/sheet";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { StatusBadge } from "./status-badge";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -23,6 +31,7 @@ import {
   Landmark,
   Gamepad2,
   Loader2,
+  Plus,
   Save,
 } from "lucide-react";
 
@@ -31,6 +40,9 @@ type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 };
+
+const EMPTY_BANK = { bank_name: "", account_number: "", account_holder: "" };
+const EMPTY_GAME = { game_name: "", game_username: "" };
 
 export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
   const player = useStore((s) =>
@@ -42,18 +54,35 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
   const me = useStore((s) => s.me);
   const entityName = useStore((s) => s.entityName);
   const gamesFn = useStore((s) => s.games);
+  const banksFn = useStore((s) => s.banks);
   const updatePlayer = useStore((s) => s.updatePlayer);
 
   const isViewer = me?.role === "viewer";
+  const banks = banksFn();
 
   const [notesDraft, setNotesDraft] = useState("");
   const [savingNotes, setSavingNotes] = useState(false);
 
-  useEffect(() => {
+  const [bankFormOpen, setBankFormOpen] = useState(false);
+  const [bankForm, setBankForm] = useState(EMPTY_BANK);
+  const [savingBank, setSavingBank] = useState(false);
+  const [gameFormOpen, setGameFormOpen] = useState(false);
+  const [gameForm, setGameForm] = useState(EMPTY_GAME);
+  const [savingGame, setSavingGame] = useState(false);
+
+  // Reset drafts whenever a different player is opened (state-during-render reset).
+  const [prevResetKey, setPrevResetKey] = useState("");
+  const resetKey = `${playerId ?? "none"}:${open}`;
+  if (resetKey !== prevResetKey) {
+    setPrevResetKey(resetKey);
     setNotesDraft(player?.notes ?? "");
-    // Reset the draft whenever a different player is opened.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playerId, open]);
+    setBankFormOpen(false);
+    setBankForm(EMPTY_BANK);
+    setSavingBank(false);
+    setGameFormOpen(false);
+    setGameForm(EMPTY_GAME);
+    setSavingGame(false);
+  }
 
   const playerCredits = gameCredits.filter((c) => c.player_id === playerId);
   const gameNames = Array.from(
@@ -69,6 +98,56 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
     .slice(0, 8);
 
   const notesDirty = (player?.notes ?? "") !== notesDraft;
+
+  const bankFormValid =
+    bankForm.bank_name !== "" && bankForm.account_number.trim() !== "";
+  const gameFormValid =
+    gameForm.game_name !== "" && gameForm.game_username.trim() !== "";
+
+  async function addBankAccount() {
+    if (!player || !bankFormValid || savingBank) return;
+    setSavingBank(true);
+    const res = await updatePlayer(player.player_id, {
+      bank_accounts: [
+        ...(player.bank_accounts ?? []),
+        {
+          bank_name: bankForm.bank_name,
+          account_number: bankForm.account_number.trim(),
+          account_holder: bankForm.account_holder.trim() || player.full_name,
+        },
+      ],
+    });
+    setSavingBank(false);
+    if (res.ok) {
+      toast.success("Bank account added");
+      setBankForm(EMPTY_BANK);
+      setBankFormOpen(false);
+    } else {
+      toast.error(res.error ?? "Failed to add bank account");
+    }
+  }
+
+  async function addGameAccount() {
+    if (!player || !gameFormValid || savingGame) return;
+    setSavingGame(true);
+    const res = await updatePlayer(player.player_id, {
+      game_accounts: [
+        ...(player.game_accounts ?? []),
+        {
+          game_name: gameForm.game_name,
+          game_username: gameForm.game_username.trim(),
+        },
+      ],
+    });
+    setSavingGame(false);
+    if (res.ok) {
+      toast.success("Game account linked");
+      setGameForm(EMPTY_GAME);
+      setGameFormOpen(false);
+    } else {
+      toast.error(res.error ?? "Failed to link game account");
+    }
+  }
 
   async function saveNotes() {
     if (!player || savingNotes) return;
@@ -182,15 +261,95 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
               <Separator />
 
               <section>
-                <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2 flex items-center gap-1.5">
-                  <Landmark className="h-3 w-3" />
-                  Bank Accounts on File
-                  {player.bank_accounts && player.bank_accounts.length > 0 && (
-                    <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground normal-case tracking-normal">
-                      {player.bank_accounts.length}
-                    </span>
+                <div className="mb-2 flex items-center justify-between">
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
+                    <Landmark className="h-3 w-3" />
+                    Bank Accounts on File
+                    {player.bank_accounts && player.bank_accounts.length > 0 && (
+                      <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground normal-case tracking-normal">
+                        {player.bank_accounts.length}
+                      </span>
+                    )}
+                  </h3>
+                  {!isViewer && !bankFormOpen && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setBankFormOpen(true)}
+                      className="h-7 -my-1 cursor-pointer"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      Add bank
+                    </Button>
                   )}
-                </h3>
+                </div>
+                {bankFormOpen && (
+                  <div className="mb-2 rounded-md border bg-muted/20 p-3 space-y-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <Select
+                        value={bankForm.bank_name || null}
+                        onValueChange={(v) =>
+                          setBankForm((f) => ({ ...f, bank_name: v ?? "" }))
+                        }
+                      >
+                        <SelectTrigger className="h-8 w-full cursor-pointer">
+                          <SelectValue placeholder="Select bank" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {banks.map((b) => (
+                            <SelectItem key={b} value={b} className="cursor-pointer">
+                              {b}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Input
+                        value={bankForm.account_number}
+                        onChange={(e) =>
+                          setBankForm((f) => ({ ...f, account_number: e.target.value }))
+                        }
+                        placeholder="Account number"
+                        inputMode="numeric"
+                        className="h-8"
+                      />
+                    </div>
+                    <Input
+                      value={bankForm.account_holder}
+                      onChange={(e) =>
+                        setBankForm((f) => ({ ...f, account_holder: e.target.value }))
+                      }
+                      placeholder={`Holder name (defaults to ${player.full_name})`}
+                      className="h-8"
+                    />
+                    <div className="flex justify-end gap-2 pt-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setBankFormOpen(false);
+                          setBankForm(EMPTY_BANK);
+                        }}
+                        disabled={savingBank}
+                        className="cursor-pointer"
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={addBankAccount}
+                        disabled={!bankFormValid || savingBank}
+                        className="cursor-pointer"
+                      >
+                        {savingBank ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Plus className="h-3.5 w-3.5" />
+                        )}
+                        Add account
+                      </Button>
+                    </div>
+                  </div>
+                )}
                 {player.bank_accounts && player.bank_accounts.length > 0 ? (
                   <div className="space-y-2">
                     {player.bank_accounts.map((b, i) => (
@@ -225,15 +384,93 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
               <Separator />
 
               <section>
-                <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2 flex items-center gap-1.5">
-                  <Gamepad2 className="h-3 w-3" />
-                  Linked Game Accounts
-                  {player.game_accounts && player.game_accounts.length > 0 && (
-                    <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground normal-case tracking-normal">
-                      {player.game_accounts.length}
-                    </span>
+                <div className="mb-2 flex items-center justify-between">
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
+                    <Gamepad2 className="h-3 w-3" />
+                    Linked Game Accounts
+                    {player.game_accounts && player.game_accounts.length > 0 && (
+                      <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground normal-case tracking-normal">
+                        {player.game_accounts.length}
+                      </span>
+                    )}
+                  </h3>
+                  {!isViewer && !gameFormOpen && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setGameFormOpen(true)}
+                      className="h-7 -my-1 cursor-pointer"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      Link game
+                    </Button>
                   )}
-                </h3>
+                </div>
+                {gameFormOpen && (
+                  <div className="mb-2 rounded-md border bg-muted/20 p-3 space-y-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <Select
+                        value={gameForm.game_name || null}
+                        onValueChange={(v) =>
+                          setGameForm((f) => ({ ...f, game_name: v ?? "" }))
+                        }
+                      >
+                        <SelectTrigger className="h-8 w-full cursor-pointer">
+                          <SelectValue placeholder="Select game" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {gamesFn().map((g) => (
+                            <SelectItem
+                              key={g}
+                              value={g}
+                              disabled={(player.game_accounts ?? []).some(
+                                (ga) => ga.game_name === g,
+                              )}
+                              className="cursor-pointer"
+                            >
+                              {g}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Input
+                        value={gameForm.game_username}
+                        onChange={(e) =>
+                          setGameForm((f) => ({ ...f, game_username: e.target.value }))
+                        }
+                        placeholder="Game username / ID"
+                        className="h-8"
+                      />
+                    </div>
+                    <div className="flex justify-end gap-2 pt-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setGameFormOpen(false);
+                          setGameForm(EMPTY_GAME);
+                        }}
+                        disabled={savingGame}
+                        className="cursor-pointer"
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={addGameAccount}
+                        disabled={!gameFormValid || savingGame}
+                        className="cursor-pointer"
+                      >
+                        {savingGame ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Plus className="h-3.5 w-3.5" />
+                        )}
+                        Link account
+                      </Button>
+                    </div>
+                  </div>
+                )}
                 {player.game_accounts && player.game_accounts.length > 0 ? (
                   <div className="grid grid-cols-2 gap-2">
                     {player.game_accounts.map((g, i) => (

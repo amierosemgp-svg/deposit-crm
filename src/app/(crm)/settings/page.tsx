@@ -10,6 +10,7 @@ import {
   Loader2,
   Plus,
   RotateCcw,
+  Shield,
   Trash2,
   UserPlus,
   Users as UsersIcon,
@@ -410,6 +411,7 @@ function KeysTab() {
   const deleteApiKey = useStore((s) => s.deleteApiKey);
   const [createOpen, setCreateOpen] = useState(false);
   const [newKey, setNewKey] = useState<string | null>(null);
+  const [editIps, setEditIps] = useState<ApiKeyRow | null>(null);
 
   useEffect(() => { void fetchApiKeys(); }, [fetchApiKeys]);
 
@@ -457,8 +459,12 @@ function KeysTab() {
                 <tr key={k.key_id} className="border-b border-border last:border-0">
                   <td className="px-4 py-3 font-medium">{k.label}</td>
                   <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{k.hint ?? "dbk_••••"}</td>
-                  <td className="px-4 py-3 text-xs text-muted-foreground">
-                    {k.allowed_ips?.length ? k.allowed_ips.join(", ") : "Any IP"}
+                  <td className="px-4 py-3 text-xs">
+                    {k.allowed_ips?.length ? (
+                      <span className="font-mono text-muted-foreground">{k.allowed_ips.join(", ")}</span>
+                    ) : (
+                      <span className="text-amber-600">Any IP</span>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">
                     {k.last_used_at ? formatRelative(k.last_used_at) : "Never"}
@@ -466,6 +472,9 @@ function KeysTab() {
                   <td className="px-4 py-3"><StatusBadge status={k.status} /></td>
                   <td className="px-4 py-3">
                     <div className="flex justify-end gap-1.5">
+                      <Button variant="outline" size="sm" className="cursor-pointer gap-1" onClick={() => setEditIps(k)}>
+                        <Shield className="h-3.5 w-3.5" /> IPs
+                      </Button>
                       <Button variant="outline" size="sm" className="cursor-pointer" onClick={() => revoke(k)}>
                         {k.status === "active" ? "Revoke" : "Reactivate"}
                       </Button>
@@ -483,7 +492,63 @@ function KeysTab() {
 
       <CreateKeyModal open={createOpen} onOpenChange={setCreateOpen} onCreated={(key) => setNewKey(key)} />
       <RevealKeyModal keyValue={newKey} onClose={() => setNewKey(null)} />
+      <EditIpsModal apiKey={editIps} onClose={() => setEditIps(null)} />
     </div>
+  );
+}
+
+function EditIpsModal({ apiKey, onClose }: { apiKey: ApiKeyRow | null; onClose: () => void }) {
+  const updateApiKey = useStore((s) => s.updateApiKey);
+  const [ips, setIps] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setIps(apiKey?.allowed_ips?.length ? apiKey.allowed_ips.join(", ") : "");
+  }, [apiKey]);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!apiKey) return;
+    setBusy(true);
+    const allowed = ips.split(",").map((s) => s.trim()).filter(Boolean);
+    // Send null (not []) to clear — the PATCH route treats an empty list as "any IP".
+    const r = await updateApiKey(apiKey.key_id, { allowed_ips: allowed.length ? allowed : null });
+    setBusy(false);
+    if (!r.ok) return toast.error(r.error ?? "Failed to update allowlist");
+    toast.success(allowed.length ? "IP allowlist updated" : "Allowlist cleared — key now works from any IP");
+    onClose();
+  }
+
+  return (
+    <Dialog open={!!apiKey} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogTitle>IP allowlist</DialogTitle>
+        <DialogDescription>
+          Restrict <span className="font-medium">{apiKey?.label}</span> to specific egress IPs. Requests from any
+          other IP get a 403 — the key stays the primary control, this is a second layer.
+        </DialogDescription>
+        <form onSubmit={submit} className="mt-2 space-y-3">
+          <div className="space-y-1.5">
+            <Label>Allowed IPs</Label>
+            <Input
+              value={ips}
+              onChange={(e) => setIps(e.target.value)}
+              placeholder="comma-separated, e.g. 74.220.52.20, 74.220.52.21"
+            />
+            <p className="text-xs text-muted-foreground">
+              Leave blank to allow any IP. Only use this if the bot has a static egress IP — a rotating IP will get
+              locked out.
+            </p>
+          </div>
+          <div className="flex justify-end gap-2 pt-1">
+            <Button type="button" variant="outline" className="cursor-pointer" onClick={onClose}>Cancel</Button>
+            <Button type="submit" disabled={busy} className="cursor-pointer">
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save allowlist"}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 

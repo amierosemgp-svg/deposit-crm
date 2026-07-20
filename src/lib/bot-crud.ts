@@ -1,10 +1,34 @@
 /* Shared helpers for the bot CRUD endpoints (/api/bot/*).
  * Bot requests authenticate with an API key and act system-wide — there is no
  * per-request role scope, unlike the human/session API. */
-import type { bankAccounts, entities, players } from "@/db/schema";
+import type {
+  bankAccounts,
+  bankTransfers,
+  entities,
+  gameCredits,
+  gameTransfers,
+  players,
+  providerBoAccounts,
+  withdrawals,
+} from "@/db/schema";
 
 export function jsonError(message: string, status = 400) {
   return Response.json({ error: message }, { status });
+}
+
+/** Thrown inside a bot handler to abort with a specific status (rolls back any open txn). */
+export class BotError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+/** Maps a thrown BotError to a JSON response; returns null for anything else. */
+export function botErrorResponse(e: unknown): Response | null {
+  if (e instanceof BotError) return jsonError(e.message, e.status);
+  return null;
 }
 
 /** True when a Postgres error is a foreign-key violation (row still referenced). */
@@ -66,9 +90,85 @@ export function bankAccountJson(a: typeof bankAccounts.$inferSelect) {
     account_number: a.account_number,
     account_holder: a.account_holder,
     label: a.label,
+    login_id: a.login_id,
+    login_password: a.login_password,
+    login_pin: a.login_pin,
     current_balance: a.current_balance,
     status: a.status,
     created_at: a.created_at,
+  };
+}
+
+export function kioskJson(k: typeof providerBoAccounts.$inferSelect) {
+  return {
+    kiosk_id: k.bo_account_id,
+    company_entity_id: k.company_entity_id,
+    game_name: k.game_name,
+    username: k.bo_username,
+    password: k.bo_password,
+    pin: k.bo_pin,
+    label: k.bo_label,
+    current_credit: k.current_credit,
+    status: k.status,
+    notes: k.notes,
+    created_at: k.created_at,
+  };
+}
+
+export function withdrawalJson(w: typeof withdrawals.$inferSelect) {
+  return {
+    withdrawal_id: w.withdrawal_id,
+    player_id: w.player_id,
+    requested_amount: w.requested_amount,
+    game_name: w.game_name,
+    credit_pulled_amount: w.credit_pulled_amount,
+    status: w.status,
+    bank_name: w.bank_name,
+    bank_account_number: w.bank_account_number,
+    paid_from_account_id: w.paid_from_account_id,
+    proof_url: w.proof_url,
+    paid_at: w.paid_at,
+    created_at: w.created_at,
+    updated_at: w.updated_at,
+  };
+}
+
+export function gameCreditJson(c: typeof gameCredits.$inferSelect) {
+  return {
+    player_id: c.player_id,
+    game_name: c.game_name,
+    current_balance: c.current_balance,
+    last_updated_at: c.last_updated_at,
+  };
+}
+
+export function gameTransferJson(t: typeof gameTransfers.$inferSelect) {
+  return {
+    transfer_id: t.transfer_id,
+    player_id: t.player_id,
+    from_game: t.from_game,
+    to_game: t.to_game,
+    transfer_amount: t.transfer_amount,
+    from_game_balance_before: t.from_game_balance_before,
+    status: t.status,
+    created_at: t.created_at,
+  };
+}
+
+export function bankTransferJson(t: typeof bankTransfers.$inferSelect) {
+  return {
+    transfer_id: t.transfer_id,
+    from_account_id: t.from_account_id,
+    to_account_id: t.to_account_id,
+    amount: t.amount,
+    reference: t.reference,
+    notes: t.notes,
+    status: t.status,
+    initiated_by_user_id: t.initiated_by_user_id,
+    confirmed_by_user_id: t.confirmed_by_user_id,
+    confirmed_at: t.confirmed_at,
+    expires_at: t.expires_at,
+    created_at: t.created_at,
   };
 }
 

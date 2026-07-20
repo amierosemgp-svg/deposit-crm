@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { KeyRound, Loader2 } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -27,6 +27,8 @@ type FormState = {
   company_entity_id: string;
   game_name: string;
   bo_username: string;
+  bo_password: string;
+  bo_pin: string;
   bo_label: string;
   current_credit: string;
   status: "active" | "inactive";
@@ -37,6 +39,8 @@ const EMPTY: FormState = {
   company_entity_id: "",
   game_name: "",
   bo_username: "",
+  bo_password: "",
+  bo_pin: "",
   bo_label: "",
   current_credit: "0",
   status: "active",
@@ -66,13 +70,19 @@ export function BoAccountFormModal({ open, onOpenChange, account }: Props) {
     [companies, me],
   );
 
-  useEffect(() => {
+  // Re-seed the form whenever the modal opens (state-during-render reset).
+  const [prevResetKey, setPrevResetKey] = useState("");
+  const resetKey = `${open}:${account?.bo_account_id ?? "new"}`;
+  if (resetKey !== prevResetKey) {
+    setPrevResetKey(resetKey);
     if (open) {
       if (account) {
         setForm({
           company_entity_id: String(account.company_entity_id),
           game_name: account.game_name,
           bo_username: account.bo_username,
+          bo_password: account.bo_password ?? "",
+          bo_pin: account.bo_pin ?? "",
           bo_label: account.bo_label ?? "",
           current_credit: String(account.current_credit),
           status: account.status,
@@ -82,12 +92,13 @@ export function BoAccountFormModal({ open, onOpenChange, account }: Props) {
         setForm(EMPTY);
       }
     }
-  }, [open, account]);
+  }
 
   const errors = {
     company_entity_id: !form.company_entity_id ? "Required" : null,
     game_name: !form.game_name ? "Required" : null,
     bo_username: !form.bo_username.trim() ? "Required" : null,
+    bo_password: !form.bo_password.trim() ? "Required" : null,
     current_credit:
       !isEdit &&
       (form.current_credit === "" ||
@@ -113,6 +124,8 @@ export function BoAccountFormModal({ open, onOpenChange, account }: Props) {
         company_entity_id: Number(form.company_entity_id),
         game_name: form.game_name,
         bo_username: form.bo_username.trim(),
+        bo_password: form.bo_password.trim(),
+        bo_pin: form.bo_pin.trim() || null,
         bo_label: form.bo_label.trim() || undefined,
         status: form.status,
         notes: form.notes.trim() || undefined,
@@ -122,6 +135,8 @@ export function BoAccountFormModal({ open, onOpenChange, account }: Props) {
         company_entity_id: Number(form.company_entity_id),
         game_name: form.game_name,
         bo_username: form.bo_username.trim(),
+        bo_password: form.bo_password.trim(),
+        bo_pin: form.bo_pin.trim() || undefined,
         bo_label: form.bo_label.trim() || undefined,
         current_credit: Number(form.current_credit),
         status: form.status,
@@ -238,6 +253,38 @@ export function BoAccountFormModal({ open, onOpenChange, account }: Props) {
                 value={form.bo_label}
                 onChange={(e) => update("bo_label", e.target.value)}
                 placeholder="Master Agent, Sub A…"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="bo-password">
+                BO password <span className="text-rose-600">*</span>
+              </Label>
+              <Input
+                id="bo-password"
+                value={form.bo_password}
+                onChange={(e) => update("bo_password", e.target.value)}
+                placeholder="Back-office login password"
+                autoComplete="off"
+                aria-invalid={!!errors.bo_password}
+                className="font-mono"
+              />
+              <p className="text-[10px] text-muted-foreground">
+                The bot uses this to log in and assign game credit.
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="bo-pin">PIN (optional)</Label>
+              <Input
+                id="bo-pin"
+                value={form.bo_pin}
+                onChange={(e) => update("bo_pin", e.target.value)}
+                placeholder="Approval PIN, if any"
+                autoComplete="off"
+                inputMode="numeric"
+                className="font-mono"
               />
             </div>
           </div>
