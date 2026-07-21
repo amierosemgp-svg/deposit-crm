@@ -30,6 +30,10 @@ export function ManualDepositDialog({ open, onOpenChange }: Props) {
   const createDepositIntent = useStore((s) => s.createDepositIntent);
   const uploadFile = useStore((s) => s.uploadFile);
   const companyInScope = useStore((s) => s.companyInScope);
+  // Subscribe to the scope selectors so eligiblePlayers re-computes if the
+  // top-nav company/leader changes while the dialog is open.
+  useStore((s) => s.selectedCompanyId);
+  useStore((s) => s.selectedLeaderId);
 
   const banks = banksFn();
   const bonusOptions = bonusOptionsFn();

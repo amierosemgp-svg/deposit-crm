@@ -38,6 +38,14 @@ function inRange(iso: string | null | undefined, from: string, to: string) {
   return true;
 }
 
+// online/total → colour: neutral when nothing configured, green all-up, red all-down, amber partial.
+function statusColor(online: number, total: number) {
+  if (total === 0) return "text-muted-foreground";
+  if (online === total) return "text-emerald-600";
+  if (online === 0) return "text-red-600";
+  return "text-amber-600";
+}
+
 function EmptyRow({
   colSpan,
   hydrated,
@@ -326,15 +334,7 @@ export default function DashboardPage() {
                 <KeyRound className="h-3.5 w-3.5" /> Kiosks
               </span>
               <span className="font-medium tabular-nums">
-                <span
-                  className={
-                    kiosksOnline === scopedBoAccounts.length && scopedBoAccounts.length > 0
-                      ? "text-emerald-600"
-                      : kiosksOnline === 0
-                        ? "text-red-600"
-                        : "text-amber-600"
-                  }
-                >
+                <span className={statusColor(kiosksOnline, scopedBoAccounts.length)}>
                   {kiosksOnline}
                 </span>
                 <span className="text-muted-foreground"> / {scopedBoAccounts.length}</span>
@@ -345,15 +345,7 @@ export default function DashboardPage() {
                 <Landmark className="h-3.5 w-3.5" /> Bank accounts
               </span>
               <span className="font-medium tabular-nums">
-                <span
-                  className={
-                    banksOnline === scopedBankAccounts.length && scopedBankAccounts.length > 0
-                      ? "text-emerald-600"
-                      : banksOnline === 0
-                        ? "text-red-600"
-                        : "text-amber-600"
-                  }
-                >
+                <span className={statusColor(banksOnline, scopedBankAccounts.length)}>
                   {banksOnline}
                 </span>
                 <span className="text-muted-foreground"> / {scopedBankAccounts.length}</span>
