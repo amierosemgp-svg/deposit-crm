@@ -12,6 +12,8 @@ const createSchema = z.object({
   // "pending_match" = intent, waiting for the bot to confirm the bank credit.
   // "pending" = CS already sighted the receipt, straight to approval queue.
   status: z.enum(["pending_match", "pending"]).default("pending_match"),
+  selected_game: z.string().optional(),
+  bonus_percentage: z.number().min(0).max(200).optional(),
   receipt_url: z.string().url().optional(),
   notes: z.string().optional(),
 });
@@ -40,6 +42,8 @@ export async function POST(request: Request) {
       throw new AuthError(403, "Player is outside your company scope");
     }
 
+    const bonusPct = body.bonus_percentage ?? 0;
+    const bonusAmt = +((body.amount * bonusPct) / 100).toFixed(2);
     const nowIso = new Date().toISOString();
     const [created] = await db
       .insert(deposits)
@@ -51,8 +55,12 @@ export async function POST(request: Request) {
         company_entity_id: player.company_entity_id,
         deposit_amount: body.amount,
         bank_name: body.bank_name,
-        total_amount: body.amount,
+        selected_game: body.selected_game,
+        bonus_percentage: bonusPct,
+        bonus_amount: bonusAmt,
+        total_amount: +(body.amount + bonusAmt).toFixed(2),
         status: body.status,
+        source: "manual",
         receipt_url: body.receipt_url,
         handled_by_user_id: user.user_id,
         created_at: nowIso,
@@ -66,7 +74,7 @@ export async function POST(request: Request) {
       amount: body.amount,
       reference_id: created.deposit_id,
       user_id: user.user_id,
-      details: { source: "crm", action: "intent_created", status: body.status },
+      details: { source: "manual", action: "intent_created", status: body.status },
     });
 
     return Response.json({ deposit: created }, { status: 201 });

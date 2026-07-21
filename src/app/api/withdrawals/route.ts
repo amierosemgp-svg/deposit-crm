@@ -41,6 +41,7 @@ export async function POST(request: Request) {
         game_name: body.game_name,
         bank_name: body.bank_name,
         bank_account_number: body.bank_account_number,
+        source: "manual",
         handled_by_user_id: user.user_id,
       })
       .returning();
@@ -52,7 +53,7 @@ export async function POST(request: Request) {
       game_name: body.game_name,
       reference_id: created.withdrawal_id,
       user_id: user.user_id,
-      details: { action: "requested" },
+      details: { action: "requested", source: "manual" },
     });
 
     return Response.json({ withdrawal: created }, { status: 201 });

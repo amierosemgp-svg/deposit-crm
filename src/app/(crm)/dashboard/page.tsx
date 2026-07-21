@@ -1,9 +1,11 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
-import { formatRM, formatDateTime } from "@/lib/format";
+import { formatRM, formatDateTime, isOnline } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { StatTile } from "@/components/stat-tile";
 import { StatusBadge } from "@/components/status-badge";
 import { PlayerNameLink } from "@/components/player-name-link";
 import {
@@ -11,45 +13,29 @@ import {
   Clock,
   Banknote,
   Users,
+  TrendingUp,
+  Coins,
+  Loader2,
+  KeyRound,
+  Landmark,
   ArrowUpRight,
   ArrowDownRight,
 } from "lucide-react";
 
-function KpiCard({
-  title,
-  value,
-  sub,
-  icon: Icon,
-  tone = "default",
-}: {
-  title: string;
-  value: string;
-  sub?: string;
-  icon: React.ComponentType<{ className?: string }>;
-  tone?: "default" | "warning" | "success";
-}) {
-  const toneCls =
-    tone === "warning"
-      ? "bg-amber-500/10 text-amber-600"
-      : tone === "success"
-        ? "bg-emerald-500/10 text-emerald-600"
-        : "bg-primary/10 text-primary";
-  return (
-    <Card className="gap-2 py-4">
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1 px-5">
-        <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-          {title}
-        </CardTitle>
-        <div className={`flex h-8 w-8 items-center justify-center rounded-md ${toneCls}`}>
-          <Icon className="h-4 w-4" />
-        </div>
-      </CardHeader>
-      <CardContent className="px-5">
-        <div className="text-2xl font-bold">{value}</div>
-        {sub && <p className="text-[11px] text-muted-foreground mt-0.5">{sub}</p>}
-      </CardContent>
-    </Card>
-  );
+function todayStr() {
+  return new Date().toISOString().slice(0, 10);
+}
+function daysAgoStr(n: number) {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return d.toISOString().slice(0, 10);
+}
+function inRange(iso: string | null | undefined, from: string, to: string) {
+  if (!iso) return false;
+  const day = iso.slice(0, 10);
+  if (from && day < from) return false;
+  if (to && day > to) return false;
+  return true;
 }
 
 function EmptyRow({
@@ -82,18 +68,15 @@ export default function DashboardPage() {
   const withdrawals = useStore((s) => s.withdrawals);
   const players = useStore((s) => s.players);
   const entities = useStore((s) => s.entities);
+  const boAccounts = useStore((s) => s.boAccounts);
+  const bankAccounts = useStore((s) => s.bankAccounts);
+  const expenses = useStore((s) => s.expenses);
   const userName = useStore((s) => s.userName);
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
 
   const today = new Date();
-  const isSameDay = (iso: string) => {
-    const d = new Date(iso);
-    return (
-      d.getFullYear() === today.getFullYear() &&
-      d.getMonth() === today.getMonth() &&
-      d.getDate() === today.getDate()
-    );
-  };
+  const [dateFrom, setDateFrom] = useState(todayStr());
+  const [dateTo, setDateTo] = useState(todayStr());
 
   const playerMap = useMemo(
     () => new Map(players.map((p) => [p.player_id, p])),
@@ -124,29 +107,86 @@ export default function DashboardPage() {
         : players.filter((p) => p.company_entity_id === selectedCompanyId),
     [players, selectedCompanyId],
   );
-
-  const todaysDeposits = scopedDeposits.filter(
-    (d) => d.status === "completed" && isSameDay(d.updated_at),
+  const scopedBoAccounts = useMemo(
+    () =>
+      selectedCompanyId === null
+        ? boAccounts
+        : boAccounts.filter((b) => b.company_entity_id === selectedCompanyId),
+    [boAccounts, selectedCompanyId],
   );
-  const todaysDepositsTotal = todaysDeposits.reduce(
+  const scopedBankAccounts = useMemo(
+    () =>
+      selectedCompanyId === null
+        ? bankAccounts
+        : bankAccounts.filter((a) => a.entity_id === selectedCompanyId),
+    [bankAccounts, selectedCompanyId],
+  );
+  const scopedExpenses = useMemo(
+    () =>
+      selectedCompanyId === null
+        ? expenses
+        : expenses.filter((e) => e.company_entity_id === selectedCompanyId),
+    [expenses, selectedCompanyId],
+  );
+
+  // --- Range-scoped money (deposits by deposit_date, withdrawals/expenses by their date) ---
+  const rangeDeposits = scopedDeposits.filter((d) =>
+    inRange(d.deposit_date, dateFrom, dateTo),
+  );
+  const rangeWithdrawals = scopedWithdrawals.filter((w) =>
+    inRange(w.created_at, dateFrom, dateTo),
+  );
+  const rangeExpenses = scopedExpenses.filter((e) =>
+    inRange(e.expense_date, dateFrom, dateTo),
+  );
+
+  const completedDeposits = rangeDeposits.filter((d) => d.status === "completed");
+  const depositsTotal = completedDeposits.reduce(
     (sum, d) => sum + d.total_amount,
     0,
   );
-  const pendingDeposits = scopedDeposits.filter((d) =>
-    PENDING_DEPOSIT_STATUSES.has(d.status),
-  );
-  const todaysWithdrawals = scopedWithdrawals.filter(
-    (w) => w.status === "paid" && w.paid_at != null && isSameDay(w.paid_at),
-  );
-  const todaysWithdrawalsTotal = todaysWithdrawals.reduce(
+  const paidWithdrawals = rangeWithdrawals.filter((w) => w.status === "paid");
+  const withdrawalsTotal = paidWithdrawals.reduce(
     (sum, w) => sum + w.credit_pulled_amount,
     0,
   );
 
-  const recentDeposits = [...scopedDeposits]
+  // Profit = deposits − withdrawals − bonuses − expenses (failed rows excluded).
+  const grossDeposits = rangeDeposits
+    .filter((d) => d.status !== "failed")
+    .reduce((sum, d) => sum + d.deposit_amount, 0);
+  const grossBonuses = rangeDeposits
+    .filter((d) => d.status !== "failed")
+    .reduce((sum, d) => sum + d.bonus_amount, 0);
+  const grossWithdrawals = rangeWithdrawals
+    .filter((w) => w.status !== "failed")
+    .reduce((sum, w) => sum + w.requested_amount, 0);
+  const totalExpenses = rangeExpenses.reduce((sum, e) => sum + e.amount, 0);
+  const profit = grossDeposits - grossWithdrawals - grossBonuses - totalExpenses;
+
+  // Live states (not range-bound)
+  const pendingDeposits = scopedDeposits.filter((d) =>
+    PENDING_DEPOSIT_STATUSES.has(d.status),
+  );
+  const processingDeposits = scopedDeposits.filter(
+    (d) => d.status === "processing",
+  );
+
+  const kioskPoints = scopedBoAccounts.reduce(
+    (sum, b) => sum + b.current_credit,
+    0,
+  );
+  const kiosksOnline = scopedBoAccounts.filter((b) =>
+    isOnline(b.last_heartbeat_at),
+  ).length;
+  const banksOnline = scopedBankAccounts.filter((a) =>
+    isOnline(a.last_heartbeat_at),
+  ).length;
+
+  const recentDeposits = [...rangeDeposits]
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
     .slice(0, 5);
-  const recentWithdrawals = [...scopedWithdrawals]
+  const recentWithdrawals = [...rangeWithdrawals]
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
     .slice(0, 5);
 
@@ -156,59 +196,184 @@ export default function DashboardPage() {
       : entities.find((e) => e.entity_id === selectedCompanyId);
 
   const firstName = me?.full_name.split(" ")[0];
+  const rangeLabel =
+    dateFrom === dateTo ? "in range" : `${dateFrom} → ${dateTo}`;
+
+  function setPreset(days: number) {
+    setDateFrom(daysAgoStr(days));
+    setDateTo(todayStr());
+  }
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">
-          Welcome back{firstName ? `, ${firstName}` : ""} 👋
-        </h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          {today.toLocaleDateString("en-US", {
-            weekday: "long",
-            day: "numeric",
-            month: "long",
-            year: "numeric",
-          })}
-          {activeCompany && (
-            <>
-              {" "}
-              ·{" "}
-              <span className="font-medium text-foreground">
-                {activeCompany.name}
-              </span>
-            </>
-          )}
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold">
+            Welcome back{firstName ? `, ${firstName}` : ""} 👋
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            {today.toLocaleDateString("en-US", {
+              weekday: "long",
+              day: "numeric",
+              month: "long",
+              year: "numeric",
+            })}
+            {activeCompany && (
+              <>
+                {" "}
+                ·{" "}
+                <span className="font-medium text-foreground">
+                  {activeCompany.name}
+                </span>
+              </>
+            )}
+          </p>
+        </div>
+        <div className="flex items-end gap-2">
+          <div className="space-y-1">
+            <span className="text-[11px] font-medium text-muted-foreground">
+              From
+            </span>
+            <Input
+              type="date"
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.target.value)}
+              className="h-8 w-[140px]"
+            />
+          </div>
+          <div className="space-y-1">
+            <span className="text-[11px] font-medium text-muted-foreground">
+              To
+            </span>
+            <Input
+              type="date"
+              value={dateTo}
+              onChange={(e) => setDateTo(e.target.value)}
+              className="h-8 w-[140px]"
+            />
+          </div>
+          <div className="flex gap-1 pb-0.5">
+            {(
+              [
+                ["Today", 0],
+                ["7D", 7],
+                ["30D", 30],
+              ] as const
+            ).map(([label, days]) => (
+              <button
+                key={label}
+                onClick={() => setPreset(days)}
+                className="h-7 cursor-pointer rounded-md border px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
+      {/* Money — respects the date range */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <KpiCard
-          title="Today's Deposits"
-          value={formatRM(todaysDepositsTotal)}
-          sub={`${todaysDeposits.length} completed`}
+        <StatTile
+          title="Deposits"
+          value={formatRM(depositsTotal)}
+          sub={`${completedDeposits.length} completed ${rangeLabel}`}
           icon={Wallet}
           tone="success"
         />
-        <KpiCard
+        <StatTile
+          title="Withdrawals"
+          value={formatRM(withdrawalsTotal)}
+          sub={`${paidWithdrawals.length} paid out ${rangeLabel}`}
+          icon={Banknote}
+        />
+        <StatTile
+          title="Profit"
+          value={formatRM(profit)}
+          sub="Deposits − withdrawals − bonuses − expenses"
+          icon={TrendingUp}
+          tone={profit >= 0 ? "success" : "danger"}
+          valueClassName={profit >= 0 ? "text-emerald-600" : "text-rose-600"}
+        />
+        <StatTile
+          title="Kiosk Points"
+          value={formatRM(kioskPoints)}
+          sub={`${scopedBoAccounts.length} kiosk${scopedBoAccounts.length === 1 ? "" : "s"} · ${kiosksOnline} online`}
+          icon={Coins}
+        />
+      </div>
+
+      {/* Live operational state */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <StatTile
           title="Pending Deposits"
           value={String(pendingDeposits.length)}
           sub="Waiting for CS action"
           icon={Clock}
           tone="warning"
         />
-        <KpiCard
-          title="Today's Withdrawals"
-          value={formatRM(todaysWithdrawalsTotal)}
-          sub={`${todaysWithdrawals.length} paid out`}
-          icon={Banknote}
+        <StatTile
+          title="Processing"
+          value={String(processingDeposits.length)}
+          sub="Bot topping up now"
+          icon={Loader2}
         />
-        <KpiCard
+        <StatTile
           title="Active Players"
           value={String(scopedPlayers.filter((p) => p.status === "active").length)}
           sub={`${scopedPlayers.length} total`}
           icon={Users}
         />
+        <Card className="gap-2 py-4">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1 px-5">
+            <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              System Status
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-5 space-y-1.5">
+            <div className="flex items-center justify-between text-sm">
+              <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+                <KeyRound className="h-3.5 w-3.5" /> Kiosks
+              </span>
+              <span className="font-medium tabular-nums">
+                <span
+                  className={
+                    kiosksOnline === scopedBoAccounts.length && scopedBoAccounts.length > 0
+                      ? "text-emerald-600"
+                      : kiosksOnline === 0
+                        ? "text-red-600"
+                        : "text-amber-600"
+                  }
+                >
+                  {kiosksOnline}
+                </span>
+                <span className="text-muted-foreground"> / {scopedBoAccounts.length}</span>
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-sm">
+              <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+                <Landmark className="h-3.5 w-3.5" /> Bank accounts
+              </span>
+              <span className="font-medium tabular-nums">
+                <span
+                  className={
+                    banksOnline === scopedBankAccounts.length && scopedBankAccounts.length > 0
+                      ? "text-emerald-600"
+                      : banksOnline === 0
+                        ? "text-red-600"
+                        : "text-amber-600"
+                  }
+                >
+                  {banksOnline}
+                </span>
+                <span className="text-muted-foreground"> / {scopedBankAccounts.length}</span>
+              </span>
+            </div>
+            <p className="text-[10px] text-muted-foreground pt-0.5">
+              Online = bot pinged &lt; 5 min ago
+            </p>
+          </CardContent>
+        </Card>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

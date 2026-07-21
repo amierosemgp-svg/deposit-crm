@@ -91,6 +91,12 @@ export type DepositStatus =
   | "completed"
   | "failed";
 
+/** Who created a transaction: the bot (auto) or a person (manual). */
+export type TransactionSource = "bot" | "manual";
+
+/** A kiosk/account counts as online if pinged within this window. */
+export const HEARTBEAT_ONLINE_MS = 5 * 60 * 1000;
+
 export type Deposit = {
   deposit_id: number;
   external_id?: string | null;
@@ -110,6 +116,7 @@ export type Deposit = {
   total_amount: number;
   selected_game: string | null;
   status: DepositStatus;
+  source?: TransactionSource;
   matched_at?: string | null;
   handled_by_user_id?: number | null;
   game_topup_reference?: string | null;
@@ -128,6 +135,7 @@ export type Withdrawal = {
   game_name: string;
   credit_pulled_amount: number;
   status: WithdrawalStatus;
+  source?: TransactionSource;
   handled_by_user_id?: number | null;
   bank_name?: string | null;
   bank_account_number?: string | null;
@@ -172,6 +180,7 @@ export type BankAccount = {
   login_id?: string | null;
   login_password?: string | null;
   login_pin?: string | null;
+  last_heartbeat_at?: string | null;
   current_balance: number;
   status: "active" | "inactive";
   created_at: string;
@@ -207,6 +216,7 @@ export type ProviderBoAccount = {
   bo_password?: string | null;
   bo_pin?: string | null;
   bo_label?: string | null;
+  last_heartbeat_at?: string | null;
   current_credit: number;
   status: "active" | "inactive";
   notes?: string | null;

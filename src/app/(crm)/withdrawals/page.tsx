@@ -22,7 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { StatusBadge } from "@/components/status-badge";
+import { StatusBadge, SourceBadge } from "@/components/status-badge";
 import { PlayerNameLink } from "@/components/player-name-link";
 import { PullbackFlowModal } from "@/components/pullback-flow-modal";
 import {
@@ -385,7 +385,10 @@ export default function WithdrawalsPage() {
                         : "—"}
                     </td>
                     <td className="px-3 py-2">
-                      <StatusBadge status={w.status} />
+                      <div className="flex flex-col items-start gap-1">
+                        <StatusBadge status={w.status} />
+                        <SourceBadge source={w.source} />
+                      </div>
                     </td>
                     <td className="px-3 py-2 text-right">
                       {canPull && (

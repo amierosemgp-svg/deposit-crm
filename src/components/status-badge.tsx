@@ -51,3 +51,24 @@ export function StatusBadge({ status }: { status: Kind }) {
     </span>
   );
 }
+
+/** Marks whether a deposit/withdrawal was bot-detected ("Auto") or hand-entered ("Manual"). */
+export function SourceBadge({
+  source,
+}: {
+  source: "bot" | "manual" | null | undefined;
+}) {
+  const manual = source === "manual";
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium whitespace-nowrap",
+        manual
+          ? "bg-violet-500/10 text-violet-700 border-violet-500/30"
+          : "bg-sky-500/10 text-sky-700 border-sky-500/30",
+      )}
+    >
+      {manual ? "Manual" : "Auto"}
+    </span>
+  );
+}

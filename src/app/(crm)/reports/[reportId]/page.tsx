@@ -8,10 +8,15 @@ import {
   ArrowLeft,
   CheckCircle2,
   Download,
+  Gift,
+  Hash,
   Search,
+  Users,
+  Wallet,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
+import { StatTile } from "@/components/stat-tile";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -598,6 +603,79 @@ export default function ReportDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [def, filteredDeposits, filteredWithdrawals, companies, playerById, userById]);
 
+  // Summary tiles shown above the table for the transaction-style reports.
+  const summaryTiles: {
+    title: string;
+    value: string;
+    sub?: string;
+    icon: React.ComponentType<{ className?: string }>;
+  }[] = useMemo(() => {
+    const uniquePlayers = (ids: (number | null)[]) =>
+      new Set(ids.filter((x): x is number => x != null)).size;
+    if (!def) return [];
+    switch (def.id) {
+      case "daily_deposits": {
+        const total = filteredDeposits.reduce((s, d) => s + d.deposit_amount, 0);
+        return [
+          { title: "Total Deposit Amount", value: formatRM(total), icon: Wallet },
+          {
+            title: "Unique Players",
+            value: String(uniquePlayers(filteredDeposits.map((d) => d.player_id))),
+            sub: "deposited in this period",
+            icon: Users,
+          },
+          {
+            title: "Transactions",
+            value: filteredDeposits.length.toLocaleString(),
+            icon: Hash,
+          },
+        ];
+      }
+      case "daily_withdrawals": {
+        const total = filteredWithdrawals.reduce(
+          (s, w) => s + w.requested_amount,
+          0,
+        );
+        return [
+          { title: "Total Withdrawal Amount", value: formatRM(total), icon: Wallet },
+          {
+            title: "Unique Players",
+            value: String(
+              uniquePlayers(filteredWithdrawals.map((w) => w.player_id)),
+            ),
+            sub: "withdrew in this period",
+            icon: Users,
+          },
+          {
+            title: "Transactions",
+            value: filteredWithdrawals.length.toLocaleString(),
+            icon: Hash,
+          },
+        ];
+      }
+      case "bonus_payout": {
+        const withBonus = filteredDeposits.filter((d) => d.bonus_amount > 0);
+        const total = withBonus.reduce((s, d) => s + d.bonus_amount, 0);
+        return [
+          { title: "Total Bonus Amount", value: formatRM(total), icon: Gift },
+          {
+            title: "Unique Players",
+            value: String(uniquePlayers(withBonus.map((d) => d.player_id))),
+            sub: "claimed a bonus",
+            icon: Users,
+          },
+          {
+            title: "Bonus Transactions",
+            value: withBonus.length.toLocaleString(),
+            icon: Hash,
+          },
+        ];
+      }
+      default:
+        return [];
+    }
+  }, [def, filteredDeposits, filteredWithdrawals]);
+
   if (!def || !table) {
     return (
       <div className="space-y-4">
@@ -799,6 +877,21 @@ export default function ReportDetailPage() {
           </div>
         </div>
       </Card>
+
+      {/* Summary tiles */}
+      {summaryTiles.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {summaryTiles.map((t) => (
+            <StatTile
+              key={t.title}
+              title={t.title}
+              value={t.value}
+              sub={t.sub}
+              icon={t.icon}
+            />
+          ))}
+        </div>
+      )}
 
       {/* Data */}
       <Card className="p-0 gap-0 overflow-hidden">

@@ -23,6 +23,7 @@ import type { BankAccount, BankTransfer } from "@/lib/types";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/status-badge";
+import { HeartbeatDot } from "@/components/heartbeat-dot";
 import { BankAccountFormModal } from "@/components/bank-account-form-modal";
 import { BankTransferModal } from "@/components/bank-transfer-modal";
 import { cn } from "@/lib/utils";
@@ -516,7 +517,10 @@ export default function BankAccountsPage() {
                         </div>
                       </td>
                       <td className="px-3 py-2">
-                        <StatusBadge status={a.status} />
+                        <div className="flex flex-col items-start gap-1">
+                          <StatusBadge status={a.status} />
+                          <HeartbeatDot lastHeartbeatAt={a.last_heartbeat_at} />
+                        </div>
                       </td>
                       {canManage && (
                         <td className="px-3 py-2">

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { useStore } from "@/lib/store";
 import { formatRM, formatShortDateTime, formatRelative, initialsOf } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import {
   Sheet,
   SheetContent,
@@ -96,6 +97,19 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
     .filter((w) => w.player_id === playerId)
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
     .slice(0, 8);
+
+  // Profit for this player = deposits − withdrawals − bonuses (failed excluded).
+  // Expenses aren't attributable to a player, so they're not subtracted here.
+  const nonFailedDeposits = deposits.filter(
+    (d) => d.player_id === playerId && d.status !== "failed",
+  );
+  const nonFailedWithdrawals = withdrawals.filter(
+    (w) => w.player_id === playerId && w.status !== "failed",
+  );
+  const playerProfit =
+    nonFailedDeposits.reduce((s, d) => s + d.deposit_amount, 0) -
+    nonFailedWithdrawals.reduce((s, w) => s + w.requested_amount, 0) -
+    nonFailedDeposits.reduce((s, d) => s + d.bonus_amount, 0);
 
   const notesDirty = (player?.notes ?? "") !== notesDraft;
 
@@ -214,7 +228,7 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
                 </div>
               </div>
 
-              <div className="mt-4 grid grid-cols-2 gap-3">
+              <div className="mt-4 grid grid-cols-3 gap-3">
                 <div className="rounded-lg border bg-muted/30 p-3">
                   <div className="text-[11px] text-muted-foreground uppercase tracking-wide">
                     Lifetime Deposits
@@ -229,6 +243,19 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
                   </div>
                   <div className="text-lg font-semibold mt-0.5">
                     {formatRM(player.total_withdrawals)}
+                  </div>
+                </div>
+                <div className="rounded-lg border bg-muted/30 p-3">
+                  <div className="text-[11px] text-muted-foreground uppercase tracking-wide">
+                    Profit
+                  </div>
+                  <div
+                    className={cn(
+                      "text-lg font-semibold mt-0.5",
+                      playerProfit >= 0 ? "text-emerald-600" : "text-rose-600",
+                    )}
+                  >
+                    {formatRM(playerProfit)}
                   </div>
                 </div>
               </div>

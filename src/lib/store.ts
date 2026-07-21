@@ -128,6 +128,8 @@ type Store = {
     amount: number;
     bank_name: string;
     status?: "pending_match" | "pending";
+    selected_game?: string;
+    bonus_percentage?: number;
     receipt_url?: string;
   }) => Promise<MutationResult>;
   createWithdrawal: (input: {

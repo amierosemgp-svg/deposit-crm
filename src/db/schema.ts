@@ -31,6 +31,12 @@ export const activeStatusEnum = pgEnum("active_status", ["active", "inactive"]);
 
 export const playerStatusEnum = pgEnum("player_status", ["active", "suspended"]);
 
+/** Who created a transaction: the bot (auto-detected) or a person (manual). */
+export const transactionSourceEnum = pgEnum("transaction_source", [
+  "bot",
+  "manual",
+]);
+
 export const bankAccountRoleEnum = pgEnum("bank_account_role", [
   "deposit",
   "withdrawal",
@@ -167,6 +173,11 @@ export const bankAccounts = pgTable("bank_accounts", {
   login_id: varchar("login_id", { length: 80 }),
   login_password: varchar("login_password", { length: 120 }),
   login_pin: varchar("login_pin", { length: 20 }),
+  // Last time the AI bot pinged us for this account (heartbeat/online status).
+  last_heartbeat_at: timestamp("last_heartbeat_at", {
+    withTimezone: true,
+    mode: "string",
+  }),
   current_balance: numeric("current_balance", {
     precision: 14,
     scale: 2,
@@ -247,6 +258,8 @@ export const deposits = pgTable("deposits", {
     .default(0),
   selected_game: varchar("selected_game", { length: 60 }),
   status: depositStatusEnum("status").notNull().default("pending"),
+  // Bot-detected bank credits default to "bot"; CRM-entered deposits set "manual".
+  source: transactionSourceEnum("source").notNull().default("bot"),
   matched_at: timestamp("matched_at", { withTimezone: true, mode: "string" }),
   handled_by_user_id: integer("handled_by_user_id").references(() => users.user_id),
   game_topup_reference: varchar("game_topup_reference", { length: 80 }),
@@ -278,6 +291,8 @@ export const withdrawals = pgTable("withdrawals", {
     .notNull()
     .default(0),
   status: withdrawalStatusEnum("status").notNull().default("requested"),
+  // CS-entered requests default to "manual"; bot-created requests set "bot".
+  source: transactionSourceEnum("source").notNull().default("manual"),
   handled_by_user_id: integer("handled_by_user_id").references(() => users.user_id),
   bank_name: varchar("bank_name", { length: 60 }),
   bank_account_number: varchar("bank_account_number", { length: 60 }),
@@ -360,6 +375,11 @@ export const providerBoAccounts = pgTable("provider_bo_accounts", {
   bo_password: varchar("bo_password", { length: 120 }),
   bo_pin: varchar("bo_pin", { length: 20 }),
   bo_label: varchar("bo_label", { length: 60 }),
+  // Last time the AI bot pinged us for this kiosk (heartbeat/online status).
+  last_heartbeat_at: timestamp("last_heartbeat_at", {
+    withTimezone: true,
+    mode: "string",
+  }),
   current_credit: numeric("current_credit", {
     precision: 14,
     scale: 2,

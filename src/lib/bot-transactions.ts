@@ -186,6 +186,7 @@ export async function createBotWithdrawal(
       game_name: input.game_name,
       bank_name: input.bank_name,
       bank_account_number: input.bank_account_number,
+      source: "bot",
     })
     .returning();
 

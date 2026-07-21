@@ -19,16 +19,18 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { StatusBadge } from "@/components/status-badge";
+import { StatusBadge, SourceBadge } from "@/components/status-badge";
 import { PlayerNameLink } from "@/components/player-name-link";
 import { ApprovalFlowModal } from "@/components/approval-flow-modal";
 import { AssignPlayerSheet } from "@/components/assign-player-sheet";
+import { ManualDepositDialog } from "@/components/manual-deposit-dialog";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
 import {
   RefreshCw,
   Download,
   Filter,
+  Plus,
   Search,
   Zap,
   CheckCircle2,
@@ -80,6 +82,7 @@ export default function DepositsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [assignTargets, setAssignTargets] = useState<number[] | null>(null);
   const [bulkApproving, setBulkApproving] = useState(false);
+  const [manualDepositOpen, setManualDepositOpen] = useState(false);
 
   const scopedDeposits = useMemo(
     () =>
@@ -290,6 +293,15 @@ export default function DepositsPage() {
               </span>
               {pendingCount} pending approval
             </div>
+          )}
+          {!isViewer && (
+            <Button
+              onClick={() => setManualDepositOpen(true)}
+              className="cursor-pointer"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Manual deposit
+            </Button>
           )}
         </div>
       </div>
@@ -653,7 +665,10 @@ export default function DepositsPage() {
                         )}
                       </td>
                       <td className="px-3 py-2">
-                        <StatusBadge status={d.status} />
+                        <div className="flex flex-col items-start gap-1">
+                          <StatusBadge status={d.status} />
+                          <SourceBadge source={d.source} />
+                        </div>
                       </td>
                       <td className="px-3 py-2 text-right">
                         {actionable && !isViewer ? (
@@ -764,6 +779,11 @@ export default function DepositsPage() {
       />
 
       <ReceiptModal url={receiptUrl} onClose={() => setReceiptUrl(null)} />
+
+      <ManualDepositDialog
+        open={manualDepositOpen}
+        onOpenChange={setManualDepositOpen}
+      />
     </div>
   );
 }

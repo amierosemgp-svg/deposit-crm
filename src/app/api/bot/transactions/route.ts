@@ -293,6 +293,7 @@ export async function POST(request: Request) {
       received_into_account_id: account?.account_id ?? null,
       total_amount: input.amount,
       status: "pending",
+      source: "bot",
       receipt_url: input.receipt_url,
       created_at: nowIso,
       updated_at: nowIso,

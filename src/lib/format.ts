@@ -37,6 +37,15 @@ export function formatRelative(iso: string): string {
   return `${days}d ago`;
 }
 
+import { HEARTBEAT_ONLINE_MS } from "./types";
+
+/** True if a kiosk/bank last pinged within the online window. */
+export function isOnline(lastHeartbeatAt: string | null | undefined): boolean {
+  if (!lastHeartbeatAt) return false;
+  const t = new Date(lastHeartbeatAt).getTime();
+  return Number.isFinite(t) && Date.now() - t < HEARTBEAT_ONLINE_MS;
+}
+
 export function initialsOf(name: string): string {
   return name
     .split(" ")

@@ -294,6 +294,7 @@
         <p class="grp-label">Resources (CRUD)</p>
         <a href="#players">Players</a>
         <a href="#entities">Entities</a>
+        <a href="#heartbeat">Heartbeat</a>
         <a href="#bank-accounts">Bank accounts</a>
         <a href="#withdrawals">Withdrawals</a>
         <a href="#game-credits">Game credits</a>
@@ -772,6 +773,25 @@
       </section>
 
       <!-- BANK ACCOUNTS CRUD -->
+      <section id="heartbeat">
+        <h2>Resource</h2>
+        <div class="block-title">Heartbeat</div>
+        <div class="prose"><p>Report that a kiosk (provider back-office) login or a bank-account login is alive. Stamps <code>last_heartbeat_at = now</code>; the CRM shows the kiosk/account as <strong>online</strong> while the last ping is within ~5 minutes, else <strong>offline</strong>. Ping on a schedule (e.g. every 1–2 min) per active kiosk/account.</p></div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m post">Post</span><span class="ep-path">/api/bot/heartbeat</span><span class="use-tag">Ping</span></div>
+          <div class="ep-body">
+            <div class="prose"><p>Body: <code>{ "kind": "kiosk" | "bank_account", "id": &lt;number&gt; }</code> (<code>id</code> aliases <code>kiosk_id</code> / <code>bank_account_id</code>). Returns the updated record (now including <code>last_heartbeat_at</code>); <span class="sc warn">404</span> if the id doesn't exist.</p></div>
+            <div class="code" data-copy>
+              <button class="copy">Copy</button>
+              <pre><code><span class="k">curl</span> -X POST <span class="s">"$BASE/api/bot/heartbeat"</span> -H <span class="s">"X-API-Key: $KEY"</span> \
+  -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{ "kind": "kiosk", "id": 3 }'</span></code></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section id="bank-accounts">
         <h2>Resource</h2>
         <div class="block-title">Bank accounts</div>
