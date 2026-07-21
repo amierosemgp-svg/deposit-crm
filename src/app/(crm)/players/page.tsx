@@ -18,6 +18,8 @@ export default function PlayersPage() {
   const companiesFn = useStore((s) => s.companies);
   const me = useStore((s) => s.me);
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
+  const selectedLeaderId = useStore((s) => s.selectedLeaderId);
+  const companyInScope = useStore((s) => s.companyInScope);
   const [q, setQ] = useState("");
   const [importOpen, setImportOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
@@ -36,17 +38,14 @@ export default function PlayersPage() {
           p.full_name.toLowerCase().includes(q.toLowerCase()) ||
           p.username.toLowerCase().includes(q.toLowerCase()) ||
           p.telegram_username.toLowerCase().includes(q.toLowerCase());
-        const matchC =
-          selectedCompanyId === null ||
-          p.company_entity_id === selectedCompanyId;
-        return matchQ && matchC;
+        return matchQ && companyInScope(p.company_entity_id);
       }),
-    [players, q, selectedCompanyId],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [players, q, selectedCompanyId, selectedLeaderId],
   );
 
-  const inScopeTotal = players.filter(
-    (p) =>
-      selectedCompanyId === null || p.company_entity_id === selectedCompanyId,
+  const inScopeTotal = players.filter((p) =>
+    companyInScope(p.company_entity_id),
   ).length;
 
   return (

@@ -58,6 +58,8 @@ export default function WithdrawalsPage() {
   const uploadFile = useStore((s) => s.uploadFile);
   const me = useStore((s) => s.me);
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
+  const selectedLeaderId = useStore((s) => s.selectedLeaderId);
+  const companyInScope = useStore((s) => s.companyInScope);
   const companiesFn = useStore((s) => s.companies);
 
   const isViewer = me?.role === "viewer";
@@ -85,12 +87,11 @@ export default function WithdrawalsPage() {
 
   const scoped = useMemo(
     () =>
-      withdrawals.filter(
-        (w) =>
-          selectedCompanyId === null ||
-          playerById(w.player_id)?.company_entity_id === selectedCompanyId,
+      withdrawals.filter((w) =>
+        companyInScope(playerById(w.player_id)?.company_entity_id),
       ),
-    [withdrawals, selectedCompanyId, playerById],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [withdrawals, selectedCompanyId, selectedLeaderId, playerById],
   );
 
   // Search applied first; the status tabs show counts from this set.
@@ -150,13 +151,9 @@ export default function WithdrawalsPage() {
   );
 
   const eligiblePlayers = useMemo(
-    () =>
-      players.filter(
-        (p) =>
-          selectedCompanyId === null ||
-          p.company_entity_id === selectedCompanyId,
-      ),
-    [players, selectedCompanyId],
+    () => players.filter((p) => companyInScope(p.company_entity_id)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [players, selectedCompanyId, selectedLeaderId],
   );
 
   const payoutAccounts = bankAccounts.filter(

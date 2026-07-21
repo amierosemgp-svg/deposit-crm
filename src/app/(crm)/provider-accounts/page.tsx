@@ -42,6 +42,8 @@ export default function ProviderAccountsPage() {
   const adjustments = useStore((s) => s.boAdjustments);
   const deleteAccount = useStore((s) => s.deleteBoAccount);
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
+  const selectedLeaderId = useStore((s) => s.selectedLeaderId);
+  const companyInScope = useStore((s) => s.companyInScope);
   const entityName = useStore((s) => s.entityName);
   const userName = useStore((s) => s.userName);
   const games = useStore((s) => s.games)();
@@ -60,11 +62,7 @@ export default function ProviderAccountsPage() {
   const filtered = useMemo(
     () =>
       accounts
-        .filter(
-          (a) =>
-            selectedCompanyId === null ||
-            a.company_entity_id === selectedCompanyId,
-        )
+        .filter((a) => companyInScope(a.company_entity_id))
         .filter((a) => gameFilter === "all" || a.game_name === gameFilter)
         .sort(
           (a, b) =>
@@ -72,7 +70,8 @@ export default function ProviderAccountsPage() {
             a.game_name.localeCompare(b.game_name) ||
             a.bo_username.localeCompare(b.bo_username),
         ),
-    [accounts, selectedCompanyId, gameFilter],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [accounts, selectedCompanyId, selectedLeaderId, gameFilter],
   );
 
   const activeCompanyName =

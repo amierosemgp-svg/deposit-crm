@@ -60,6 +60,8 @@ export default function DepositsPage() {
   const me = useStore((s) => s.me);
   const hydrated = useStore((s) => s.hydrated);
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
+  const selectedLeaderId = useStore((s) => s.selectedLeaderId);
+  const companyInScope = useStore((s) => s.companyInScope);
   const updateDraft = useStore((s) => s.updateDepositDraft);
   const approveDeposit = useStore((s) => s.approveDeposit);
   const reprocessDeposit = useStore((s) => s.reprocessDeposit);
@@ -88,12 +90,11 @@ export default function DepositsPage() {
     () =>
       deposits.filter(
         (d) =>
-          selectedCompanyId === null ||
           // Unmatched bot deposits have no company yet — keep them visible so they can be assigned.
-          d.company_entity_id === null ||
-          d.company_entity_id === selectedCompanyId,
+          d.company_entity_id === null || companyInScope(d.company_entity_id),
       ),
-    [deposits, selectedCompanyId],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [deposits, selectedCompanyId, selectedLeaderId],
   );
 
   // Bank + search applied first; the status tabs show counts from this set.

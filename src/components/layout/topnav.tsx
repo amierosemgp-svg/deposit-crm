@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeftRight, Bell, LogOut, Search, Wallet } from "lucide-react";
+import { ArrowLeftRight, Bell, LogOut, Wallet } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,7 +21,6 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { initialsOf, formatRelative, formatRM } from "@/lib/format";
 import { useStore } from "@/lib/store";
-import { usePlayerProfile } from "@/components/player-name-link";
 import type { UserRole } from "@/lib/types";
 
 const ROLE_LABELS: Record<UserRole, string> = {
@@ -33,15 +32,15 @@ const ROLE_LABELS: Record<UserRole, string> = {
 
 export function TopNav() {
   const router = useRouter();
-  const { openPlayer } = usePlayerProfile();
 
   const me = useStore((s) => s.me);
   const entities = useStore((s) => s.entities);
-  const players = useStore((s) => s.players);
   const bankAccounts = useStore((s) => s.bankAccounts);
   const bankTransfers = useStore((s) => s.bankTransfers);
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
   const setSelectedCompanyId = useStore((s) => s.setSelectedCompanyId);
+  const selectedLeaderId = useStore((s) => s.selectedLeaderId);
+  const setSelectedLeaderId = useStore((s) => s.setSelectedLeaderId);
   const notifications = useStore((s) => s.notifications);
   const clearNotifications = useStore((s) => s.clearNotifications);
   const logout = useStore((s) => s.logout);
@@ -53,6 +52,21 @@ export function TopNav() {
   );
   const mainEntity = entities.find((e) => e.entity_type === "main_company");
 
+  // "View as leader" — only the main-company super admin sees this. It scopes
+  // the whole CRM to a leader's companies and narrows the company dropdown.
+  const leaders = useMemo(
+    () => entities.filter((e) => e.entity_type === "leader"),
+    [entities],
+  );
+  const showLeaderSelect = me?.role === "super_admin" && leaders.length > 0;
+  const visibleCompanies = useMemo(
+    () =>
+      selectedLeaderId === null
+        ? companies
+        : companies.filter((c) => c.leader_entity_id === selectedLeaderId),
+    [companies, selectedLeaderId],
+  );
+
   // Incoming bank transfers waiting for our confirmation (bankAccounts are
   // already scoped server-side to what this user can see).
   const pendingIncoming = useMemo(() => {
@@ -63,28 +77,13 @@ export function TopNav() {
     );
   }, [bankAccounts, bankTransfers]);
 
-  // --- global player search ---
-  const [query, setQuery] = useState("");
-  const [searchFocused, setSearchFocused] = useState(false);
-  const searchResults = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return [];
-    return players
-      .filter(
-        (p) =>
-          p.full_name.toLowerCase().includes(q) ||
-          p.username.toLowerCase().includes(q) ||
-          (p.telegram_username ?? "").toLowerCase().includes(q),
-      )
-      .slice(0, 8);
-  }, [players, query]);
-  const searchOpen = searchFocused && query.trim().length > 0;
-
   const companyValue =
     selectedCompanyId === null ? "all" : String(selectedCompanyId);
   const companyLabel =
     selectedCompanyId === null
-      ? "All Companies"
+      ? selectedLeaderId === null
+        ? "All Companies"
+        : "All (this leader)"
       : companies.find((c) => c.company_id === selectedCompanyId)
           ?.company_name ?? "All Companies";
 
@@ -105,7 +104,7 @@ export function TopNav() {
           </div>
         </div>
 
-        {companies.length > 1 && (
+        {(companies.length > 1 || selectedLeaderId !== null) && (
           <div className="w-52">
             <Select
               value={companyValue}
@@ -119,8 +118,10 @@ export function TopNav() {
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All Companies</SelectItem>
-                {companies.map((c) => (
+                <SelectItem value="all">
+                  {selectedLeaderId === null ? "All Companies" : "All (this leader)"}
+                </SelectItem>
+                {visibleCompanies.map((c) => (
                   <SelectItem key={c.company_id} value={String(c.company_id)}>
                     {c.company_name}
                   </SelectItem>
@@ -130,59 +131,31 @@ export function TopNav() {
           </div>
         )}
 
-        <div className="relative flex-1 max-w-md">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <input
-            type="search"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onFocus={() => setSearchFocused(true)}
-            onBlur={() => setSearchFocused(false)}
-            placeholder="Search players by name or username…"
-            className="h-9 w-full rounded-md border border-input bg-background pl-9 pr-3 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/30"
-          />
-          {searchOpen && (
-            <div className="absolute left-0 right-0 top-full z-50 mt-1 overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-md">
-              {searchResults.length === 0 ? (
-                <div className="px-3 py-3 text-center text-xs text-muted-foreground">
-                  No players match “{query.trim()}”
-                </div>
-              ) : (
-                <div className="max-h-80 overflow-y-auto py-1">
-                  {searchResults.map((p) => (
-                    <button
-                      key={p.player_id}
-                      type="button"
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        openPlayer(p.player_id);
-                        setQuery("");
-                        setSearchFocused(false);
-                      }}
-                      className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left hover:bg-muted/60"
-                    >
-                      <Avatar className="h-6 w-6">
-                        <AvatarFallback className="text-[10px]">
-                          {initialsOf(p.full_name)}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-xs font-medium">
-                          {p.full_name}
-                        </div>
-                        <div className="truncate text-[10px] text-muted-foreground">
-                          @{p.username}
-                        </div>
-                      </div>
-                    </button>
+        <div className="ml-auto flex items-center gap-2">
+          {showLeaderSelect && (
+            <div className="w-44">
+              <Select
+                value={
+                  selectedLeaderId === null ? "all" : String(selectedLeaderId)
+                }
+                onValueChange={(v) =>
+                  setSelectedLeaderId(!v || v === "all" ? null : Number(v))
+                }
+              >
+                <SelectTrigger className="h-9 w-full cursor-pointer">
+                  <SelectValue placeholder="All Leaders" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Leaders</SelectItem>
+                  {leaders.map((l) => (
+                    <SelectItem key={l.entity_id} value={String(l.entity_id)}>
+                      {l.name}
+                    </SelectItem>
                   ))}
-                </div>
-              )}
+                </SelectContent>
+              </Select>
             </div>
           )}
-        </div>
-
-        <div className="ml-auto flex items-center gap-1.5">
           <DropdownMenu>
             <DropdownMenuTrigger
               render={(props) => (

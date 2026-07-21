@@ -36,6 +36,8 @@ export default function GameTransferPage() {
   const gamesFn = useStore((s) => s.games);
   const me = useStore((s) => s.me);
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
+  const selectedLeaderId = useStore((s) => s.selectedLeaderId);
+  const companyInScope = useStore((s) => s.companyInScope);
 
   const isViewer = me?.role === "viewer";
   const games = gamesFn();
@@ -53,20 +55,19 @@ export default function GameTransferPage() {
         (p) =>
           (p.full_name.toLowerCase().includes(q) ||
             p.username.toLowerCase().includes(q)) &&
-          (selectedCompanyId === null ||
-            p.company_entity_id === selectedCompanyId),
+          companyInScope(p.company_entity_id),
       )
       .slice(0, 5);
-  }, [playerQuery, players, selectedCompanyId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playerQuery, players, selectedCompanyId, selectedLeaderId]);
 
   const scopedTransfers = useMemo(
     () =>
-      transfers.filter(
-        (t) =>
-          selectedCompanyId === null ||
-          playerById(t.player_id)?.company_entity_id === selectedCompanyId,
+      transfers.filter((t) =>
+        companyInScope(playerById(t.player_id)?.company_entity_id),
       ),
-    [transfers, selectedCompanyId, playerById],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [transfers, selectedCompanyId, selectedLeaderId, playerById],
   );
 
   const player = playerId ? playerById(playerId) : undefined;

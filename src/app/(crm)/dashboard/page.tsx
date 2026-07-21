@@ -73,6 +73,8 @@ export default function DashboardPage() {
   const expenses = useStore((s) => s.expenses);
   const userName = useStore((s) => s.userName);
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
+  const selectedLeaderId = useStore((s) => s.selectedLeaderId);
+  const companyInScope = useStore((s) => s.companyInScope);
 
   const today = new Date();
   const [dateFrom, setDateFrom] = useState(todayStr());
@@ -84,49 +86,37 @@ export default function DashboardPage() {
   );
 
   const scopedDeposits = useMemo(
-    () =>
-      selectedCompanyId === null
-        ? deposits
-        : deposits.filter((d) => d.company_entity_id === selectedCompanyId),
-    [deposits, selectedCompanyId],
+    () => deposits.filter((d) => companyInScope(d.company_entity_id)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [deposits, selectedCompanyId, selectedLeaderId],
   );
   const scopedWithdrawals = useMemo(
     () =>
-      selectedCompanyId === null
-        ? withdrawals
-        : withdrawals.filter(
-            (w) =>
-              playerMap.get(w.player_id)?.company_entity_id === selectedCompanyId,
-          ),
-    [withdrawals, playerMap, selectedCompanyId],
+      withdrawals.filter((w) =>
+        companyInScope(playerMap.get(w.player_id)?.company_entity_id),
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [withdrawals, playerMap, selectedCompanyId, selectedLeaderId],
   );
   const scopedPlayers = useMemo(
-    () =>
-      selectedCompanyId === null
-        ? players
-        : players.filter((p) => p.company_entity_id === selectedCompanyId),
-    [players, selectedCompanyId],
+    () => players.filter((p) => companyInScope(p.company_entity_id)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [players, selectedCompanyId, selectedLeaderId],
   );
   const scopedBoAccounts = useMemo(
-    () =>
-      selectedCompanyId === null
-        ? boAccounts
-        : boAccounts.filter((b) => b.company_entity_id === selectedCompanyId),
-    [boAccounts, selectedCompanyId],
+    () => boAccounts.filter((b) => companyInScope(b.company_entity_id)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [boAccounts, selectedCompanyId, selectedLeaderId],
   );
   const scopedBankAccounts = useMemo(
-    () =>
-      selectedCompanyId === null
-        ? bankAccounts
-        : bankAccounts.filter((a) => a.entity_id === selectedCompanyId),
-    [bankAccounts, selectedCompanyId],
+    () => bankAccounts.filter((a) => companyInScope(a.entity_id)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [bankAccounts, selectedCompanyId, selectedLeaderId],
   );
   const scopedExpenses = useMemo(
-    () =>
-      selectedCompanyId === null
-        ? expenses
-        : expenses.filter((e) => e.company_entity_id === selectedCompanyId),
-    [expenses, selectedCompanyId],
+    () => expenses.filter((e) => companyInScope(e.company_entity_id)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [expenses, selectedCompanyId, selectedLeaderId],
   );
 
   // --- Range-scoped money (deposits by deposit_date, withdrawals/expenses by their date) ---

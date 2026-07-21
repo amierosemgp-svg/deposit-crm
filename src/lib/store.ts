@@ -98,6 +98,15 @@ type Store = {
   /** Company selector in the top nav — null = all visible companies. */
   selectedCompanyId: number | null;
   setSelectedCompanyId: (companyId: number | null) => void;
+  /** "View as leader" selector (main-company only) — null = all leaders. */
+  selectedLeaderId: number | null;
+  setSelectedLeaderId: (leaderId: number | null) => void;
+  /**
+   * Is a company within the current top-nav scope? A specific company wins;
+   * otherwise a selected leader constrains to its companies; otherwise all.
+   * `null` company (e.g. unmatched deposits) is never in a narrowed scope.
+   */
+  companyInScope: (companyId: number | null | undefined) => boolean;
 
   // --- hydration ---
   refresh: () => Promise<void>;
@@ -336,6 +345,31 @@ export const useStore = create<Store>((set, get) => {
     notifications: [],
     selectedCompanyId: null,
     setSelectedCompanyId: (companyId) => set({ selectedCompanyId: companyId }),
+    selectedLeaderId: null,
+    setSelectedLeaderId: (leaderId) => {
+      // Drop a company selection that no longer belongs to the chosen leader.
+      const { selectedCompanyId } = get();
+      let nextCompany = selectedCompanyId;
+      if (leaderId != null && selectedCompanyId != null) {
+        const comp = get()
+          .companies()
+          .find((c) => c.company_id === selectedCompanyId);
+        if (comp?.leader_entity_id !== leaderId) nextCompany = null;
+      }
+      set({ selectedLeaderId: leaderId, selectedCompanyId: nextCompany });
+    },
+    companyInScope: (companyId) => {
+      const { selectedCompanyId, selectedLeaderId } = get();
+      if (selectedCompanyId != null) return companyId === selectedCompanyId;
+      if (selectedLeaderId != null) {
+        if (companyId == null) return false;
+        const comp = get()
+          .companies()
+          .find((c) => c.company_id === companyId);
+        return comp?.leader_entity_id === selectedLeaderId;
+      }
+      return true;
+    },
 
     refresh: async () => {
       const res = await api<StateResponse>("/api/state");

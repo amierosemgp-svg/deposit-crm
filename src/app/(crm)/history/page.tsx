@@ -97,6 +97,8 @@ export default function HistoryPage() {
   const userName = useStore((s) => s.userName);
   const companiesFn = useStore((s) => s.companies);
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
+  const selectedLeaderId = useStore((s) => s.selectedLeaderId);
+  const companyInScope = useStore((s) => s.companyInScope);
   const [type, setType] = useState<string>("all");
   const [q, setQ] = useState("");
 
@@ -109,11 +111,11 @@ export default function HistoryPage() {
       b.created_at.localeCompare(a.created_at),
     );
     return sorted
-      .filter(
-        (e) =>
-          selectedCompanyId === null ||
-          (e.player_id != null &&
-            playerById(e.player_id)?.company_entity_id === selectedCompanyId),
+      .filter((e) =>
+        // Entries with no player (system events) stay visible in every scope.
+        e.player_id == null
+          ? selectedCompanyId === null && selectedLeaderId === null
+          : companyInScope(playerById(e.player_id)?.company_entity_id),
       )
       .filter((e) => type === "all" || e.type === type)
       .filter((e) => {
@@ -123,7 +125,8 @@ export default function HistoryPage() {
           `${referenceOf(e)} ${p?.full_name ?? ""} ${p?.username ?? ""}`.toLowerCase();
         return hay.includes(q.toLowerCase());
       });
-  }, [auditLog, selectedCompanyId, type, q, playerById]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auditLog, selectedCompanyId, selectedLeaderId, type, q, playerById]);
 
   return (
     <div className="space-y-5">

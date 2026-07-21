@@ -29,7 +29,7 @@ export function ManualDepositDialog({ open, onOpenChange }: Props) {
   const bonusOptionsFn = useStore((s) => s.bonusOptions);
   const createDepositIntent = useStore((s) => s.createDepositIntent);
   const uploadFile = useStore((s) => s.uploadFile);
-  const selectedCompanyId = useStore((s) => s.selectedCompanyId);
+  const companyInScope = useStore((s) => s.companyInScope);
 
   const banks = banksFn();
   const bonusOptions = bonusOptionsFn();
@@ -61,10 +61,9 @@ export function ManualDepositDialog({ open, onOpenChange }: Props) {
     }
   }
 
-  const eligiblePlayers =
-    selectedCompanyId === null
-      ? players
-      : players.filter((p) => p.company_entity_id === selectedCompanyId);
+  const eligiblePlayers = players.filter((p) =>
+    companyInScope(p.company_entity_id),
+  );
   const playerGames = (player?.game_accounts ?? []).map((g) => g.game_name);
 
   const amt = Number.parseFloat(amount);

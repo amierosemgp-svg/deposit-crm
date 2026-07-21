@@ -79,6 +79,8 @@ export default function BankAccountsPage() {
   const confirmTransfer = useStore((s) => s.confirmBankTransfer);
   const rejectTransfer = useStore((s) => s.rejectBankTransfer);
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
+  const selectedLeaderId = useStore((s) => s.selectedLeaderId);
+  const companyInScope = useStore((s) => s.companyInScope);
 
   const [formOpen, setFormOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<BankAccount | null>(null);
@@ -102,14 +104,13 @@ export default function BankAccountsPage() {
   const filteredAccounts = useMemo(
     () =>
       accounts
-        .filter(
-          (a) => selectedCompanyId === null || a.entity_id === selectedCompanyId,
-        )
+        .filter((a) => companyInScope(a.entity_id))
         .sort(
           (a, b) =>
             a.entity_id - b.entity_id || a.bank_name.localeCompare(b.bank_name),
         ),
-    [accounts, selectedCompanyId],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [accounts, selectedCompanyId, selectedLeaderId],
   );
 
   // Group by entity, preserving sorted order
