@@ -16,6 +16,7 @@ import {
   KeyRound,
   ChevronRight,
   Receipt,
+  Bot,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useStore } from "@/lib/store";
@@ -28,6 +29,7 @@ const NAV = [
   { href: "/withdrawals", label: "Withdrawals", icon: Banknote, badge: "pending_withdrawals" as const },
   { href: "/bank-accounts", label: "Bank Accounts", icon: Landmark },
   { href: "/provider-accounts", label: "Provider BO Accounts", icon: KeyRound },
+  { href: "/bot-health", label: "Bot Health", icon: Bot },
   { href: "/game-transfer", label: "Game Credit Transfer", icon: ArrowLeftRight },
   { href: "/history", label: "Transaction History", icon: History },
   { href: "/reports", label: "Reports", icon: BarChart3 },

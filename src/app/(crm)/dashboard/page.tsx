@@ -2,12 +2,14 @@
 
 import { useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
-import { formatRM, formatDateTime, isOnline } from "@/lib/format";
+import Link from "next/link";
+import { formatRM, formatDateTime, isBotOnline } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { StatTile } from "@/components/stat-tile";
 import { StatusBadge } from "@/components/status-badge";
 import { PlayerNameLink } from "@/components/player-name-link";
+import { cn } from "@/lib/utils";
 import {
   Wallet,
   Clock,
@@ -16,8 +18,7 @@ import {
   TrendingUp,
   Coins,
   Loader2,
-  KeyRound,
-  Landmark,
+  Bot,
   ArrowUpRight,
   ArrowDownRight,
 } from "lucide-react";
@@ -77,8 +78,8 @@ export default function DashboardPage() {
   const players = useStore((s) => s.players);
   const entities = useStore((s) => s.entities);
   const boAccounts = useStore((s) => s.boAccounts);
-  const bankAccounts = useStore((s) => s.bankAccounts);
   const expenses = useStore((s) => s.expenses);
+  const botHealth = useStore((s) => s.botHealth);
   const userName = useStore((s) => s.userName);
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
   const selectedLeaderId = useStore((s) => s.selectedLeaderId);
@@ -115,11 +116,6 @@ export default function DashboardPage() {
     () => boAccounts.filter((b) => companyInScope(b.company_entity_id)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [boAccounts, selectedCompanyId, selectedLeaderId],
-  );
-  const scopedBankAccounts = useMemo(
-    () => bankAccounts.filter((a) => companyInScope(a.entity_id)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [bankAccounts, selectedCompanyId, selectedLeaderId],
   );
   const scopedExpenses = useMemo(
     () => expenses.filter((e) => companyInScope(e.company_entity_id)),
@@ -174,11 +170,15 @@ export default function DashboardPage() {
     (sum, b) => sum + b.current_credit,
     0,
   );
-  const kiosksOnline = scopedBoAccounts.filter((b) =>
-    isOnline(b.last_heartbeat_at),
+
+  // Bot process health (system-wide, not company-scoped).
+  const botsOnline = botHealth.filter((b) =>
+    isBotOnline(b.last_heartbeat_at),
   ).length;
-  const banksOnline = scopedBankAccounts.filter((a) =>
-    isOnline(a.last_heartbeat_at),
+  const botsAttention = botHealth.filter(
+    (b) =>
+      isBotOnline(b.last_heartbeat_at) &&
+      (b.state === "stuck" || b.state === "error"),
   ).length;
 
   const recentDeposits = [...rangeDeposits]
@@ -296,7 +296,7 @@ export default function DashboardPage() {
         <StatTile
           title="Kiosk Points"
           value={formatRM(kioskPoints)}
-          sub={`${scopedBoAccounts.length} kiosk${scopedBoAccounts.length === 1 ? "" : "s"} · ${kiosksOnline} online`}
+          sub={`${scopedBoAccounts.length} kiosk${scopedBoAccounts.length === 1 ? "" : "s"}`}
           icon={Coins}
         />
       </div>
@@ -322,40 +322,41 @@ export default function DashboardPage() {
           sub={`${scopedPlayers.length} total`}
           icon={Users}
         />
-        <Card className="gap-2 py-4">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1 px-5">
-            <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-              System Status
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="px-5 space-y-1.5">
-            <div className="flex items-center justify-between text-sm">
-              <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-                <KeyRound className="h-3.5 w-3.5" /> Kiosks
-              </span>
-              <span className="font-medium tabular-nums">
-                <span className={statusColor(kiosksOnline, scopedBoAccounts.length)}>
-                  {kiosksOnline}
+        <Link href="/bot-health" className="cursor-pointer">
+          <Card className="gap-2 py-4 h-full transition-colors hover:border-primary/40">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1 px-5">
+              <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                Bot Health
+              </CardTitle>
+              <Bot className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent className="px-5 space-y-1.5">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">Online</span>
+                <span className="font-medium tabular-nums">
+                  <span className={statusColor(botsOnline, botHealth.length)}>
+                    {botsOnline}
+                  </span>
+                  <span className="text-muted-foreground"> / {botHealth.length}</span>
                 </span>
-                <span className="text-muted-foreground"> / {scopedBoAccounts.length}</span>
-              </span>
-            </div>
-            <div className="flex items-center justify-between text-sm">
-              <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-                <Landmark className="h-3.5 w-3.5" /> Bank accounts
-              </span>
-              <span className="font-medium tabular-nums">
-                <span className={statusColor(banksOnline, scopedBankAccounts.length)}>
-                  {banksOnline}
+              </div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">Needs attention</span>
+                <span
+                  className={cn(
+                    "font-medium tabular-nums",
+                    botsAttention > 0 ? "text-amber-600" : "text-muted-foreground",
+                  )}
+                >
+                  {botsAttention}
                 </span>
-                <span className="text-muted-foreground"> / {scopedBankAccounts.length}</span>
-              </span>
-            </div>
-            <p className="text-[10px] text-muted-foreground pt-0.5">
-              Online = bot pinged &lt; 5 min ago
-            </p>
-          </CardContent>
-        </Card>
+              </div>
+              <p className="text-[10px] text-muted-foreground pt-0.5">
+                Online = pinged &lt; 90s ago · click to view
+              </p>
+            </CardContent>
+          </Card>
+        </Link>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

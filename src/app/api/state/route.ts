@@ -3,6 +3,7 @@ import { db } from "@/db";
 import {
   bankAccounts,
   bankTransfers,
+  botHealth,
   deposits,
   expenses,
   gameCredits,
@@ -170,6 +171,12 @@ export async function GET() {
       [...scopedBankTransfers, ...inboundIds].map((t) => [t.transfer_id, t]),
     );
 
+    // Bot process health — system-wide, shown to any authed user.
+    const bots = await db
+      .select()
+      .from(botHealth)
+      .orderBy(desc(botHealth.last_heartbeat_at));
+
     // Operational expenses are admin-only.
     const scopedExpenses =
       user.role === "super_admin"
@@ -206,6 +213,7 @@ export async function GET() {
       boAccounts: scopedBoAccounts,
       boAdjustments: scopedAdjustments,
       expenses: scopedExpenses,
+      botHealth: bots,
       auditLog,
       settings: Object.fromEntries(allSettings.map((s) => [s.key, s.value])),
     });

@@ -37,13 +37,20 @@ export function formatRelative(iso: string): string {
   return `${days}d ago`;
 }
 
-import { HEARTBEAT_ONLINE_MS } from "./types";
+import { HEARTBEAT_ONLINE_MS, BOT_ONLINE_MS } from "./types";
 
 /** True if a kiosk/bank last pinged within the online window. */
 export function isOnline(lastHeartbeatAt: string | null | undefined): boolean {
   if (!lastHeartbeatAt) return false;
   const t = new Date(lastHeartbeatAt).getTime();
   return Number.isFinite(t) && Date.now() - t < HEARTBEAT_ONLINE_MS;
+}
+
+/** True if a bot pinged within the 90s online window. */
+export function isBotOnline(lastHeartbeatAt: string | null | undefined): boolean {
+  if (!lastHeartbeatAt) return false;
+  const t = new Date(lastHeartbeatAt).getTime();
+  return Number.isFinite(t) && Date.now() - t < BOT_ONLINE_MS;
 }
 
 export function initialsOf(name: string): string {

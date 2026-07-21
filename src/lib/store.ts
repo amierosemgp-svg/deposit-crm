@@ -7,6 +7,7 @@ import type {
   BankAccount,
   BankTransfer,
   CompanyView,
+  BotHealth,
   Deposit,
   Entity,
   Expense,
@@ -72,6 +73,7 @@ type StateResponse = {
   boAccounts: ProviderBoAccount[];
   boAdjustments: ProviderBoAdjustment[];
   expenses: Expense[];
+  botHealth: BotHealth[];
   auditLog: AuditEntry[];
   settings: ServerSettings;
 };
@@ -91,6 +93,7 @@ type Store = {
   boAccounts: ProviderBoAccount[];
   boAdjustments: ProviderBoAdjustment[];
   expenses: Expense[];
+  botHealth: BotHealth[];
   auditLog: AuditEntry[];
   settings: ServerSettings;
   notifications: Notification[];
@@ -340,6 +343,7 @@ export const useStore = create<Store>((set, get) => {
     boAccounts: [],
     boAdjustments: [],
     expenses: [],
+    botHealth: [],
     auditLog: [],
     settings: {},
     notifications: [],

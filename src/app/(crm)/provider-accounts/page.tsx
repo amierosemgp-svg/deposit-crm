@@ -18,7 +18,6 @@ import type { ProviderBoAccount } from "@/lib/types";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/status-badge";
-import { HeartbeatDot } from "@/components/heartbeat-dot";
 import {
   Select,
   SelectContent,
@@ -343,10 +342,7 @@ export default function ProviderAccountsPage() {
                       )}
                     </td>
                     <td className="px-3 py-2">
-                      <div className="flex flex-col items-start gap-1">
-                        <StatusBadge status={a.status} />
-                        <HeartbeatDot lastHeartbeatAt={a.last_heartbeat_at} />
-                      </div>
+                      <StatusBadge status={a.status} />
                     </td>
                     {canManage && (
                       <td className="px-3 py-2">

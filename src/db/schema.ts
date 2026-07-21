@@ -37,6 +37,17 @@ export const transactionSourceEnum = pgEnum("transaction_source", [
   "manual",
 ]);
 
+/** Reported run-state of a bot process (see bot_health). */
+export const botStateEnum = pgEnum("bot_state", [
+  "starting",
+  "working",
+  "idle",
+  "stuck",
+  "error",
+  "maintenance",
+  "stopped",
+]);
+
 export const bankAccountRoleEnum = pgEnum("bank_account_role", [
   "deposit",
   "withdrawal",
@@ -454,6 +465,35 @@ export const expenses = pgTable("expenses", {
     .references(() => users.user_id),
   notes: text("notes"),
   created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .notNull()
+    .defaultNow(),
+});
+
+// ---------- Bot health ----------
+
+/**
+ * Latest reported health per bot process. Bots POST /api/bot/heartbeat every
+ * ~30s; one row per bot_id, newest heartbeat wins. `online` is derived (not
+ * stored) from how recent `last_heartbeat_at` is.
+ */
+export const botHealth = pgTable("bot_health", {
+  bot_id: varchar("bot_id", { length: 80 }).primaryKey(),
+  state: botStateEnum("state").notNull(),
+  step: varchar("step", { length: 120 }),
+  error: text("error"),
+  cycle: integer("cycle"),
+  last_transaction_at: timestamp("last_transaction_at", {
+    withTimezone: true,
+    mode: "string",
+  }),
+  last_heartbeat_at: timestamp("last_heartbeat_at", {
+    withTimezone: true,
+    mode: "string",
+  }).notNull(),
+  first_seen: timestamp("first_seen", { withTimezone: true, mode: "string" })
+    .notNull()
+    .defaultNow(),
+  updated_at: timestamp("updated_at", { withTimezone: true, mode: "string" })
     .notNull()
     .defaultNow(),
 });

@@ -1,23 +1,31 @@
-import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { bankAccounts, providerBoAccounts } from "@/db/schema";
+import { botHealth } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
-import { bankAccountJson, jsonError, kioskJson } from "@/lib/bot-crud";
+import { jsonError } from "@/lib/bot-crud";
 
 const schema = z.object({
-  kind: z.enum(["kiosk", "bank_account"]),
-  // accept `id`, or the kind-specific alias
-  id: z.number().int().positive().optional(),
-  kiosk_id: z.number().int().positive().optional(),
-  bank_account_id: z.number().int().positive().optional(),
+  bot_id: z.string().min(1).max(80),
+  state: z.enum([
+    "starting",
+    "working",
+    "idle",
+    "stuck",
+    "error",
+    "maintenance",
+    "stopped",
+  ]),
+  step: z.string().max(120).nullish(),
+  error: z.string().nullish(),
+  cycle: z.number().int().nullish(),
+  last_transaction_at: z.string().nullish(),
+  ts: z.string().nullish(),
 });
 
 /**
- * POST /api/bot/heartbeat — the bot pings this to report that a kiosk login or
- * bank-account login is alive. Stamps `last_heartbeat_at = now`; the CRM shows
- * the kiosk/account as online while the last ping is recent (< ~5 min).
- *   { "kind": "kiosk", "id": 3 }  |  { "kind": "bank_account", "id": 5 }
+ * POST /api/bot/heartbeat — a bot process reports its health (~every 30s).
+ * Upsert by bot_id, newest heartbeat wins; first_seen is set once on insert.
+ * `last_heartbeat_at` is the reported `ts` (or server now if omitted).
  */
 export async function POST(request: Request) {
   const auth = await requireBotKey(request);
@@ -27,29 +35,36 @@ export async function POST(request: Request) {
   if (!parsed.success) {
     return jsonError(parsed.error.issues[0]?.message ?? "Invalid payload");
   }
-  const { kind } = parsed.data;
-  const id =
-    parsed.data.id ??
-    (kind === "kiosk" ? parsed.data.kiosk_id : parsed.data.bank_account_id);
-  if (!id) return jsonError("An id is required");
-
+  const b = parsed.data;
   const nowIso = new Date().toISOString();
+  const lastHeartbeat = b.ts ?? nowIso;
 
-  if (kind === "kiosk") {
-    const [row] = await db
-      .update(providerBoAccounts)
-      .set({ last_heartbeat_at: nowIso })
-      .where(eq(providerBoAccounts.bo_account_id, id))
-      .returning();
-    if (!row) return jsonError("Kiosk not found", 404);
-    return Response.json({ kiosk: kioskJson(row) });
-  }
+  await db
+    .insert(botHealth)
+    .values({
+      bot_id: b.bot_id,
+      state: b.state,
+      step: b.step ?? null,
+      error: b.error ?? null,
+      cycle: b.cycle ?? null,
+      last_transaction_at: b.last_transaction_at ?? null,
+      last_heartbeat_at: lastHeartbeat,
+      first_seen: nowIso,
+      updated_at: nowIso,
+    })
+    .onConflictDoUpdate({
+      target: botHealth.bot_id,
+      set: {
+        state: b.state,
+        step: b.step ?? null,
+        error: b.error ?? null,
+        cycle: b.cycle ?? null,
+        last_transaction_at: b.last_transaction_at ?? null,
+        last_heartbeat_at: lastHeartbeat,
+        updated_at: nowIso,
+        // first_seen intentionally not updated — preserves the original.
+      },
+    });
 
-  const [row] = await db
-    .update(bankAccounts)
-    .set({ last_heartbeat_at: nowIso })
-    .where(eq(bankAccounts.account_id, id))
-    .returning();
-  if (!row) return jsonError("Bank account not found", 404);
-  return Response.json({ bank_account: bankAccountJson(row) });
+  return Response.json({ ok: true });
 }

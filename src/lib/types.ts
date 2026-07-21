@@ -97,6 +97,30 @@ export type TransactionSource = "bot" | "manual";
 /** A kiosk/account counts as online if pinged within this window. */
 export const HEARTBEAT_ONLINE_MS = 5 * 60 * 1000;
 
+export type BotState =
+  | "starting"
+  | "working"
+  | "idle"
+  | "stuck"
+  | "error"
+  | "maintenance"
+  | "stopped";
+
+export type BotHealth = {
+  bot_id: string;
+  state: BotState;
+  step?: string | null;
+  error?: string | null;
+  cycle?: number | null;
+  last_transaction_at?: string | null;
+  last_heartbeat_at: string;
+  first_seen: string;
+  updated_at: string;
+};
+
+/** A bot counts as online if it pinged within this window (spec: 90s). */
+export const BOT_ONLINE_MS = 90 * 1000;
+
 export type Deposit = {
   deposit_id: number;
   external_id?: string | null;
