@@ -1,10 +1,13 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { toast } from "sonner";
 import { useStore } from "@/lib/store";
 import type { AuditEntry } from "@/lib/types";
 import { formatRM, formatDateTime } from "@/lib/format";
 import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { PlayerNameLink } from "@/components/player-name-link";
 import {
   Select,
@@ -13,7 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search, Filter, ScrollText } from "lucide-react";
+import { Search, Filter, ScrollText, Download } from "lucide-react";
 
 type AuditType = AuditEntry["type"];
 
@@ -91,8 +94,26 @@ function detailsSummary(e: AuditEntry): string {
   return parts.join(" · ") || "—";
 }
 
+function todayStr() {
+  return new Date().toISOString().slice(0, 10);
+}
+function daysAgoStr(n: number) {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return d.toISOString().slice(0, 10);
+}
+function inRange(iso: string, from: string, to: string) {
+  const day = iso.slice(0, 10);
+  if (from && day < from) return false;
+  if (to && day > to) return false;
+  return true;
+}
+
+const AMOUNTLESS_TYPES = new Set<AuditType>(["player_import"]);
+
 export default function HistoryPage() {
   const auditLog = useStore((s) => s.auditLog);
+  const users = useStore((s) => s.users);
   const playerById = useStore((s) => s.playerById);
   const userName = useStore((s) => s.userName);
   const companiesFn = useStore((s) => s.companies);
@@ -100,6 +121,9 @@ export default function HistoryPage() {
   const selectedLeaderId = useStore((s) => s.selectedLeaderId);
   const companyInScope = useStore((s) => s.companyInScope);
   const [type, setType] = useState<string>("all");
+  const [handledBy, setHandledBy] = useState<string>("all");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [q, setQ] = useState("");
 
   const activeCompany = companiesFn().find(
@@ -118,6 +142,14 @@ export default function HistoryPage() {
           : companyInScope(playerById(e.player_id)?.company_entity_id),
       )
       .filter((e) => type === "all" || e.type === type)
+      .filter((e) =>
+        handledBy === "all"
+          ? true
+          : handledBy === "system"
+            ? e.user_id == null
+            : e.user_id === Number(handledBy),
+      )
+      .filter((e) => inRange(e.created_at, dateFrom, dateTo))
       .filter((e) => {
         if (!q) return true;
         const p = e.player_id != null ? playerById(e.player_id) : undefined;
@@ -126,7 +158,79 @@ export default function HistoryPage() {
         return hay.includes(q.toLowerCase());
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auditLog, selectedCompanyId, selectedLeaderId, type, q, playerById]);
+  }, [
+    auditLog,
+    selectedCompanyId,
+    selectedLeaderId,
+    type,
+    handledBy,
+    dateFrom,
+    dateTo,
+    q,
+    playerById,
+  ]);
+
+  // Money moved across the filtered set (amount-less types excluded).
+  const totalAmount = filtered.reduce(
+    (sum, e) => (AMOUNTLESS_TYPES.has(e.type) ? sum : sum + e.amount),
+    0,
+  );
+
+  const hasFilters =
+    type !== "all" ||
+    handledBy !== "all" ||
+    !!dateFrom ||
+    !!dateTo ||
+    !!q.trim();
+
+  function setPreset(days: number | null) {
+    if (days === null) {
+      setDateFrom("");
+      setDateTo("");
+    } else {
+      setDateFrom(daysAgoStr(days));
+      setDateTo(todayStr());
+    }
+  }
+
+  function exportCsv() {
+    const header = [
+      "Date",
+      "Type",
+      "Player",
+      "Amount",
+      "Game",
+      "By",
+      "Reference",
+      "Details",
+    ];
+    const rows = filtered.map((e) => {
+      const p = e.player_id != null ? playerById(e.player_id) : undefined;
+      return [
+        e.created_at.slice(0, 19).replace("T", " "),
+        TYPE_META[e.type].label,
+        p ? `${p.full_name} (@${p.username})` : "",
+        AMOUNTLESS_TYPES.has(e.type) && e.amount === 0 ? "" : e.amount.toFixed(2),
+        e.game_name ?? "",
+        userName(e.user_id),
+        referenceOf(e),
+        detailsSummary(e),
+      ];
+    });
+    const esc = (v: string) =>
+      /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+    const csv = [header, ...rows]
+      .map((r) => r.map((c) => esc(String(c))).join(","))
+      .join("\n");
+    const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `transaction-history-${todayStr()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success(`Exported ${filtered.length} records`);
+  }
 
   return (
     <div className="space-y-5">
@@ -150,7 +254,7 @@ export default function HistoryPage() {
         <div className="flex flex-wrap items-center gap-2 border-b bg-muted/30 px-4 py-2.5">
           <Filter className="h-3.5 w-3.5 text-muted-foreground" />
           <Select value={type} onValueChange={(v) => setType(v ?? "all")}>
-            <SelectTrigger className="h-8 w-[160px]">
+            <SelectTrigger className="h-8 w-[150px]">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -162,7 +266,59 @@ export default function HistoryPage() {
               ))}
             </SelectContent>
           </Select>
-          <div className="relative flex-1 max-w-xs">
+
+          <Select value={handledBy} onValueChange={(v) => setHandledBy(v ?? "all")}>
+            <SelectTrigger className="h-8 w-[150px]">
+              <SelectValue placeholder="Handled by" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Anyone</SelectItem>
+              <SelectItem value="system">System / bot</SelectItem>
+              {users.map((u) => (
+                <SelectItem key={u.user_id} value={String(u.user_id)}>
+                  {u.full_name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <div className="flex items-center gap-1.5">
+            <Input
+              type="date"
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.target.value)}
+              className="h-8 w-[140px]"
+              aria-label="From date"
+            />
+            <span className="text-[11px] text-muted-foreground">to</span>
+            <Input
+              type="date"
+              value={dateTo}
+              onChange={(e) => setDateTo(e.target.value)}
+              className="h-8 w-[140px]"
+              aria-label="To date"
+            />
+          </div>
+          <div className="flex gap-1">
+            {(
+              [
+                ["Today", 0],
+                ["7D", 7],
+                ["30D", 30],
+                ["All", null],
+              ] as const
+            ).map(([label, days]) => (
+              <button
+                key={label}
+                onClick={() => setPreset(days)}
+                className="h-7 cursor-pointer rounded-md border px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          <div className="relative min-w-[180px] flex-1 max-w-xs">
             <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <input
               value={q}
@@ -171,8 +327,28 @@ export default function HistoryPage() {
               className="h-8 w-full rounded-md border border-input bg-background pl-8 pr-3 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/30"
             />
           </div>
-          <span className="ml-auto text-[11px] text-muted-foreground">
-            {filtered.length} records
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={exportCsv}
+            disabled={filtered.length === 0}
+            className="cursor-pointer"
+          >
+            <Download className="h-3.5 w-3.5" />
+            Export
+          </Button>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-background px-4 py-2 text-[11px] text-muted-foreground">
+          <span>
+            {filtered.length.toLocaleString()} record
+            {filtered.length === 1 ? "" : "s"}
+            {hasFilters && " (filtered)"} ·{" "}
+            <span className="font-medium text-foreground">
+              {formatRM(totalAmount)}
+            </span>{" "}
+            moved
           </span>
         </div>
 
@@ -182,13 +358,13 @@ export default function HistoryPage() {
               <ScrollText className="h-5 w-5" />
             </div>
             <p className="text-sm font-medium">
-              {q || type !== "all"
+              {hasFilters
                 ? "No records match your filters"
                 : "No activity recorded yet"}
             </p>
             <p className="text-[12px] text-muted-foreground max-w-sm">
-              {q || type !== "all"
-                ? "Try clearing the search or choosing a different type."
+              {hasFilters
+                ? "Try widening the date range or clearing a filter."
                 : "Deposits, withdrawals, transfers and adjustments will appear here as they happen."}
             </p>
           </div>
