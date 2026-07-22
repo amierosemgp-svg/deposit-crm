@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useStore } from "@/lib/store";
 import type { AuditEntry } from "@/lib/types";
@@ -16,23 +16,37 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search, Filter, ScrollText, Download } from "lucide-react";
+import {
+  Search,
+  Filter,
+  ScrollText,
+  Download,
+  Loader2,
+  ChevronLeft,
+  ChevronRight,
+} from "lucide-react";
 
 type AuditType = AuditEntry["type"];
 
+type HistoryEntry = {
+  transaction_id: number;
+  type: AuditType;
+  player_id: number | null;
+  amount: number;
+  game_name: string | null;
+  reference_id: number | null;
+  details: Record<string, unknown> | null;
+  user_id: number | null;
+  created_at: string;
+  player_full_name: string | null;
+  player_username: string | null;
+  user_name: string | null;
+};
+
 const TYPE_META: Record<AuditType, { label: string; className: string }> = {
-  deposit: {
-    label: "Deposit",
-    className: "bg-emerald-500/10 text-emerald-700",
-  },
-  withdrawal: {
-    label: "Withdrawal",
-    className: "bg-blue-500/10 text-blue-700",
-  },
-  game_topup: {
-    label: "Game Top-up",
-    className: "bg-sky-500/10 text-sky-700",
-  },
+  deposit: { label: "Deposit", className: "bg-emerald-500/10 text-emerald-700" },
+  withdrawal: { label: "Withdrawal", className: "bg-blue-500/10 text-blue-700" },
+  game_topup: { label: "Game Top-up", className: "bg-sky-500/10 text-sky-700" },
   game_transfer: {
     label: "Game Transfer",
     className: "bg-purple-500/10 text-purple-700",
@@ -66,7 +80,12 @@ const TYPE_ORDER: AuditType[] = [
   "player_import",
 ];
 
-function referenceOf(e: AuditEntry): string {
+const AMOUNTLESS_TYPES = new Set<AuditType>(["player_import"]);
+
+function referenceOf(e: {
+  details: Record<string, unknown> | null;
+  reference_id: number | null;
+}): string {
   const d = e.details ?? {};
   const candidate =
     d["topup_reference"] ?? d["reference"] ?? d["transaction_ref"];
@@ -76,13 +95,9 @@ function referenceOf(e: AuditEntry): string {
   return "—";
 }
 
-const REFERENCE_KEYS = new Set([
-  "topup_reference",
-  "reference",
-  "transaction_ref",
-]);
+const REFERENCE_KEYS = new Set(["topup_reference", "reference", "transaction_ref"]);
 
-function detailsSummary(e: AuditEntry): string {
+function detailsSummary(e: { details: Record<string, unknown> | null }): string {
   const d = e.details ?? {};
   const parts: string[] = [];
   for (const [k, v] of Object.entries(d)) {
@@ -102,78 +117,31 @@ function daysAgoStr(n: number) {
   d.setDate(d.getDate() - n);
   return d.toISOString().slice(0, 10);
 }
-function inRange(iso: string, from: string, to: string) {
-  const day = iso.slice(0, 10);
-  if (from && day < from) return false;
-  if (to && day > to) return false;
-  return true;
-}
 
-const AMOUNTLESS_TYPES = new Set<AuditType>(["player_import"]);
+const PAGE_SIZE = 50;
+const EXPORT_CAP = 5000;
 
 export default function HistoryPage() {
-  const auditLog = useStore((s) => s.auditLog);
   const users = useStore((s) => s.users);
-  const playerById = useStore((s) => s.playerById);
-  const userName = useStore((s) => s.userName);
   const companiesFn = useStore((s) => s.companies);
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
   const selectedLeaderId = useStore((s) => s.selectedLeaderId);
-  const companyInScope = useStore((s) => s.companyInScope);
-  const [type, setType] = useState<string>("all");
-  const [handledBy, setHandledBy] = useState<string>("all");
+
+  const [type, setType] = useState("all");
+  const [handledBy, setHandledBy] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [q, setQ] = useState("");
 
+  const [entries, setEntries] = useState<HistoryEntry[]>([]);
+  const [total, setTotal] = useState(0);
+  const [totalAmount, setTotalAmount] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
+
   const activeCompany = companiesFn().find(
     (c) => c.company_id === selectedCompanyId,
-  );
-
-  const filtered = useMemo(() => {
-    const sorted = [...auditLog].sort((a, b) =>
-      b.created_at.localeCompare(a.created_at),
-    );
-    return sorted
-      .filter((e) =>
-        // Entries with no player (system events) stay visible in every scope.
-        e.player_id == null
-          ? selectedCompanyId === null && selectedLeaderId === null
-          : companyInScope(playerById(e.player_id)?.company_entity_id),
-      )
-      .filter((e) => type === "all" || e.type === type)
-      .filter((e) =>
-        handledBy === "all"
-          ? true
-          : handledBy === "system"
-            ? e.user_id == null
-            : e.user_id === Number(handledBy),
-      )
-      .filter((e) => inRange(e.created_at, dateFrom, dateTo))
-      .filter((e) => {
-        if (!q) return true;
-        const p = e.player_id != null ? playerById(e.player_id) : undefined;
-        const hay =
-          `${referenceOf(e)} ${p?.full_name ?? ""} ${p?.username ?? ""}`.toLowerCase();
-        return hay.includes(q.toLowerCase());
-      });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    auditLog,
-    selectedCompanyId,
-    selectedLeaderId,
-    type,
-    handledBy,
-    dateFrom,
-    dateTo,
-    q,
-    playerById,
-  ]);
-
-  // Money moved across the filtered set (amount-less types excluded).
-  const totalAmount = filtered.reduce(
-    (sum, e) => (AMOUNTLESS_TYPES.has(e.type) ? sum : sum + e.amount),
-    0,
   );
 
   const hasFilters =
@@ -182,6 +150,70 @@ export default function HistoryPage() {
     !!dateFrom ||
     !!dateTo ||
     !!q.trim();
+
+  function buildParams(off: number, limit: number) {
+    const p = new URLSearchParams();
+    p.set("limit", String(limit));
+    p.set("offset", String(off));
+    if (type !== "all") p.set("type", type);
+    if (handledBy !== "all") p.set("user", handledBy);
+    if (dateFrom) p.set("from", dateFrom);
+    if (dateTo) p.set("to", dateTo);
+    if (q.trim()) p.set("q", q.trim());
+    if (selectedCompanyId != null) p.set("company_id", String(selectedCompanyId));
+    if (selectedLeaderId != null) p.set("leader_id", String(selectedLeaderId));
+    return p;
+  }
+
+  // Reset to the first page whenever a filter (or the top-nav scope) changes.
+  const filterKey = JSON.stringify([
+    type,
+    handledBy,
+    dateFrom,
+    dateTo,
+    q.trim(),
+    selectedCompanyId,
+    selectedLeaderId,
+  ]);
+  const [prevKey, setPrevKey] = useState(filterKey);
+  if (filterKey !== prevKey) {
+    setPrevKey(filterKey);
+    setOffset(0);
+  }
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const t = setTimeout(() => {
+      setLoading(true);
+      fetch(`/api/history?${buildParams(offset, PAGE_SIZE)}`, {
+        signal: controller.signal,
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          setEntries(data.entries ?? []);
+          setTotal(data.total ?? 0);
+          setTotalAmount(data.totalAmount ?? 0);
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (!controller.signal.aborted) setLoading(false);
+        });
+    }, 250);
+    return () => {
+      controller.abort();
+      clearTimeout(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    type,
+    handledBy,
+    dateFrom,
+    dateTo,
+    q,
+    offset,
+    selectedCompanyId,
+    selectedLeaderId,
+  ]);
 
   function setPreset(days: number | null) {
     if (days === null) {
@@ -193,44 +225,68 @@ export default function HistoryPage() {
     }
   }
 
-  function exportCsv() {
-    const header = [
-      "Date",
-      "Type",
-      "Player",
-      "Amount",
-      "Game",
-      "By",
-      "Reference",
-      "Details",
-    ];
-    const rows = filtered.map((e) => {
-      const p = e.player_id != null ? playerById(e.player_id) : undefined;
-      return [
+  async function exportCsv() {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const all: HistoryEntry[] = [];
+      let off = 0;
+      while (all.length < EXPORT_CAP) {
+        const res = await fetch(`/api/history?${buildParams(off, 200)}`);
+        const data = await res.json();
+        const batch: HistoryEntry[] = data.entries ?? [];
+        all.push(...batch);
+        if (batch.length < 200 || all.length >= (data.total ?? 0)) break;
+        off += 200;
+      }
+      const header = [
+        "Date",
+        "Type",
+        "Player",
+        "Amount",
+        "Game",
+        "By",
+        "Reference",
+        "Details",
+      ];
+      const rows = all.map((e) => [
         e.created_at.slice(0, 19).replace("T", " "),
         TYPE_META[e.type].label,
-        p ? `${p.full_name} (@${p.username})` : "",
+        e.player_full_name
+          ? `${e.player_full_name} (@${e.player_username})`
+          : "",
         AMOUNTLESS_TYPES.has(e.type) && e.amount === 0 ? "" : e.amount.toFixed(2),
         e.game_name ?? "",
-        userName(e.user_id),
+        e.user_name ?? (e.user_id == null ? "System" : ""),
         referenceOf(e),
         detailsSummary(e),
-      ];
-    });
-    const esc = (v: string) =>
-      /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
-    const csv = [header, ...rows]
-      .map((r) => r.map((c) => esc(String(c))).join(","))
-      .join("\n");
-    const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `transaction-history-${todayStr()}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-    toast.success(`Exported ${filtered.length} records`);
+      ]);
+      const esc = (v: string) =>
+        /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+      const csv = [header, ...rows]
+        .map((r) => r.map((c) => esc(String(c))).join(","))
+        .join("\n");
+      const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `transaction-history-${todayStr()}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success(
+        `Exported ${all.length} records${all.length >= EXPORT_CAP ? " (capped)" : ""}`,
+      );
+    } catch {
+      toast.error("Export failed");
+    } finally {
+      setExporting(false);
+    }
   }
+
+  const pageStart = total === 0 ? 0 : offset + 1;
+  const pageEnd = offset + entries.length;
+  const canPrev = offset > 0;
+  const canNext = offset + PAGE_SIZE < total;
 
   return (
     <div className="space-y-5">
@@ -332,41 +388,61 @@ export default function HistoryPage() {
             variant="outline"
             size="sm"
             onClick={exportCsv}
-            disabled={filtered.length === 0}
+            disabled={total === 0 || exporting}
             className="cursor-pointer"
           >
-            <Download className="h-3.5 w-3.5" />
+            {exporting ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Download className="h-3.5 w-3.5" />
+            )}
             Export
           </Button>
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-background px-4 py-2 text-[11px] text-muted-foreground">
           <span>
-            {filtered.length.toLocaleString()} record
-            {filtered.length === 1 ? "" : "s"}
+            {total.toLocaleString()} record{total === 1 ? "" : "s"}
             {hasFilters && " (filtered)"} ·{" "}
             <span className="font-medium text-foreground">
               {formatRM(totalAmount)}
             </span>{" "}
             moved
           </span>
+          <span className="inline-flex items-center gap-1">
+            {loading && <Loader2 className="h-3 w-3 animate-spin" />}
+            {total > 0 && (
+              <span>
+                {pageStart.toLocaleString()}–{pageEnd.toLocaleString()} of{" "}
+                {total.toLocaleString()}
+              </span>
+            )}
+          </span>
         </div>
 
-        {filtered.length === 0 ? (
+        {entries.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-2 px-4 py-14 text-center">
             <div className="flex h-11 w-11 items-center justify-center rounded-full bg-muted text-muted-foreground">
-              <ScrollText className="h-5 w-5" />
+              {loading ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              ) : (
+                <ScrollText className="h-5 w-5" />
+              )}
             </div>
             <p className="text-sm font-medium">
-              {hasFilters
-                ? "No records match your filters"
-                : "No activity recorded yet"}
+              {loading
+                ? "Loading…"
+                : hasFilters
+                  ? "No records match your filters"
+                  : "No activity recorded yet"}
             </p>
-            <p className="text-[12px] text-muted-foreground max-w-sm">
-              {hasFilters
-                ? "Try widening the date range or clearing a filter."
-                : "Deposits, withdrawals, transfers and adjustments will appear here as they happen."}
-            </p>
+            {!loading && (
+              <p className="text-[12px] text-muted-foreground max-w-sm">
+                {hasFilters
+                  ? "Try widening the date range or clearing a filter."
+                  : "Deposits, withdrawals, transfers and adjustments will appear here as they happen."}
+              </p>
+            )}
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -384,9 +460,7 @@ export default function HistoryPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((e) => {
-                  const p =
-                    e.player_id != null ? playerById(e.player_id) : undefined;
+                {entries.map((e) => {
                   const meta = TYPE_META[e.type];
                   const signed = e.type === "bo_adjustment";
                   return (
@@ -407,7 +481,7 @@ export default function HistoryPage() {
                       <td className="px-3 py-2 whitespace-nowrap">
                         {e.player_id != null ? (
                           <PlayerNameLink playerId={e.player_id}>
-                            {p?.username ?? `P-${e.player_id}`}
+                            {e.player_username ?? `P-${e.player_id}`}
                           </PlayerNameLink>
                         ) : (
                           <span className="text-muted-foreground">—</span>
@@ -422,7 +496,7 @@ export default function HistoryPage() {
                             : ""
                         }`}
                       >
-                        {e.type === "player_import" && e.amount === 0
+                        {AMOUNTLESS_TYPES.has(e.type) && e.amount === 0
                           ? "—"
                           : signed
                             ? `${e.amount >= 0 ? "+" : "−"}${formatRM(Math.abs(e.amount))}`
@@ -432,7 +506,7 @@ export default function HistoryPage() {
                         {e.game_name ?? "—"}
                       </td>
                       <td className="px-3 py-2 text-[12px] text-muted-foreground">
-                        {userName(e.user_id)}
+                        {e.user_name ?? (e.user_id == null ? "System" : "—")}
                       </td>
                       <td className="px-3 py-2 font-mono text-[10px] text-muted-foreground whitespace-nowrap">
                         {referenceOf(e)}
@@ -445,6 +519,37 @@ export default function HistoryPage() {
                 })}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {total > PAGE_SIZE && (
+          <div className="flex items-center justify-between border-t px-4 py-2.5">
+            <span className="text-[11px] text-muted-foreground">
+              Page {Math.floor(offset / PAGE_SIZE) + 1} of{" "}
+              {Math.ceil(total / PAGE_SIZE)}
+            </span>
+            <div className="flex items-center gap-1.5">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!canPrev || loading}
+                onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
+                className="cursor-pointer"
+              >
+                <ChevronLeft className="h-3.5 w-3.5" />
+                Prev
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!canNext || loading}
+                onClick={() => setOffset(offset + PAGE_SIZE)}
+                className="cursor-pointer"
+              >
+                Next
+                <ChevronRight className="h-3.5 w-3.5" />
+              </Button>
+            </div>
           </div>
         )}
       </Card>

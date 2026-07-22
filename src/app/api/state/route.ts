@@ -12,7 +12,6 @@ import {
   providerBoAccounts,
   providerBoAdjustments,
   settings,
-  transactions,
   users,
   withdrawals,
 } from "@/db/schema";
@@ -75,7 +74,6 @@ export async function GET() {
       scopedBoAccounts,
       allUsers,
       allSettings,
-      auditLog,
     ] = await Promise.all([
       db
         .select()
@@ -151,11 +149,6 @@ export async function GET() {
               ),
         ),
       db.select().from(settings),
-      db
-        .select()
-        .from(transactions)
-        .orderBy(desc(transactions.created_at))
-        .limit(500),
     ]);
 
     // Include transfers *into* my accounts that originate elsewhere (pending inbox)
@@ -214,7 +207,6 @@ export async function GET() {
       boAdjustments: scopedAdjustments,
       expenses: scopedExpenses,
       botHealth: bots,
-      auditLog,
       settings: Object.fromEntries(allSettings.map((s) => [s.key, s.value])),
     });
   } catch (e) {

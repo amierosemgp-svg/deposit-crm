@@ -3,7 +3,6 @@
 import { create } from "zustand";
 import type {
   ApiKeyRow,
-  AuditEntry,
   BankAccount,
   BankTransfer,
   CompanyView,
@@ -74,7 +73,6 @@ type StateResponse = {
   boAdjustments: ProviderBoAdjustment[];
   expenses: Expense[];
   botHealth: BotHealth[];
-  auditLog: AuditEntry[];
   settings: ServerSettings;
 };
 
@@ -94,7 +92,6 @@ type Store = {
   boAdjustments: ProviderBoAdjustment[];
   expenses: Expense[];
   botHealth: BotHealth[];
-  auditLog: AuditEntry[];
   settings: ServerSettings;
   notifications: Notification[];
 
@@ -344,7 +341,6 @@ export const useStore = create<Store>((set, get) => {
     boAdjustments: [],
     expenses: [],
     botHealth: [],
-    auditLog: [],
     settings: {},
     notifications: [],
     selectedCompanyId: null,
