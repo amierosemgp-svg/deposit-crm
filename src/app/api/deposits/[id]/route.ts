@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { deposits, players } from "@/db/schema";
+import { deposits, players, transactions } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 
@@ -77,6 +77,56 @@ export async function PATCH(
       })
       .where(eq(deposits.deposit_id, depositId))
       .returning();
+
+    // Audit each draft edit that actually changed a value. amount = 0 because
+    // no money moves on a draft edit (that happens at approval).
+    const audits: (typeof transactions.$inferInsert)[] = [];
+    const base = {
+      player_id: updated.player_id,
+      type: "deposit" as const,
+      amount: 0,
+      reference_id: depositId,
+      user_id: user.user_id,
+    };
+    if (body.player_id !== undefined && body.player_id !== row.player_id) {
+      audits.push({
+        ...base,
+        details: {
+          action: "player_assigned",
+          player: updated.player_username,
+          transaction_ref: row.transaction_ref,
+        },
+      });
+    }
+    if (
+      body.bonus_percentage !== undefined &&
+      body.bonus_percentage !== row.bonus_percentage
+    ) {
+      audits.push({
+        ...base,
+        details: {
+          action: "bonus_changed",
+          from: row.bonus_percentage,
+          to: bonusPct,
+          transaction_ref: row.transaction_ref,
+        },
+      });
+    }
+    if (
+      body.selected_game !== undefined &&
+      body.selected_game !== row.selected_game
+    ) {
+      audits.push({
+        ...base,
+        details: {
+          action: "game_selected",
+          from: row.selected_game,
+          to: body.selected_game,
+          transaction_ref: row.transaction_ref,
+        },
+      });
+    }
+    if (audits.length) await db.insert(transactions).values(audits);
 
     return Response.json({ deposit: updated });
   } catch (e) {
