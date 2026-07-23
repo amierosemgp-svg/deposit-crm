@@ -86,6 +86,7 @@ export async function PATCH(
 
   await db.insert(transactions).values({
     player_id: row.player_id,
+    entity_id: updated.company_entity_id,
     type: "deposit",
     amount: row.deposit_amount,
     reference_id: row.deposit_id,

@@ -83,6 +83,7 @@ export async function PATCH(
     const audits: (typeof transactions.$inferInsert)[] = [];
     const base = {
       player_id: updated.player_id,
+      entity_id: updated.company_entity_id,
       type: "deposit" as const,
       amount: 0,
       reference_id: depositId,

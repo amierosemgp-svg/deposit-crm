@@ -127,6 +127,7 @@ export async function GET(request: Request) {
           transaction_id: transactions.transaction_id,
           type: transactions.type,
           player_id: transactions.player_id,
+          entity_id: transactions.entity_id,
           amount: transactions.amount,
           game_name: transactions.game_name,
           reference_id: transactions.reference_id,

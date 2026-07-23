@@ -161,6 +161,7 @@ export async function autoConfirmExpiredTransfers(): Promise<number> {
         .set({ status: "auto_confirmed", confirmed_at: nowIso })
         .where(eq(bankTransfers.transfer_id, t.transfer_id));
       await txn.insert(transactions).values({
+        entity_id: toAccount.entity_id,
         type: "bank_transfer",
         amount: t.amount,
         reference_id: t.transfer_id,

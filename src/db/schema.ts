@@ -425,6 +425,9 @@ export const providerBoAdjustments = pgTable("provider_bo_adjustments", {
 export const transactions = pgTable("transactions", {
   transaction_id: serial("transaction_id").primaryKey(),
   player_id: integer("player_id").references(() => players.player_id),
+  // Which entity the event belongs to: the player's company for player-scoped
+  // events, or the acted-on bank account's entity for bank transfers.
+  entity_id: integer("entity_id").references(() => entities.entity_id),
   type: auditTypeEnum("type").notNull(),
   amount: numeric("amount", { precision: 14, scale: 2, mode: "number" }).notNull(),
   game_name: varchar("game_name", { length: 60 }),

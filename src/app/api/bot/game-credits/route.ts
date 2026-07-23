@@ -81,6 +81,7 @@ export async function POST(request: Request) {
 
   await db.insert(transactions).values({
     player_id: body.player_id,
+    entity_id: player.company_entity_id,
     type: "bo_adjustment",
     amount: +(body.current_balance - (before?.current_balance ?? 0)).toFixed(2),
     game_name: body.game_name,

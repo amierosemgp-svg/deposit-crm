@@ -161,6 +161,7 @@ export async function PATCH(
 
         await txn.insert(transactions).values({
           player_id: locked.player_id,
+          entity_id: locked.company_entity_id,
           type: "game_topup",
           amount: locked.total_amount,
           game_name: locked.selected_game,
@@ -186,6 +187,7 @@ export async function PATCH(
 
       await txn.insert(transactions).values({
         player_id: locked.player_id,
+        entity_id: locked.company_entity_id,
         type: "deposit",
         amount: locked.deposit_amount,
         game_name: locked.selected_game,

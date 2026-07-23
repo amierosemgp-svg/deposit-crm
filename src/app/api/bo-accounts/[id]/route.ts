@@ -73,6 +73,7 @@ export async function PATCH(
           })
           .returning();
         await txn.insert(transactions).values({
+          entity_id: row.company_entity_id,
           type: "bo_adjustment",
           amount: adjust_amount,
           game_name: row.game_name,

@@ -21,6 +21,7 @@ export type BotTransactionInput = {
   account_number?: string; // receiving (company) account, if the bot knows it
   telegram_username?: string; // if the bot already knows the player
   receipt_url?: string;
+  company_entity_id?: number; // which company the deposit belongs to, if the bot knows
 };
 
 export function parseBotDate(date?: string, extractedAt?: string): string {
@@ -77,11 +78,16 @@ export async function resolveReceivingAccount(input: BotTransactionInput) {
     );
     if (byNumber) return byNumber;
   }
-  const [byBank] = await db
+  const byBank = await db
     .select()
     .from(bankAccounts)
     .where(eq(bankAccounts.bank_name, input.bank));
-  return byBank?.role === "deposit" ? byBank : (byBank ?? null);
+  // When the bot states the entity, only that entity's accounts qualify —
+  // falling back to another company's account would misattribute the deposit.
+  const pool = input.company_entity_id
+    ? byBank.filter((a) => a.entity_id === input.company_entity_id)
+    : byBank;
+  return pool.find((a) => a.role === "deposit") ?? pool[0] ?? null;
 }
 
 /** Minimal player fields the bot needs to perform the top-up in the provider. */
@@ -192,6 +198,7 @@ export async function createBotWithdrawal(
 
   await db.insert(transactions).values({
     player_id: input.player_id,
+    entity_id: player.company_entity_id,
     type: "withdrawal",
     amount: input.requested_amount,
     game_name: input.game_name,

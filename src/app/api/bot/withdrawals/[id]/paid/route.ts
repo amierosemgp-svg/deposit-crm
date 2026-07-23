@@ -38,6 +38,11 @@ export async function POST(
         throw new BotError(409, `Withdrawal is "${row.status}", pull credits first`);
       }
 
+      const [player] = await txn
+        .select({ company_entity_id: players.company_entity_id })
+        .from(players)
+        .where(eq(players.player_id, row.player_id));
+
       if (body.paid_from_account_id) {
         const [account] = await txn
           .select()
@@ -83,6 +88,7 @@ export async function POST(
 
       await txn.insert(transactions).values({
         player_id: row.player_id,
+        entity_id: player?.company_entity_id ?? null,
         type: "withdrawal",
         amount: row.credit_pulled_amount,
         game_name: row.game_name,

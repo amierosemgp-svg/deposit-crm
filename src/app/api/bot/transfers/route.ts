@@ -139,6 +139,7 @@ export async function POST(request: Request) {
         .returning();
 
       await txn.insert(transactions).values({
+        entity_id: from.entity_id,
         type: "bank_transfer",
         amount: body.amount,
         reference_id: transfer.transfer_id,

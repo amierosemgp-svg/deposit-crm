@@ -48,6 +48,7 @@ export async function POST(request: Request) {
 
     await db.insert(transactions).values({
       player_id: body.player_id,
+      entity_id: player.company_entity_id,
       type: "withdrawal",
       amount: body.requested_amount,
       game_name: body.game_name,

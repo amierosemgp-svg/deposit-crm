@@ -83,6 +83,7 @@ export async function POST(
 
       await txn.insert(transactions).values({
         player_id: row.player_id,
+        entity_id: player.company_entity_id,
         type: "credit_pull",
         amount: pulled,
         game_name: row.game_name,

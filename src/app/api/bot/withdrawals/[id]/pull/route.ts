@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { gameCredits, transactions, withdrawals } from "@/db/schema";
+import { gameCredits, players, transactions, withdrawals } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
 import { BotError, botErrorResponse, jsonError, withdrawalJson } from "@/lib/bot-crud";
 
@@ -29,6 +29,11 @@ export async function POST(
       if (row.status !== "requested") {
         throw new BotError(409, `Withdrawal is "${row.status}", expected requested`);
       }
+
+      const [player] = await txn
+        .select({ company_entity_id: players.company_entity_id })
+        .from(players)
+        .where(eq(players.player_id, row.player_id));
 
       const [credit] = await txn
         .select()
@@ -72,6 +77,7 @@ export async function POST(
 
       await txn.insert(transactions).values({
         player_id: row.player_id,
+        entity_id: player?.company_entity_id ?? null,
         type: "credit_pull",
         amount: pulled,
         game_name: row.game_name,

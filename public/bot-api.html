@@ -401,6 +401,7 @@
                 <tr><td><code>transaction.extracted_at</code></td><td>string</td><td><span class="opt">opt</span></td><td>When the bot read it (ISO 8601).</td></tr>
                 <tr><td><code>telegram_username</code></td><td>string</td><td><span class="opt">opt</span></td><td>The player, if known — lets the CRM auto-match.</td></tr>
                 <tr><td><code>account_number</code></td><td>string</td><td><span class="opt">opt</span></td><td>Which company account received it — helps routing.</td></tr>
+                <tr><td><code>company_entity_id</code></td><td>number</td><td><span class="opt">opt</span></td><td>Which company the deposit belongs to (alias: <code>entity_id</code>). Send it when you know — it takes priority over auto-detection. Must be a <code>company</code> entity (<code>422</code>) and, for a company-scoped key, must match the key's company (<code>403</code>).</td></tr>
                 <tr><td><code>receipt_url</code></td><td>string</td><td><span class="opt">opt</span></td><td>Link to a receipt image, if captured.</td></tr>
               </table>
             </div>
@@ -412,6 +413,7 @@
   -H <span class="s">"X-API-Key: $KEY"</span> -H <span class="s">"Content-Type: application/json"</span> \
   -d <span class="s">'{
     "id": "25_Jun_2026_MBB_CT-_CHAN_YIK_SOON_*Fund_Transfer_1.0",
+    "company_entity_id": 3,
     "transaction": {
       "bank": "Maybank",
       "date": "25 Jun 2026",
@@ -443,14 +445,19 @@
               <span class="ic">i</span>
               <div>The CRM tries to auto-match the player from <code>telegram_username</code> or by matching the bank description against player names. If it can't, the deposit lands with <code>player_id: null</code> and a CS agent assigns the player in the UI.</div>
             </div>
+            <div class="note">
+              <span class="ic">i</span>
+              <div><b>Entity attribution:</b> the deposit's company is resolved as <code>company_entity_id</code> (if you sent it) → the matched player's company → the receiving account's entity → the API key's company scope. Send <code>company_entity_id</code> whenever you know which company's bank account you're watching — it also disambiguates the receiving-account lookup when several companies use the same bank.</div>
+            </div>
 
             <div class="sub">Status codes</div>
             <div class="codes">
               <div><span class="sc ok">201</span><span>Created — new transaction.</span></div>
               <div><span class="sc ok">200</span><span>Duplicate — same <code>id</code> already exists; returns <code>{ "duplicate": true, "transaction": {…} }</code>. Retries are safe.</span></div>
-              <div><span class="sc warn">422</span><span>Not a credit transaction (<code>type</code> ≠ <code>credit</code>).</span></div>
+              <div><span class="sc warn">422</span><span>Not a credit transaction (<code>type</code> ≠ <code>credit</code>), or <code>company_entity_id</code> is not a company entity.</span></div>
               <div><span class="sc warn">400</span><span>Missing <code>bank</code> or a positive <code>amount</code>.</span></div>
               <div><span class="sc err">401</span><span>Missing or invalid API key.</span></div>
+              <div><span class="sc err">403</span><span><code>company_entity_id</code> is outside this key's company scope.</span></div>
             </div>
           </div>
         </div>

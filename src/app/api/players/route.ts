@@ -73,6 +73,7 @@ export async function POST(request: Request) {
     await db.insert(transactions).values(
       created.map((p) => ({
         player_id: p.player_id,
+        entity_id: p.company_entity_id,
         type: "player_import" as const,
         amount: 0,
         user_id: user.user_id,

@@ -259,6 +259,7 @@ export type ProviderBoAdjustment = {
 export type AuditEntry = {
   transaction_id: number;
   player_id: number | null;
+  entity_id: number | null;
   type:
     | "deposit"
     | "withdrawal"

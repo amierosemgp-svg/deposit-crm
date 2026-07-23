@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { deposits, transactions, withdrawals } from "@/db/schema";
+import { deposits, entities, transactions, withdrawals } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
 import { withdrawalJson } from "@/lib/bot-crud";
 import {
@@ -178,6 +178,9 @@ const depositSchema = z.object({
   account_number: z.string().optional(),
   telegram_username: z.string().optional(),
   receipt_url: z.string().url().optional(),
+  // Which company (entity) the deposit belongs to. Accepts either name.
+  company_entity_id: z.number().int().positive().optional(),
+  entity_id: z.number().int().positive().optional(),
 });
 
 const withdrawalSchema = z.object({
@@ -251,6 +254,7 @@ export async function POST(request: Request) {
     account_number: raw.account_number,
     telegram_username: raw.telegram_username,
     receipt_url: raw.receipt_url,
+    company_entity_id: raw.company_entity_id ?? raw.entity_id,
   };
 
   if (!input.bank || !input.amount || input.amount <= 0) {
@@ -264,6 +268,25 @@ export async function POST(request: Request) {
       { error: `Only credit transactions are accepted (got "${input.type}")` },
       { status: 422 },
     );
+  }
+
+  if (input.company_entity_id !== undefined) {
+    if (auth.companyId !== null && input.company_entity_id !== auth.companyId) {
+      return Response.json(
+        { error: `Entity ${input.company_entity_id} is outside this key's company scope` },
+        { status: 403 },
+      );
+    }
+    const [entity] = await db
+      .select()
+      .from(entities)
+      .where(eq(entities.entity_id, input.company_entity_id));
+    if (!entity || entity.entity_type !== "company") {
+      return Response.json(
+        { error: `Entity ${input.company_entity_id} is not a company` },
+        { status: 422 },
+      );
+    }
   }
 
   // Idempotency
@@ -296,7 +319,14 @@ export async function POST(request: Request) {
       deposit_date: parseBotDate(input.date, input.extracted_at),
       player_id: player?.player_id ?? null,
       player_username: player?.username ?? null,
-      company_entity_id: player?.company_entity_id ?? account?.entity_id ?? null,
+      // Explicit bot-stated entity wins; then the matched player's company, the
+      // receiving account's entity, and finally the key's company scope.
+      company_entity_id:
+        input.company_entity_id ??
+        player?.company_entity_id ??
+        account?.entity_id ??
+        auth.companyId ??
+        null,
       deposit_amount: input.amount,
       bank_name: input.bank,
       bank_description: input.description,
@@ -312,6 +342,7 @@ export async function POST(request: Request) {
 
   await db.insert(transactions).values({
     player_id: player?.player_id ?? null,
+    entity_id: created.company_entity_id,
     type: "deposit",
     amount: input.amount,
     reference_id: created.deposit_id,

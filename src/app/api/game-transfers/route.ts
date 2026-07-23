@@ -98,6 +98,7 @@ export async function POST(request: Request) {
 
       await txn.insert(transactions).values({
         player_id: body.player_id,
+        entity_id: player.company_entity_id,
         type: "game_transfer",
         amount: body.amount,
         game_name: `${body.from_game} → ${body.to_game}`,

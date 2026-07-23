@@ -70,6 +70,7 @@ export async function POST(request: Request) {
 
     await db.insert(transactions).values({
       player_id: player.player_id,
+      entity_id: player.company_entity_id,
       type: "deposit",
       amount: body.amount,
       reference_id: created.deposit_id,
