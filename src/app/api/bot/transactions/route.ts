@@ -1,4 +1,4 @@
-import { desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { deposits, transactions, withdrawals } from "@/db/schema";
@@ -50,6 +50,10 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const type = (url.searchParams.get("type") ?? "deposit").toLowerCase();
   const statusParam = url.searchParams.get("status");
+  // Filter to a single game (deposit.selected_game / withdrawal.game_name),
+  // e.g. ?game=Mega888. Accepts `game` or `selected_game`.
+  const game =
+    url.searchParams.get("game") ?? url.searchParams.get("selected_game");
   const limit = Math.min(Number(url.searchParams.get("limit") ?? 100), 500);
 
   if (!["deposit", "withdrawal", "all"].includes(type)) {
@@ -86,17 +90,20 @@ export async function GET(request: Request) {
     // otherwise (type=all) return every status.
     const statuses = valid ?? (type === "deposit" ? ["pending_match"] : null);
     if (!(statusList && statuses && statuses.length === 0)) {
+      const conds: SQL[] = [];
+      if (statuses) {
+        conds.push(
+          inArray(
+            deposits.status,
+            statuses as (typeof DEPOSIT_STATUSES)[number][],
+          ),
+        );
+      }
+      if (game) conds.push(eq(deposits.selected_game, game));
       const rows = await db
         .select()
         .from(deposits)
-        .where(
-          statuses
-            ? inArray(
-                deposits.status,
-                statuses as (typeof DEPOSIT_STATUSES)[number][],
-              )
-            : undefined,
-        )
+        .where(conds.length ? and(...conds) : undefined)
         .orderBy(desc(deposits.created_at))
         .limit(limit);
       const gameInfo = await playerGameInfoMap(rows.map((r) => r.player_id));
@@ -115,17 +122,20 @@ export async function GET(request: Request) {
         )
       : null;
     if (!(statusList && valid && valid.length === 0)) {
+      const conds: SQL[] = [];
+      if (valid) {
+        conds.push(
+          inArray(
+            withdrawals.status,
+            valid as (typeof WITHDRAWAL_STATUSES)[number][],
+          ),
+        );
+      }
+      if (game) conds.push(eq(withdrawals.game_name, game));
       const rows = await db
         .select()
         .from(withdrawals)
-        .where(
-          valid
-            ? inArray(
-                withdrawals.status,
-                valid as (typeof WITHDRAWAL_STATUSES)[number][],
-              )
-            : undefined,
-        )
+        .where(conds.length ? and(...conds) : undefined)
         .orderBy(desc(withdrawals.created_at))
         .limit(limit);
       items.push(...rows.map(withdrawalJson));

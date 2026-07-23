@@ -503,8 +503,13 @@ export const botHealth = pgTable("bot_health", {
 export const apiKeys = pgTable("api_keys", {
   key_id: serial("key_id").primaryKey(),
   key_hash: varchar("key_hash", { length: 64 }).notNull().unique(), // sha256 hex
-  hint: varchar("hint", { length: 24 }), // display-only, e.g. "dbk_48d8…5ea0"
+  hint: varchar("hint", { length: 32 }), // display-only, e.g. "alpha_dbk…5ea0"
   label: varchar("label", { length: 80 }).notNull(),
+  // When set, the key is scoped to this company: bot reads (bank accounts,
+  // kiosks) only return that company's data. null = unscoped (full access).
+  company_entity_id: integer("company_entity_id").references(
+    () => entities.entity_id,
+  ),
   // Optional IP allowlist; when non-empty, requests from other IPs are
   // rejected even with a valid key. Requires the bot to have a static egress IP.
   allowed_ips: jsonb("allowed_ips").$type<string[]>(),

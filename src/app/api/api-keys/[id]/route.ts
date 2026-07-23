@@ -46,6 +46,7 @@ export async function PATCH(
         hint: apiKeys.hint,
         status: apiKeys.status,
         allowed_ips: apiKeys.allowed_ips,
+        company_entity_id: apiKeys.company_entity_id,
         last_used_at: apiKeys.last_used_at,
         created_at: apiKeys.created_at,
       });

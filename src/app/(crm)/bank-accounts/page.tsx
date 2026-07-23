@@ -23,6 +23,7 @@ import type { BankAccount, BankTransfer } from "@/lib/types";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/status-badge";
+import { Switch } from "@/components/ui/switch";
 import { BankAccountFormModal } from "@/components/bank-account-form-modal";
 import { BankTransferModal } from "@/components/bank-transfer-modal";
 import { cn } from "@/lib/utils";
@@ -75,6 +76,7 @@ export default function BankAccountsPage() {
   const entityName = useStore((s) => s.entityName);
   const userName = useStore((s) => s.userName);
   const deleteAccount = useStore((s) => s.deleteBankAccount);
+  const updateAccount = useStore((s) => s.updateBankAccount);
   const confirmTransfer = useStore((s) => s.confirmBankTransfer);
   const rejectTransfer = useStore((s) => s.rejectBankTransfer);
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
@@ -186,6 +188,18 @@ export default function BankAccountsPage() {
       return;
     }
     toast.success("Bank account deleted");
+  }
+  async function toggleStatus(account: BankAccount, active: boolean) {
+    const result = await updateAccount(account.account_id, {
+      status: active ? "active" : "inactive",
+    });
+    if (!result.ok) {
+      toast.error(result.error ?? "Could not update status");
+      return;
+    }
+    toast.success(
+      `${account.bank_name} ${account.account_number} ${active ? "activated" : "deactivated"}`,
+    );
   }
   function openTransferFor(account: BankAccount) {
     setTransferDefaultFrom(account.account_id);
@@ -517,7 +531,27 @@ export default function BankAccountsPage() {
                         </div>
                       </td>
                       <td className="px-3 py-2">
-                        <StatusBadge status={a.status} />
+                        {canManage && managesEntity(a.entity_id) ? (
+                          <div className="flex items-center gap-2">
+                            <Switch
+                              checked={a.status === "active"}
+                              onCheckedChange={(v) => void toggleStatus(a, v)}
+                              aria-label={`Toggle ${a.bank_name} active`}
+                            />
+                            <span
+                              className={cn(
+                                "text-[11px] font-medium",
+                                a.status === "active"
+                                  ? "text-emerald-700"
+                                  : "text-muted-foreground",
+                              )}
+                            >
+                              {a.status === "active" ? "Active" : "Inactive"}
+                            </span>
+                          </div>
+                        ) : (
+                          <StatusBadge status={a.status} />
+                        )}
                       </td>
                       {canManage && (
                         <td className="px-3 py-2">

@@ -16,7 +16,13 @@ export async function GET(request: Request) {
   const status = url.searchParams.get("status");
 
   const filters: SQL[] = [];
-  if (entityId) filters.push(eq(bankAccounts.entity_id, Number(entityId)));
+  // A company-scoped key only ever sees its own company's accounts; the
+  // entity_id query param can only narrow within that, never widen.
+  if (auth.companyId != null) {
+    filters.push(eq(bankAccounts.entity_id, auth.companyId));
+  } else if (entityId) {
+    filters.push(eq(bankAccounts.entity_id, Number(entityId)));
+  }
   if (role === "deposit" || role === "withdrawal") {
     filters.push(eq(bankAccounts.role, role));
   }

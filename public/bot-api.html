@@ -296,6 +296,7 @@
         <a href="#entities">Entities</a>
         <a href="#heartbeat">Bot health</a>
         <a href="#bank-accounts">Bank accounts</a>
+        <a href="#kiosks">Kiosks</a>
         <a href="#withdrawals">Withdrawals</a>
         <a href="#game-credits">Game credits</a>
         <a href="#game-transfers">Game transfers</a>
@@ -348,6 +349,10 @@
         <div class="note warn">
           <span class="ic">!</span>
           <div>The live key is delivered <b>separately over a secure channel</b>, never in this document. Treat it as a secret — it grants full access to create and read transactions. If it leaks, tell the CRM team and we rotate it immediately.</div>
+        </div>
+        <div class="sub">Company-scoped keys</div>
+        <div class="prose">
+          <p>A key can be <strong>scoped to a single company</strong>. When it is, it's prefixed with that company's leader code (e.g. <code>alpha_dbk_…</code>) and its reads are limited to that company's data: <code>GET /api/bot/bank-accounts</code> returns only that company's accounts, and <code>GET /api/bot/kiosks</code> (and <code>/:id</code>) only that company's kiosks — an out-of-scope id returns <code>404</code>. An unscoped key (<code>dbk_…</code>, no prefix) has full access. Scope is enforced server-side by the key; you don't pass a company id.</p>
         </div>
         <div class="sub">Optional IP allowlist</div>
         <div class="prose">
@@ -468,6 +473,7 @@
                 <tr><th>Param</th><th>Default</th><th>Description</th></tr>
                 <tr><td><code>type</code></td><td><code>deposit</code></td><td><code>deposit</code>, <code>withdrawal</code>, or <code>all</code> (both, merged newest-first).</td></tr>
                 <tr><td><code>status</code></td><td><code>pending_match</code></td><td>Comma-separated; matched against whichever type(s) it's valid for. Deposit: <code>pending_match</code>, <code>matched</code>, <code>pending</code>, <code>approved</code>, <code>processing</code>, <code>completed</code>, <code>failed</code>. Withdrawal: <code>requested</code>, <code>credits_pulled</code>, <code>paid</code>, <code>failed</code>.</td></tr>
+                <tr><td><code>game</code></td><td>—</td><td>Filter to a single game, e.g. <code>Mega888</code> (matches a deposit's <code>selected_game</code> / a withdrawal's <code>game_name</code>). <code>selected_game</code> accepted as an alias.</td></tr>
                 <tr><td><code>limit</code></td><td><code>100</code></td><td>Max rows (up to 500).</td></tr>
               </table>
             </div>
@@ -818,7 +824,7 @@
       <section id="bank-accounts">
         <h2>Resource</h2>
         <div class="block-title">Bank accounts</div>
-        <div class="prose"><p>Collection and payout accounts owned by an entity. <code>role: "deposit"</code> = player collection (the accounts the bot watches); <code>role: "withdrawal"</code> = payouts.</p></div>
+        <div class="prose"><p>Collection and payout accounts owned by an entity. <code>role: "deposit"</code> = player collection (the accounts the bot watches); <code>role: "withdrawal"</code> = payouts. <code>GET</code> responses include the account's <strong>online-banking login</strong> — <code>username</code>, <code>password</code>, <code>pin</code> (also exposed as <code>login_id</code> / <code>login_password</code> / <code>login_pin</code>); these are <code>null</code> until an admin fills them in. A company-scoped key returns only its own company's accounts.</p></div>
 
         <div class="ep">
           <div class="ep-head"><span class="m get">Get</span><span class="ep-path">/api/bot/bank-accounts</span><span class="use-tag">List</span></div>
@@ -858,6 +864,37 @@
               <div><span class="sc warn">409</span><span>Referenced by transfers or transactions.</span></div>
             </div>
           </div>
+        </div>
+      </section>
+
+      <section id="kiosks">
+        <h2>Resource</h2>
+        <div class="block-title">Kiosks</div>
+        <div class="prose"><p>Game-provider back-office (kiosk) logins the bot signs into to assign game credit. Read-only over the bot API and <strong>includes the login credentials</strong> (<code>username</code>, <code>password</code>, <code>pin</code>). A company-scoped key returns only its own company's kiosks.</p></div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m get">Get</span><span class="ep-path">/api/bot/kiosks</span><span class="use-tag">List</span></div>
+          <div class="ep-body">
+            <div class="prose"><p>Filter with <code>?game=</code>, <code>?status=active|inactive</code>, and (unscoped keys only) <code>?company_entity_id=</code>. A company-scoped key ignores <code>company_entity_id</code> and returns only its own kiosks.</p></div>
+            <div class="code" data-copy>
+              <button class="copy">Copy</button>
+              <pre><code><span class="k">curl</span> <span class="s">"$BASE/api/bot/kiosks?game=Mega888&status=active"</span> -H <span class="s">"X-API-Key: $KEY"</span>
+
+<span class="cmt"># → 200 OK</span>
+{ <span class="k">"count"</span>: <span class="n">1</span>, <span class="k">"kiosks"</span>: [
+  { <span class="k">"kiosk_id"</span>: <span class="n">3</span>, <span class="k">"company_entity_id"</span>: <span class="n">5</span>,
+    <span class="k">"game_name"</span>: <span class="s">"Mega888"</span>,
+    <span class="k">"username"</span>: <span class="s">"alpha_mega_master"</span>, <span class="k">"password"</span>: <span class="s">"•••"</span>, <span class="k">"pin"</span>: <span class="s">"1234"</span>,
+    <span class="k">"label"</span>: <span class="s">"Master Agent"</span>, <span class="k">"current_credit"</span>: <span class="n">12500.00</span>,
+    <span class="k">"status"</span>: <span class="s">"active"</span>, <span class="k">"last_heartbeat_at"</span>: <span class="n">null</span>,
+    <span class="k">"notes"</span>: <span class="n">null</span>, <span class="k">"created_at"</span>: <span class="s">"2026-07-01T…"</span> } ] }</code></pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m get">Get</span><span class="ep-path">/api/bot/kiosks/:id</span><span class="use-tag">Retrieve</span></div>
+          <div class="ep-body"><div class="prose"><p>One kiosk with its credentials. <span class="sc warn">404</span> if it's outside a scoped key's company.</p></div></div>
         </div>
       </section>
 

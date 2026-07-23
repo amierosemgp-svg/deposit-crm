@@ -1,8 +1,8 @@
 import { createHash, randomBytes } from "node:crypto";
-import { desc } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { apiKeys } from "@/db/schema";
+import { apiKeys, entities } from "@/db/schema";
 import { AuthError, authErrorResponse, requireUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 
@@ -12,21 +12,29 @@ function requireAdmin(user: Awaited<ReturnType<typeof requireUser>>) {
   }
 }
 
+/** Short alphanumeric code from an entity name, e.g. "Leader One" → "leaderone". */
+function slug(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 12) || "org";
+}
+
+const keyColumns = {
+  key_id: apiKeys.key_id,
+  label: apiKeys.label,
+  hint: apiKeys.hint,
+  status: apiKeys.status,
+  allowed_ips: apiKeys.allowed_ips,
+  company_entity_id: apiKeys.company_entity_id,
+  last_used_at: apiKeys.last_used_at,
+  created_at: apiKeys.created_at,
+};
+
 /** GET /api/api-keys — list keys (never returns the raw key, only the hint). */
 export async function GET() {
   try {
     const user = await requireUser();
     requireAdmin(user);
     const rows = await db
-      .select({
-        key_id: apiKeys.key_id,
-        label: apiKeys.label,
-        hint: apiKeys.hint,
-        status: apiKeys.status,
-        allowed_ips: apiKeys.allowed_ips,
-        last_used_at: apiKeys.last_used_at,
-        created_at: apiKeys.created_at,
-      })
+      .select(keyColumns)
       .from(apiKeys)
       .orderBy(desc(apiKeys.created_at));
     return Response.json({ apiKeys: rows });
@@ -37,11 +45,14 @@ export async function GET() {
 
 const createSchema = z.object({
   label: z.string().min(2).max(80),
+  company_entity_id: z.number().int().positive().nullable().optional(),
   allowed_ips: z.array(z.string()).optional(),
 });
 
 /**
  * POST /api/api-keys — mint a new key.
+ * A company_entity_id scopes the key to that company; the generated key is
+ * prefixed with its leader's code (e.g. "alpha_dbk_…") for identification.
  * Returns the plaintext key EXACTLY ONCE; only its hash is stored.
  */
 export async function POST(request: Request) {
@@ -50,25 +61,43 @@ export async function POST(request: Request) {
     requireAdmin(user);
     const parsed = createSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return jsonError("A label is required");
-    const { label, allowed_ips } = parsed.data;
+    const { label, allowed_ips, company_entity_id } = parsed.data;
 
-    const raw = `dbk_${randomBytes(24).toString("hex")}`;
+    // Resolve the scope + prefix from the company (and its leader parent).
+    let prefix = "";
+    let companyId: number | null = null;
+    if (company_entity_id != null) {
+      const [company] = await db
+        .select()
+        .from(entities)
+        .where(eq(entities.entity_id, company_entity_id));
+      if (!company || company.entity_type !== "company") {
+        return jsonError("Scope must be a company entity");
+      }
+      companyId = company.entity_id;
+      // Prefix from the parent leader's name; fall back to the company's.
+      let prefixName = company.name;
+      if (company.parent_entity_id != null) {
+        const [parent] = await db
+          .select()
+          .from(entities)
+          .where(eq(entities.entity_id, company.parent_entity_id));
+        if (parent) prefixName = parent.name;
+      }
+      prefix = `${slug(prefixName)}_`;
+    }
+
+    const raw = `${prefix}dbk_${randomBytes(24).toString("hex")}`;
     const [created] = await db
       .insert(apiKeys)
       .values({
         key_hash: createHash("sha256").update(raw).digest("hex"),
-        hint: `${raw.slice(0, 8)}…${raw.slice(-4)}`,
+        hint: `${raw.slice(0, 12)}…${raw.slice(-4)}`,
         label,
+        company_entity_id: companyId,
         allowed_ips: allowed_ips?.length ? allowed_ips : null,
       })
-      .returning({
-        key_id: apiKeys.key_id,
-        label: apiKeys.label,
-        hint: apiKeys.hint,
-        status: apiKeys.status,
-        allowed_ips: apiKeys.allowed_ips,
-        created_at: apiKeys.created_at,
-      });
+      .returning(keyColumns);
 
     // `key` is returned this one time; it is never retrievable again.
     return Response.json({ apiKey: created, key: raw }, { status: 201 });

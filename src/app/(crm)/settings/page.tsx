@@ -409,6 +409,7 @@ function KeysTab() {
   const fetchApiKeys = useStore((s) => s.fetchApiKeys);
   const updateApiKey = useStore((s) => s.updateApiKey);
   const deleteApiKey = useStore((s) => s.deleteApiKey);
+  const entityName = useStore((s) => s.entityName);
   const [createOpen, setCreateOpen] = useState(false);
   const [newKey, setNewKey] = useState<string | null>(null);
   const [editIps, setEditIps] = useState<ApiKeyRow | null>(null);
@@ -445,6 +446,7 @@ function KeysTab() {
               <tr className="border-b border-border bg-muted/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
                 <th className="px-4 py-2.5 font-semibold">Label</th>
                 <th className="px-4 py-2.5 font-semibold">Key</th>
+                <th className="px-4 py-2.5 font-semibold">Scope</th>
                 <th className="px-4 py-2.5 font-semibold">IP allowlist</th>
                 <th className="px-4 py-2.5 font-semibold">Last used</th>
                 <th className="px-4 py-2.5 font-semibold">Status</th>
@@ -453,12 +455,21 @@ function KeysTab() {
             </thead>
             <tbody>
               {apiKeys.length === 0 && (
-                <tr><td colSpan={6} className="px-4 py-10 text-center text-muted-foreground">No API keys yet.</td></tr>
+                <tr><td colSpan={7} className="px-4 py-10 text-center text-muted-foreground">No API keys yet.</td></tr>
               )}
               {apiKeys.map((k) => (
                 <tr key={k.key_id} className="border-b border-border last:border-0">
                   <td className="px-4 py-3 font-medium">{k.label}</td>
                   <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{k.hint ?? "dbk_••••"}</td>
+                  <td className="px-4 py-3 text-xs">
+                    {k.company_entity_id != null ? (
+                      <span className="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
+                        {entityName(k.company_entity_id)}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">Full access</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-xs">
                     {k.allowed_ips?.length ? (
                       <span className="font-mono text-muted-foreground">{k.allowed_ips.join(", ")}</span>
@@ -556,17 +567,23 @@ function CreateKeyModal({
   open, onOpenChange, onCreated,
 }: { open: boolean; onOpenChange: (o: boolean) => void; onCreated: (key: string) => void }) {
   const createApiKey = useStore((s) => s.createApiKey);
+  const companies = useStore((s) => s.companies)();
   const [label, setLabel] = useState("");
+  const [scope, setScope] = useState("all");
   const [ips, setIps] = useState("");
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => { if (open) { setLabel(""); setIps(""); } }, [open]);
+  useEffect(() => { if (open) { setLabel(""); setScope("all"); setIps(""); } }, [open]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
     const allowed = ips.split(",").map((s) => s.trim()).filter(Boolean);
-    const r = await createApiKey({ label, allowed_ips: allowed.length ? allowed : undefined });
+    const r = await createApiKey({
+      label,
+      company_entity_id: scope === "all" ? null : Number(scope),
+      allowed_ips: allowed.length ? allowed : undefined,
+    });
     setBusy(false);
     if (!r.ok || !r.key) return toast.error(r.error ?? "Failed to create key");
     onOpenChange(false);
@@ -582,6 +599,27 @@ function CreateKeyModal({
           <div className="space-y-1.5">
             <Label>Label</Label>
             <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. OpenClaw bot — production" required />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Scope</Label>
+            <Select value={scope} onValueChange={(v) => setScope(v ?? "all")}>
+              <SelectTrigger className="h-9 w-full cursor-pointer">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all" className="cursor-pointer">
+                  Full access (all companies)
+                </SelectItem>
+                {companies.map((c) => (
+                  <SelectItem key={c.company_id} value={String(c.company_id)} className="cursor-pointer">
+                    {c.company_name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              A company scope limits this key to that company&apos;s bank accounts &amp; kiosks, and prefixes the key with its leader code.
+            </p>
           </div>
           <div className="space-y-1.5">
             <Label>IP allowlist <span className="text-muted-foreground">(optional)</span></Label>

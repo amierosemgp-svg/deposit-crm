@@ -90,6 +90,11 @@ export function bankAccountJson(a: typeof bankAccounts.$inferSelect) {
     account_number: a.account_number,
     account_holder: a.account_holder,
     label: a.label,
+    // Online-banking login the bot uses to query the account. Named to match
+    // the kiosk endpoint (username/password/pin); login_* kept as aliases.
+    username: a.login_id,
+    password: a.login_password,
+    pin: a.login_pin,
     login_id: a.login_id,
     login_password: a.login_password,
     login_pin: a.login_pin,

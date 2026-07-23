@@ -265,6 +265,7 @@ type Store = {
   fetchApiKeys: () => Promise<void>;
   createApiKey: (input: {
     label: string;
+    company_entity_id?: number | null;
     allowed_ips?: string[];
   }) => Promise<{ ok: boolean; key?: string; error?: string }>;
   updateApiKey: (

@@ -19,7 +19,10 @@ export async function GET(request: Request) {
   const status = url.searchParams.get("status");
 
   const filters: SQL[] = [];
-  if (companyId) {
+  // A company-scoped key only ever sees its own company's kiosks.
+  if (auth.companyId != null) {
+    filters.push(eq(providerBoAccounts.company_entity_id, auth.companyId));
+  } else if (companyId) {
     filters.push(eq(providerBoAccounts.company_entity_id, Number(companyId)));
   }
   if (game) filters.push(eq(providerBoAccounts.game_name, game));

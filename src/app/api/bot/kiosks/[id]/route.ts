@@ -17,7 +17,10 @@ export async function GET(
     .select()
     .from(providerBoAccounts)
     .where(eq(providerBoAccounts.bo_account_id, Number(id)));
-  if (!row) return jsonError("Kiosk not found", 404);
+  // 404 (not 403) when out of a scoped key's company — don't reveal existence.
+  if (!row || (auth.companyId != null && row.company_entity_id !== auth.companyId)) {
+    return jsonError("Kiosk not found", 404);
+  }
 
   return Response.json({ kiosk: kioskJson(row) });
 }

@@ -282,6 +282,7 @@ export type ApiKeyRow = {
   hint: string | null;
   status: "active" | "inactive";
   allowed_ips: string[] | null;
+  company_entity_id: number | null;
   last_used_at?: string | null;
   created_at: string;
 };

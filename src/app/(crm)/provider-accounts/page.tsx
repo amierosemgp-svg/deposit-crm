@@ -18,6 +18,7 @@ import type { ProviderBoAccount } from "@/lib/types";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/status-badge";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -40,6 +41,7 @@ export default function ProviderAccountsPage() {
   const accounts = useStore((s) => s.boAccounts);
   const adjustments = useStore((s) => s.boAdjustments);
   const deleteAccount = useStore((s) => s.deleteBoAccount);
+  const updateAccount = useStore((s) => s.updateBoAccount);
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
   const selectedLeaderId = useStore((s) => s.selectedLeaderId);
   const companyInScope = useStore((s) => s.companyInScope);
@@ -133,6 +135,18 @@ export default function ProviderAccountsPage() {
       return;
     }
     toast.success("BO account deleted");
+  }
+  async function toggleStatus(account: ProviderBoAccount, active: boolean) {
+    const result = await updateAccount(account.bo_account_id, {
+      status: active ? "active" : "inactive",
+    });
+    if (!result.ok) {
+      toast.error(result.error ?? "Could not update status");
+      return;
+    }
+    toast.success(
+      `${account.game_name} · ${account.bo_username} ${active ? "activated" : "deactivated"}`,
+    );
   }
 
   return (
@@ -342,7 +356,27 @@ export default function ProviderAccountsPage() {
                       )}
                     </td>
                     <td className="px-3 py-2">
-                      <StatusBadge status={a.status} />
+                      {canManage ? (
+                        <div className="flex items-center gap-2">
+                          <Switch
+                            checked={a.status === "active"}
+                            onCheckedChange={(v) => void toggleStatus(a, v)}
+                            aria-label={`Toggle ${a.bo_username} active`}
+                          />
+                          <span
+                            className={cn(
+                              "text-[11px] font-medium",
+                              a.status === "active"
+                                ? "text-emerald-700"
+                                : "text-muted-foreground",
+                            )}
+                          >
+                            {a.status === "active" ? "Active" : "Inactive"}
+                          </span>
+                        </div>
+                      ) : (
+                        <StatusBadge status={a.status} />
+                      )}
                     </td>
                     {canManage && (
                       <td className="px-3 py-2">

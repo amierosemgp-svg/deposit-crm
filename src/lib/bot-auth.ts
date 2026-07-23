@@ -4,7 +4,13 @@ import { db } from "@/db";
 import { apiKeys } from "@/db/schema";
 
 export type BotAuthResult =
-  | { ok: true; keyId: number; label: string }
+  | {
+      ok: true;
+      keyId: number;
+      label: string;
+      /** When set, the key only sees this company's data. null = full access. */
+      companyId: number | null;
+    }
   | { ok: false; response: Response };
 
 /**
@@ -61,5 +67,10 @@ export async function requireBotKey(request: Request): Promise<BotAuthResult> {
       () => {},
     );
 
-  return { ok: true, keyId: key.key_id, label: key.label };
+  return {
+    ok: true,
+    keyId: key.key_id,
+    label: key.label,
+    companyId: key.company_entity_id ?? null,
+  };
 }
