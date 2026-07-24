@@ -32,8 +32,10 @@ import {
   Landmark,
   Gamepad2,
   Loader2,
+  Pencil,
   Plus,
   Save,
+  Trash2,
 } from "lucide-react";
 
 type Props = {
@@ -67,9 +69,13 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
   const [bankFormOpen, setBankFormOpen] = useState(false);
   const [bankForm, setBankForm] = useState(EMPTY_BANK);
   const [savingBank, setSavingBank] = useState(false);
+  // Index into player.bank_accounts being edited, or null when adding.
+  const [editingBank, setEditingBank] = useState<number | null>(null);
   const [gameFormOpen, setGameFormOpen] = useState(false);
   const [gameForm, setGameForm] = useState(EMPTY_GAME);
   const [savingGame, setSavingGame] = useState(false);
+  // Index into player.game_accounts being edited, or null when adding.
+  const [editingGame, setEditingGame] = useState<number | null>(null);
 
   // Reset drafts whenever a different player is opened (state-during-render reset).
   const [prevResetKey, setPrevResetKey] = useState("");
@@ -80,9 +86,11 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
     setBankFormOpen(false);
     setBankForm(EMPTY_BANK);
     setSavingBank(false);
+    setEditingBank(null);
     setGameFormOpen(false);
     setGameForm(EMPTY_GAME);
     setSavingGame(false);
+    setEditingGame(null);
   }
 
   const playerCredits = gameCredits.filter((c) => c.player_id === playerId);
@@ -118,49 +126,79 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
   const gameFormValid =
     gameForm.game_name !== "" && gameForm.game_username.trim() !== "";
 
-  async function addBankAccount() {
+  async function saveBankAccount() {
     if (!player || !bankFormValid || savingBank) return;
     setSavingBank(true);
+    const entry = {
+      bank_name: bankForm.bank_name,
+      account_number: bankForm.account_number.trim(),
+      account_holder: bankForm.account_holder.trim() || player.full_name,
+    };
+    const list = player.bank_accounts ?? [];
     const res = await updatePlayer(player.player_id, {
-      bank_accounts: [
-        ...(player.bank_accounts ?? []),
-        {
-          bank_name: bankForm.bank_name,
-          account_number: bankForm.account_number.trim(),
-          account_holder: bankForm.account_holder.trim() || player.full_name,
-        },
-      ],
+      bank_accounts:
+        editingBank === null
+          ? [...list, entry]
+          : list.map((b, i) => (i === editingBank ? entry : b)),
     });
     setSavingBank(false);
     if (res.ok) {
-      toast.success("Bank account added");
+      toast.success(editingBank === null ? "Bank account added" : "Bank account updated");
       setBankForm(EMPTY_BANK);
       setBankFormOpen(false);
+      setEditingBank(null);
     } else {
-      toast.error(res.error ?? "Failed to add bank account");
+      toast.error(res.error ?? "Failed to save bank account");
     }
   }
 
-  async function addGameAccount() {
+  async function removeBankAccount(index: number) {
+    if (!player) return;
+    const b = (player.bank_accounts ?? [])[index];
+    if (!b) return;
+    if (!confirm(`Remove ${b.bank_name} account ${b.account_number}? Auto-matching deposits from it will stop.`)) return;
+    const res = await updatePlayer(player.player_id, {
+      bank_accounts: (player.bank_accounts ?? []).filter((_, i) => i !== index),
+    });
+    if (res.ok) toast.success("Bank account removed");
+    else toast.error(res.error ?? "Failed to remove bank account");
+  }
+
+  async function saveGameAccount() {
     if (!player || !gameFormValid || savingGame) return;
     setSavingGame(true);
+    const entry = {
+      game_name: gameForm.game_name,
+      game_username: gameForm.game_username.trim(),
+    };
+    const list = player.game_accounts ?? [];
     const res = await updatePlayer(player.player_id, {
-      game_accounts: [
-        ...(player.game_accounts ?? []),
-        {
-          game_name: gameForm.game_name,
-          game_username: gameForm.game_username.trim(),
-        },
-      ],
+      game_accounts:
+        editingGame === null
+          ? [...list, entry]
+          : list.map((g, i) => (i === editingGame ? entry : g)),
     });
     setSavingGame(false);
     if (res.ok) {
-      toast.success("Game account linked");
+      toast.success(editingGame === null ? "Game account linked" : "Game account updated");
       setGameForm(EMPTY_GAME);
       setGameFormOpen(false);
+      setEditingGame(null);
     } else {
-      toast.error(res.error ?? "Failed to link game account");
+      toast.error(res.error ?? "Failed to save game account");
     }
+  }
+
+  async function removeGameAccount(index: number) {
+    if (!player) return;
+    const g = (player.game_accounts ?? [])[index];
+    if (!g) return;
+    if (!confirm(`Remove ${g.game_name} account "${g.game_username}"?`)) return;
+    const res = await updatePlayer(player.player_id, {
+      game_accounts: (player.game_accounts ?? []).filter((_, i) => i !== index),
+    });
+    if (res.ok) toast.success("Game account removed");
+    else toast.error(res.error ?? "Failed to remove game account");
   }
 
   async function saveNotes() {
@@ -302,7 +340,11 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => setBankFormOpen(true)}
+                      onClick={() => {
+                        setBankForm(EMPTY_BANK);
+                        setEditingBank(null);
+                        setBankFormOpen(true);
+                      }}
                       className="h-7 -my-1 cursor-pointer"
                     >
                       <Plus className="h-3.5 w-3.5" />
@@ -355,6 +397,7 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
                         onClick={() => {
                           setBankFormOpen(false);
                           setBankForm(EMPTY_BANK);
+                          setEditingBank(null);
                         }}
                         disabled={savingBank}
                         className="cursor-pointer"
@@ -363,16 +406,18 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
                       </Button>
                       <Button
                         size="sm"
-                        onClick={addBankAccount}
+                        onClick={saveBankAccount}
                         disabled={!bankFormValid || savingBank}
                         className="cursor-pointer"
                       >
                         {savingBank ? (
                           <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
+                        ) : editingBank === null ? (
                           <Plus className="h-3.5 w-3.5" />
+                        ) : (
+                          <Save className="h-3.5 w-3.5" />
                         )}
-                        Add account
+                        {editingBank === null ? "Add account" : "Save changes"}
                       </Button>
                     </div>
                   </div>
@@ -382,7 +427,7 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
                     {player.bank_accounts.map((b, i) => (
                       <div
                         key={i}
-                        className="rounded-md border bg-card p-3 flex items-start gap-3"
+                        className="group rounded-md border bg-card p-3 flex items-start gap-3"
                       >
                         <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary">
                           <Landmark className="h-4 w-4" />
@@ -398,6 +443,36 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
                         <span className="inline-flex items-center rounded-md border bg-muted/40 px-2 py-0.5 text-[11px] whitespace-nowrap">
                           {b.bank_name}
                         </span>
+                        {!isViewer && (
+                          <div className="flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              onClick={() => {
+                                setBankForm({
+                                  bank_name: b.bank_name,
+                                  account_number: b.account_number,
+                                  account_holder: b.account_holder,
+                                });
+                                setEditingBank(i);
+                                setBankFormOpen(true);
+                              }}
+                              className="h-6 w-6 cursor-pointer"
+                              aria-label={`Edit ${b.bank_name} account`}
+                            >
+                              <Pencil className="h-3 w-3" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              onClick={() => void removeBankAccount(i)}
+                              className="h-6 w-6 cursor-pointer text-rose-600 hover:text-rose-700"
+                              aria-label={`Remove ${b.bank_name} account`}
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -425,7 +500,11 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => setGameFormOpen(true)}
+                      onClick={() => {
+                        setGameForm(EMPTY_GAME);
+                        setEditingGame(null);
+                        setGameFormOpen(true);
+                      }}
                       className="h-7 -my-1 cursor-pointer"
                     >
                       <Plus className="h-3.5 w-3.5" />
@@ -451,7 +530,7 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
                               key={g}
                               value={g}
                               disabled={(player.game_accounts ?? []).some(
-                                (ga) => ga.game_name === g,
+                                (ga, gi) => ga.game_name === g && gi !== editingGame,
                               )}
                               className="cursor-pointer"
                             >
@@ -476,6 +555,7 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
                         onClick={() => {
                           setGameFormOpen(false);
                           setGameForm(EMPTY_GAME);
+                          setEditingGame(null);
                         }}
                         disabled={savingGame}
                         className="cursor-pointer"
@@ -484,16 +564,18 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
                       </Button>
                       <Button
                         size="sm"
-                        onClick={addGameAccount}
+                        onClick={saveGameAccount}
                         disabled={!gameFormValid || savingGame}
                         className="cursor-pointer"
                       >
                         {savingGame ? (
                           <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
+                        ) : editingGame === null ? (
                           <Plus className="h-3.5 w-3.5" />
+                        ) : (
+                          <Save className="h-3.5 w-3.5" />
                         )}
-                        Link account
+                        {editingGame === null ? "Link account" : "Save changes"}
                       </Button>
                     </div>
                   </div>
@@ -503,7 +585,7 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
                     {player.game_accounts.map((g, i) => (
                       <div
                         key={i}
-                        className="rounded-md border bg-card px-3 py-2"
+                        className="group relative rounded-md border bg-card px-3 py-2"
                       >
                         <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
                           {g.game_name}
@@ -511,6 +593,35 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
                         <div className="text-sm font-medium font-mono mt-0.5 truncate">
                           {g.game_username}
                         </div>
+                        {!isViewer && (
+                          <div className="absolute top-1 right-1 flex gap-0.5 rounded-md bg-card opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              onClick={() => {
+                                setGameForm({
+                                  game_name: g.game_name,
+                                  game_username: g.game_username,
+                                });
+                                setEditingGame(i);
+                                setGameFormOpen(true);
+                              }}
+                              className="h-6 w-6 cursor-pointer"
+                              aria-label={`Edit ${g.game_name} account`}
+                            >
+                              <Pencil className="h-3 w-3" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              onClick={() => void removeGameAccount(i)}
+                              className="h-6 w-6 cursor-pointer text-rose-600 hover:text-rose-700"
+                              aria-label={`Remove ${g.game_name} account`}
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
