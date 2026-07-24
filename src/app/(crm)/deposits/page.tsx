@@ -310,7 +310,14 @@ export default function DepositsPage() {
       <Card className="overflow-hidden p-0 gap-0">
         <div className="flex flex-wrap items-center gap-2 border-b bg-muted/30 px-4 py-2.5">
           <Filter className="h-3.5 w-3.5 text-muted-foreground" />
-          <Select value={bankFilter} onValueChange={(v) => setBankFilter(v ?? "all")}>
+          <Select
+            value={bankFilter}
+            onValueChange={(v) => setBankFilter(v ?? "all")}
+            items={[
+              { value: "all", label: "All banks" },
+              ...banks.map((b) => ({ value: b, label: b })),
+            ]}
+          >
             <SelectTrigger className="h-8 w-[130px] cursor-pointer">
               <SelectValue />
             </SelectTrigger>

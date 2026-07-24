@@ -853,7 +853,17 @@ export default function ReportDetailPage() {
               <span className="text-[11px] font-medium text-muted-foreground">
                 Status
               </span>
-              <Select value={status} onValueChange={(v) => setStatus(v ?? "all")}>
+              <Select
+                value={status}
+                onValueChange={(v) => setStatus(v ?? "all")}
+                items={[
+                  { value: "all", label: "All Statuses" },
+                  ...statusOptions.map((s) => ({
+                    value: s,
+                    label: s.replace(/_/g, " "),
+                  })),
+                ]}
+              >
                 <SelectTrigger className="h-8 w-[160px] cursor-pointer">
                   <SelectValue />
                 </SelectTrigger>

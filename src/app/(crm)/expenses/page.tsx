@@ -188,7 +188,17 @@ export default function ExpensesPage() {
             <span className="text-[11px] font-medium text-muted-foreground">
               Category
             </span>
-            <Select value={category} onValueChange={(v) => setCategory(v ?? "all")}>
+            <Select
+              value={category}
+              onValueChange={(v) => setCategory(v ?? "all")}
+              items={[
+                { value: "all", label: "All Categories" },
+                ...EXPENSE_CATEGORIES.map((c) => ({
+                  value: c,
+                  label: CATEGORY_META[c].label,
+                })),
+              ]}
+            >
               <SelectTrigger className="h-8 w-[150px] cursor-pointer">
                 <SelectValue />
               </SelectTrigger>

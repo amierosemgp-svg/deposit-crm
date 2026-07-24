@@ -247,7 +247,14 @@ export default function ProviderAccountsPage() {
           <span className="text-[12px] text-muted-foreground">
             {activeCompanyName ?? "All companies"}
           </span>
-          <Select value={gameFilter} onValueChange={(v) => setGameFilter(v ?? "all")}>
+          <Select
+            value={gameFilter}
+            onValueChange={(v) => setGameFilter(v ?? "all")}
+            items={[
+              { value: "all", label: "All games" },
+              ...games.map((g) => ({ value: g, label: g })),
+            ]}
+          >
             <SelectTrigger className="h-8 w-[140px] cursor-pointer">
               <SelectValue />
             </SelectTrigger>
