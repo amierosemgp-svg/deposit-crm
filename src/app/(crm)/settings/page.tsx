@@ -18,6 +18,7 @@ import {
 import { useStore } from "@/lib/store";
 import { formatRelative } from "@/lib/format";
 import { Card } from "@/components/ui/card";
+import { ListLoading } from "@/components/list-loading";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -183,6 +184,7 @@ function Row({ label, value }: { label: string; value: string }) {
 function TeamTab() {
   const me = useStore((s) => s.me)!;
   const users = useStore((s) => s.users);
+  const hydrated = useStore((s) => s.hydrated);
   const entities = useStore((s) => s.entities);
   const entityName = useStore((s) => s.entityName);
   const updateUser = useStore((s) => s.updateUser);
@@ -247,7 +249,11 @@ function TeamTab() {
               {managed.length === 0 && (
                 <tr>
                   <td colSpan={5} className="px-4 py-10 text-center text-muted-foreground">
-                    No team members yet. Add your first with “Add member”.
+                    {!hydrated ? (
+                      <ListLoading className="py-0" label="Loading team…" />
+                    ) : (
+                      "No team members yet. Add your first with “Add member”."
+                    )}
                   </td>
                 </tr>
               )}
@@ -413,6 +419,7 @@ function AddMemberModal({ open, onOpenChange }: { open: boolean; onOpenChange: (
 
 function KeysTab() {
   const apiKeys = useStore((s) => s.apiKeys);
+  const hydrated = useStore((s) => s.hydrated);
   const fetchApiKeys = useStore((s) => s.fetchApiKeys);
   const updateApiKey = useStore((s) => s.updateApiKey);
   const deleteApiKey = useStore((s) => s.deleteApiKey);
@@ -462,7 +469,15 @@ function KeysTab() {
             </thead>
             <tbody>
               {apiKeys.length === 0 && (
-                <tr><td colSpan={7} className="px-4 py-10 text-center text-muted-foreground">No API keys yet.</td></tr>
+                <tr>
+                  <td colSpan={7} className="px-4 py-10 text-center text-muted-foreground">
+                    {!hydrated ? (
+                      <ListLoading className="py-0" label="Loading API keys…" />
+                    ) : (
+                      "No API keys yet."
+                    )}
+                  </td>
+                </tr>
               )}
               {apiKeys.map((k) => (
                 <tr key={k.key_id} className="border-b border-border last:border-0">

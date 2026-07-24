@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PlayerNameLink } from "@/components/player-name-link";
 import { StatusBadge } from "@/components/status-badge";
+import { ListLoading } from "@/components/list-loading";
 import { ArrowLeftRight, Loader2, Search } from "lucide-react";
 import { toast } from "sonner";
 
@@ -28,6 +29,7 @@ export default function GameTransferPage() {
   const [submitting, setSubmitting] = useState(false);
 
   const transfers = useStore((s) => s.gameTransfers);
+  const hydrated = useStore((s) => s.hydrated);
   const players = useStore((s) => s.players);
   const getBalance = useStore((s) => s.getCreditBalance);
   const createTransfer = useStore((s) => s.createGameTransfer);
@@ -246,8 +248,11 @@ export default function GameTransferPage() {
                       colSpan={7}
                       className="px-3 py-10 text-center text-sm text-muted-foreground"
                     >
-                      No game transfers yet — they will show up here once credits
-                      are moved between games.
+                      {!hydrated ? (
+                        <ListLoading className="py-0" label="Loading transfers…" />
+                      ) : (
+                        "No game transfers yet — they will show up here once credits are moved between games."
+                      )}
                     </td>
                   </tr>
                 )}

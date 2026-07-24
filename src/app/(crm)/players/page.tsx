@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
 import { formatRM, formatRelative, initialsOf } from "@/lib/format";
 import { Card } from "@/components/ui/card";
+import { ListLoading } from "@/components/list-loading";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { StatusBadge } from "@/components/status-badge";
@@ -14,6 +15,7 @@ import { Search, Send, Upload, UserPlus, Users } from "lucide-react";
 
 export default function PlayersPage() {
   const players = useStore((s) => s.players);
+  const hydrated = useStore((s) => s.hydrated);
   const entityName = useStore((s) => s.entityName);
   const companiesFn = useStore((s) => s.companies);
   const me = useStore((s) => s.me);
@@ -108,7 +110,9 @@ export default function PlayersPage() {
           </span>
         </div>
 
-        {filtered.length === 0 ? (
+        {!hydrated ? (
+          <ListLoading label="Loading players…" className="py-14" />
+        ) : filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-2 px-4 py-14 text-center">
             <div className="flex h-11 w-11 items-center justify-center rounded-full bg-muted text-muted-foreground">
               <Users className="h-5 w-5" />

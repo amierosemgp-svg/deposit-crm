@@ -6,6 +6,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { StatTile } from "@/components/stat-tile";
+import { ListLoading } from "@/components/list-loading";
 import { useStore } from "@/lib/store";
 import { formatDateTime, formatRelative, isBotOnline } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -36,6 +37,7 @@ function StateBadge({ state }: { state: BotState }) {
 
 export default function BotHealthPage() {
   const botHealth = useStore((s) => s.botHealth);
+  const hydrated = useStore((s) => s.hydrated);
   const refresh = useStore((s) => s.refresh);
   const [query, setQuery] = useState("");
   const [refreshing, setRefreshing] = useState(false);
@@ -209,9 +211,13 @@ export default function BotHealthPage() {
                     colSpan={7}
                     className="px-3 py-12 text-center text-xs text-muted-foreground"
                   >
-                    {botHealth.length === 0
-                      ? "No bots have reported yet."
-                      : "No bots match your search."}
+                    {!hydrated ? (
+                      <ListLoading className="py-0" label="Loading bots…" />
+                    ) : botHealth.length === 0 ? (
+                      "No bots have reported yet."
+                    ) : (
+                      "No bots match your search."
+                    )}
                   </td>
                 </tr>
               )}

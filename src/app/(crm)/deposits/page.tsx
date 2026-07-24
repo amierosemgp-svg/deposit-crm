@@ -533,7 +533,15 @@ export default function DepositsPage() {
                             <PlayerNameLink playerId={d.player_id}>
                               {d.player_username ?? `P-${d.player_id}`}
                             </PlayerNameLink>
-                            <div className="text-[10px] text-muted-foreground">P-{d.player_id}</div>
+                            {editable && (
+                              <button
+                                type="button"
+                                onClick={() => setAssignTargets([d.deposit_id])}
+                                className="block cursor-pointer text-[11px] text-muted-foreground underline underline-offset-2 hover:text-primary"
+                              >
+                                Change
+                              </button>
+                            )}
                           </>
                         ) : (
                           <div className="space-y-1.5">

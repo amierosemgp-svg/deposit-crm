@@ -7,6 +7,7 @@ import { formatRM, formatDateTime, isBotOnline } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { StatTile } from "@/components/stat-tile";
+import { ListLoading } from "@/components/list-loading";
 import { StatusBadge } from "@/components/status-badge";
 import { PlayerNameLink } from "@/components/player-name-link";
 import { cn } from "@/lib/utils";
@@ -62,7 +63,7 @@ function EmptyRow({
         colSpan={colSpan}
         className="px-4 py-8 text-center text-xs text-muted-foreground"
       >
-        {hydrated ? message : "Loading…"}
+        {hydrated ? message : <ListLoading className="py-0" />}
       </td>
     </tr>
   );

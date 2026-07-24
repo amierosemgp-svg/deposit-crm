@@ -25,6 +25,7 @@ import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/status-badge";
 import { Switch } from "@/components/ui/switch";
 import { BankAccountFormModal } from "@/components/bank-account-form-modal";
+import { ListLoading } from "@/components/list-loading";
 import { BankTransferModal } from "@/components/bank-transfer-modal";
 import { cn } from "@/lib/utils";
 
@@ -73,6 +74,7 @@ export default function BankAccountsPage() {
   const transfers = useStore((s) => s.bankTransfers);
   const entities = useStore((s) => s.entities);
   const me = useStore((s) => s.me);
+  const hydrated = useStore((s) => s.hydrated);
   const entityName = useStore((s) => s.entityName);
   const userName = useStore((s) => s.userName);
   const deleteAccount = useStore((s) => s.deleteBankAccount);
@@ -436,7 +438,11 @@ export default function BankAccountsPage() {
       </div>
 
       {/* Accounts grouped by entity */}
-      {grouped.length === 0 ? (
+      {!hydrated ? (
+        <Card className="p-0">
+          <ListLoading label="Loading bank accounts…" className="py-14" />
+        </Card>
+      ) : grouped.length === 0 ? (
         <Card className="p-0">
           <div className="flex flex-col items-center justify-center px-6 py-14 text-center">
             <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
@@ -633,7 +639,11 @@ export default function BankAccountsPage() {
                     colSpan={7}
                     className="px-3 py-10 text-center text-sm text-muted-foreground"
                   >
-                    No transfers yet. Funds moved between entity accounts will appear here.
+                    {!hydrated ? (
+                      <ListLoading className="py-0" label="Loading transfers…" />
+                    ) : (
+                      "No transfers yet. Funds moved between entity accounts will appear here."
+                    )}
                   </td>
                 </tr>
               )}

@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
+import { ListLoading } from "@/components/list-loading";
 import { StatTile } from "@/components/stat-tile";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -80,6 +81,7 @@ export default function ReportDetailPage() {
   const def = REPORT_DEFS.find((r) => r.id === reportId);
 
   const deposits = useStore((s) => s.deposits);
+  const hydrated = useStore((s) => s.hydrated);
   const withdrawals = useStore((s) => s.withdrawals);
   const players = useStore((s) => s.players);
   const users = useStore((s) => s.users);
@@ -962,7 +964,11 @@ export default function ReportDetailPage() {
                     colSpan={table.headers.length}
                     className="px-3 py-12 text-center text-xs text-muted-foreground"
                   >
-                    No data matches the current filters.
+                    {!hydrated ? (
+                      <ListLoading className="py-0" label="Loading report…" />
+                    ) : (
+                      "No data matches the current filters."
+                    )}
                   </td>
                 </tr>
               )}

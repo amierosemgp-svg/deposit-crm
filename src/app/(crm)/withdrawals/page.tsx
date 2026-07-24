@@ -5,6 +5,7 @@ import { useStore } from "@/lib/store";
 import { formatRM, formatDateTime, formatRelative } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { ListLoading } from "@/components/list-loading";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -49,6 +50,7 @@ const STATUS_FILTERS: { value: string; tab: string }[] = [
 
 export default function WithdrawalsPage() {
   const withdrawals = useStore((s) => s.withdrawals);
+  const hydrated = useStore((s) => s.hydrated);
   const players = useStore((s) => s.players);
   const bankAccounts = useStore((s) => s.bankAccounts);
   const getBalance = useStore((s) => s.getCreditBalance);
@@ -338,9 +340,13 @@ export default function WithdrawalsPage() {
                     colSpan={8}
                     className="px-3 py-10 text-center text-sm text-muted-foreground"
                   >
-                    {scoped.length === 0
-                      ? `No withdrawal requests yet${activeCompany ? ` for ${activeCompany.company_name}` : ""}.`
-                      : "No withdrawals match the current search and filters."}
+                    {!hydrated ? (
+                      <ListLoading className="py-0" label="Loading withdrawals…" />
+                    ) : scoped.length === 0 ? (
+                      `No withdrawal requests yet${activeCompany ? ` for ${activeCompany.company_name}` : ""}.`
+                    ) : (
+                      "No withdrawals match the current search and filters."
+                    )}
                   </td>
                 </tr>
               )}

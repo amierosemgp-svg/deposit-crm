@@ -18,6 +18,7 @@ import type { ProviderBoAccount } from "@/lib/types";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/status-badge";
+import { ListLoading } from "@/components/list-loading";
 import { Switch } from "@/components/ui/switch";
 import {
   Select,
@@ -39,6 +40,7 @@ function fmtCredit(n: number) {
 
 export default function ProviderAccountsPage() {
   const accounts = useStore((s) => s.boAccounts);
+  const hydrated = useStore((s) => s.hydrated);
   const adjustments = useStore((s) => s.boAdjustments);
   const deleteAccount = useStore((s) => s.deleteBoAccount);
   const updateAccount = useStore((s) => s.updateBoAccount);
@@ -296,7 +298,9 @@ export default function ProviderAccountsPage() {
                     colSpan={canManage ? 5 : 4}
                     className="px-3 py-12 text-center text-sm text-muted-foreground"
                   >
-                    {canManage ? (
+                    {!hydrated ? (
+                      <ListLoading className="py-0" label="Loading BO accounts…" />
+                    ) : canManage ? (
                       <>
                         No BO accounts. Click <strong>Add BO Account</strong> to create
                         one.

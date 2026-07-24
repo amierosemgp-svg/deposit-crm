@@ -10,6 +10,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
+import { ListLoading } from "@/components/list-loading";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -53,6 +54,7 @@ function daysAgoStr(n: number) {
 export default function ExpensesPage() {
   const me = useStore((s) => s.me);
   const expenses = useStore((s) => s.expenses);
+  const hydrated = useStore((s) => s.hydrated);
   const userName = useStore((s) => s.userName);
   const entityName = useStore((s) => s.entityName);
   const deleteExpense = useStore((s) => s.deleteExpense);
@@ -361,9 +363,13 @@ export default function ExpensesPage() {
                     colSpan={7}
                     className="px-3 py-12 text-center text-xs text-muted-foreground"
                   >
-                    {expenses.length === 0
-                      ? "No expenses recorded yet. Use “Add Expense” to record the first one."
-                      : "No expenses match the current filters."}
+                    {!hydrated ? (
+                      <ListLoading className="py-0" label="Loading expenses…" />
+                    ) : expenses.length === 0 ? (
+                      "No expenses recorded yet. Use “Add Expense” to record the first one."
+                    ) : (
+                      "No expenses match the current filters."
+                    )}
                   </td>
                 </tr>
               )}
