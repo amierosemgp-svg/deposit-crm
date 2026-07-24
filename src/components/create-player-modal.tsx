@@ -352,6 +352,10 @@ export function CreatePlayerModal({
                     <Select
                       value={form.company_entity_id}
                       onValueChange={(v) => update("company_entity_id", v ?? "")}
+                      items={companies.map((c) => ({
+                        value: String(c.company_id),
+                        label: c.company_name,
+                      }))}
                     >
                       <SelectTrigger
                         className="h-8 w-full"

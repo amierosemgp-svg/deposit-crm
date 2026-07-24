@@ -178,12 +178,12 @@ export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg p-0 overflow-hidden gap-0">
+      <DialogContent className="sm:max-w-lg p-0 overflow-hidden gap-0 flex max-h-[calc(100dvh-2rem)] flex-col">
         <DialogTitle className="sr-only">
           {isEdit ? "Edit bank account" : "Add bank account"}
         </DialogTitle>
 
-        <div className="flex items-center gap-3 border-b px-5 py-4">
+        <div className="flex shrink-0 items-center gap-3 border-b px-5 py-4">
           <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary">
             <Landmark className="h-4.5 w-4.5" />
           </div>
@@ -197,236 +197,252 @@ export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
           </div>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-3.5 p-5">
-          <div className="space-y-1.5">
-            <Label>
-              Entity <span className="text-rose-600">*</span>
-            </Label>
-            <Select
-              value={form.entity_id}
-              onValueChange={(v) => update("entity_id", v ?? "")}
-            >
-              <SelectTrigger
-                className="h-8 w-full cursor-pointer"
-                aria-invalid={!!errors.entity_id}
-              >
-                <SelectValue placeholder="Select leader or company" />
-              </SelectTrigger>
-              <SelectContent>
-                {eligibleEntities.length === 0 && (
-                  <div className="px-3 py-2 text-[12px] text-muted-foreground">
-                    No eligible entities
-                  </div>
-                )}
-                {eligibleEntities.map((e) => (
-                  <SelectItem
-                    key={e.entity_id}
-                    value={String(e.entity_id)}
-                    className="cursor-pointer"
-                  >
-                    {e.name} ({e.entity_type === "leader" ? "Leader" : "Company"})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>
-              Role <span className="text-rose-600">*</span>
-            </Label>
-            <Select
-              value={form.role}
-              onValueChange={(v) =>
-                update("role", (v as "deposit" | "withdrawal") ?? "deposit")
-              }
-            >
-              <SelectTrigger className="h-8 w-full cursor-pointer">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="deposit" className="cursor-pointer">
-                  Deposit · Collection
-                </SelectItem>
-                <SelectItem value="withdrawal" className="cursor-pointer">
-                  Withdrawal · Payout
-                </SelectItem>
-              </SelectContent>
-            </Select>
-            <p className="text-[11px] text-muted-foreground">{ROLE_HINTS[form.role]}</p>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
+        <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+          <div className="min-h-0 flex-1 space-y-3.5 overflow-y-auto p-5">
             <div className="space-y-1.5">
               <Label>
-                Bank <span className="text-rose-600">*</span>
+                Entity <span className="text-rose-600">*</span>
               </Label>
               <Select
-                value={form.bank_select}
-                onValueChange={(v) => update("bank_select", v ?? "")}
+                value={form.entity_id}
+                onValueChange={(v) => update("entity_id", v ?? "")}
+                items={eligibleEntities.map((e) => ({
+                  value: String(e.entity_id),
+                  label: `${e.name} (${e.entity_type === "leader" ? "Leader" : "Company"})`,
+                }))}
               >
                 <SelectTrigger
                   className="h-8 w-full cursor-pointer"
-                  aria-invalid={!!errors.bank_name}
+                  aria-invalid={!!errors.entity_id}
                 >
-                  <SelectValue placeholder="Select bank" />
+                  <SelectValue placeholder="Select leader or company" />
                 </SelectTrigger>
                 <SelectContent>
-                  {banks.map((b) => (
-                    <SelectItem key={b} value={b} className="cursor-pointer">
-                      {b}
+                  {eligibleEntities.length === 0 && (
+                    <div className="px-3 py-2 text-[12px] text-muted-foreground">
+                      No eligible entities
+                    </div>
+                  )}
+                  {eligibleEntities.map((e) => (
+                    <SelectItem
+                      key={e.entity_id}
+                      value={String(e.entity_id)}
+                      className="cursor-pointer"
+                    >
+                      {e.name} ({e.entity_type === "leader" ? "Leader" : "Company"})
                     </SelectItem>
                   ))}
-                  <SelectItem value={OTHER_BANK} className="cursor-pointer">
-                    Other…
-                  </SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="ba-label">Label</Label>
-              <Input
-                id="ba-label"
-                value={form.label}
-                onChange={(e) => update("label", e.target.value)}
-                placeholder="Main, Backup, Payouts…"
-              />
-            </div>
-          </div>
 
-          {form.bank_select === OTHER_BANK && (
             <div className="space-y-1.5">
-              <Label htmlFor="ba-bank-custom">
-                Bank name <span className="text-rose-600">*</span>
+              <Label>
+                Role <span className="text-rose-600">*</span>
               </Label>
-              <Input
-                id="ba-bank-custom"
-                value={form.bank_custom}
-                onChange={(e) => update("bank_custom", e.target.value)}
-                placeholder="Type the bank name"
-                aria-invalid={!!errors.bank_name}
-              />
-            </div>
-          )}
-
-          <div className="space-y-1.5">
-            <Label htmlFor="ba-num">
-              Account number <span className="text-rose-600">*</span>
-            </Label>
-            <Input
-              id="ba-num"
-              value={form.account_number}
-              onChange={(e) => update("account_number", e.target.value)}
-              placeholder="5145 8800 1122"
-              inputMode="numeric"
-              aria-invalid={!!errors.account_number}
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="ba-holder">
-              Account holder <span className="text-rose-600">*</span>
-            </Label>
-            <Input
-              id="ba-holder"
-              value={form.account_holder}
-              onChange={(e) => update("account_holder", e.target.value)}
-              placeholder="Leader Alpha Sdn Bhd"
-              aria-invalid={!!errors.account_holder}
-            />
-          </div>
-
-          <div className="rounded-md border bg-muted/20 p-3 space-y-2.5">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                Online banking credentials
-              </p>
-              <p className="text-[11px] text-muted-foreground mt-0.5">
-                Used by the AI bot to log in and query this account.
-              </p>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div className="space-y-1">
-                <Label htmlFor="ba-login-id" className="text-[11px]">
-                  Login ID
-                </Label>
-                <Input
-                  id="ba-login-id"
-                  value={form.login_id}
-                  onChange={(e) => update("login_id", e.target.value)}
-                  placeholder="Online banking user ID"
-                  autoComplete="off"
-                  className="h-8"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="ba-login-pw" className="text-[11px]">
-                  Password
-                </Label>
-                <Input
-                  id="ba-login-pw"
-                  value={form.login_password}
-                  onChange={(e) => update("login_password", e.target.value)}
-                  placeholder="Password"
-                  autoComplete="off"
-                  className="h-8 font-mono"
-                />
-              </div>
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="ba-login-pin" className="text-[11px]">
-                PIN
-              </Label>
-              <Input
-                id="ba-login-pin"
-                value={form.login_pin}
-                onChange={(e) => update("login_pin", e.target.value)}
-                placeholder="Transaction / approval PIN"
-                autoComplete="off"
-                inputMode="numeric"
-                className="h-8 font-mono"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            {!isEdit && (
-              <div className="space-y-1.5">
-                <Label htmlFor="ba-bal">Opening balance (RM)</Label>
-                <Input
-                  id="ba-bal"
-                  type="number"
-                  step="0.01"
-                  value={form.current_balance}
-                  onChange={(e) => update("current_balance", e.target.value)}
-                  aria-invalid={!!errors.current_balance}
-                />
-              </div>
-            )}
-            <div className="space-y-1.5">
-              <Label>Status</Label>
               <Select
-                value={form.status}
+                value={form.role}
                 onValueChange={(v) =>
-                  update("status", (v as "active" | "inactive") ?? "active")
+                  update("role", (v as "deposit" | "withdrawal") ?? "deposit")
                 }
+                items={{
+                  deposit: "Deposit · Collection",
+                  withdrawal: "Withdrawal · Payout",
+                }}
               >
                 <SelectTrigger className="h-8 w-full cursor-pointer">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="active" className="cursor-pointer">
-                    Active
+                  <SelectItem value="deposit" className="cursor-pointer">
+                    Deposit · Collection
                   </SelectItem>
-                  <SelectItem value="inactive" className="cursor-pointer">
-                    Inactive
+                  <SelectItem value="withdrawal" className="cursor-pointer">
+                    Withdrawal · Payout
                   </SelectItem>
                 </SelectContent>
               </Select>
+              <p className="text-[11px] text-muted-foreground">{ROLE_HINTS[form.role]}</p>
             </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>
+                  Bank <span className="text-rose-600">*</span>
+                </Label>
+                <Select
+                  value={form.bank_select}
+                  onValueChange={(v) => update("bank_select", v ?? "")}
+                  items={[
+                    ...banks.map((b) => ({ value: b, label: b })),
+                    { value: OTHER_BANK, label: "Other…" },
+                  ]}
+                >
+                  <SelectTrigger
+                    className="h-8 w-full cursor-pointer"
+                    aria-invalid={!!errors.bank_name}
+                  >
+                    <SelectValue placeholder="Select bank" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {banks.map((b) => (
+                      <SelectItem key={b} value={b} className="cursor-pointer">
+                        {b}
+                      </SelectItem>
+                    ))}
+                    <SelectItem value={OTHER_BANK} className="cursor-pointer">
+                      Other…
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="ba-label">Label</Label>
+                <Input
+                  id="ba-label"
+                  value={form.label}
+                  onChange={(e) => update("label", e.target.value)}
+                  placeholder="Main, Backup, Payouts…"
+                />
+              </div>
+            </div>
+
+            {form.bank_select === OTHER_BANK && (
+              <div className="space-y-1.5">
+                <Label htmlFor="ba-bank-custom">
+                  Bank name <span className="text-rose-600">*</span>
+                </Label>
+                <Input
+                  id="ba-bank-custom"
+                  value={form.bank_custom}
+                  onChange={(e) => update("bank_custom", e.target.value)}
+                  placeholder="Type the bank name"
+                  aria-invalid={!!errors.bank_name}
+                />
+              </div>
+            )}
+
+            <div className="space-y-1.5">
+              <Label htmlFor="ba-num">
+                Account number <span className="text-rose-600">*</span>
+              </Label>
+              <Input
+                id="ba-num"
+                value={form.account_number}
+                onChange={(e) => update("account_number", e.target.value)}
+                placeholder="5145 8800 1122"
+                inputMode="numeric"
+                aria-invalid={!!errors.account_number}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="ba-holder">
+                Account holder <span className="text-rose-600">*</span>
+              </Label>
+              <Input
+                id="ba-holder"
+                value={form.account_holder}
+                onChange={(e) => update("account_holder", e.target.value)}
+                placeholder="Leader Alpha Sdn Bhd"
+                aria-invalid={!!errors.account_holder}
+              />
+            </div>
+
+            <div className="rounded-md border bg-muted/20 p-3 space-y-2.5">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Online banking credentials
+                </p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  Used by the AI bot to log in and query this account.
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <Label htmlFor="ba-login-id" className="text-[11px]">
+                    Login ID
+                  </Label>
+                  <Input
+                    id="ba-login-id"
+                    value={form.login_id}
+                    onChange={(e) => update("login_id", e.target.value)}
+                    placeholder="Online banking user ID"
+                    autoComplete="off"
+                    className="h-8"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="ba-login-pw" className="text-[11px]">
+                    Password
+                  </Label>
+                  <Input
+                    id="ba-login-pw"
+                    value={form.login_password}
+                    onChange={(e) => update("login_password", e.target.value)}
+                    placeholder="Password"
+                    autoComplete="off"
+                    className="h-8 font-mono"
+                  />
+                </div>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="ba-login-pin" className="text-[11px]">
+                  PIN
+                </Label>
+                <Input
+                  id="ba-login-pin"
+                  value={form.login_pin}
+                  onChange={(e) => update("login_pin", e.target.value)}
+                  placeholder="Transaction / approval PIN"
+                  autoComplete="off"
+                  inputMode="numeric"
+                  className="h-8 font-mono"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              {!isEdit && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="ba-bal">Opening balance (RM)</Label>
+                  <Input
+                    id="ba-bal"
+                    type="number"
+                    step="0.01"
+                    value={form.current_balance}
+                    onChange={(e) => update("current_balance", e.target.value)}
+                    aria-invalid={!!errors.current_balance}
+                  />
+                </div>
+              )}
+              <div className="space-y-1.5">
+                <Label>Status</Label>
+                <Select
+                  value={form.status}
+                  onValueChange={(v) =>
+                    update("status", (v as "active" | "inactive") ?? "active")
+                  }
+                  items={{ active: "Active", inactive: "Inactive" }}
+                >
+                  <SelectTrigger className="h-8 w-full cursor-pointer">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="active" className="cursor-pointer">
+                      Active
+                    </SelectItem>
+                    <SelectItem value="inactive" className="cursor-pointer">
+                      Inactive
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
           </div>
 
-          <div className="flex items-center justify-end gap-2 border-t bg-muted/30 -mx-5 -mb-5 px-5 py-3 mt-2">
+          <div className="flex shrink-0 items-center justify-end gap-2 border-t bg-muted/30 px-5 py-3">
             <Button
               type="button"
               variant="ghost"

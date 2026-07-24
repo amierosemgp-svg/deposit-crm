@@ -217,7 +217,14 @@ export function ManualDepositDialog({ open, onOpenChange }: Props) {
               </div>
               <div className="space-y-1.5">
                 <Label>Bonus %</Label>
-                <Select value={bonus} onValueChange={(v) => setBonus(v ?? "0")}>
+                <Select
+                  value={bonus}
+                  onValueChange={(v) => setBonus(v ?? "0")}
+                  items={bonusOptions.map((p) => ({
+                    value: String(p),
+                    label: `${p}%`,
+                  }))}
+                >
                   <SelectTrigger className="h-8 w-full cursor-pointer">
                     <SelectValue />
                   </SelectTrigger>

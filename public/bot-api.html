@@ -877,7 +877,7 @@
       <section id="kiosks">
         <h2>Resource</h2>
         <div class="block-title">Kiosks</div>
-        <div class="prose"><p>Game-provider back-office (kiosk) logins the bot signs into to assign game credit. Read-only over the bot API and <strong>includes the login credentials</strong> (<code>username</code>, <code>password</code>, <code>pin</code>). A company-scoped key returns only its own company's kiosks.</p></div>
+        <div class="prose"><p>Game-provider back-office (kiosk) logins the bot signs into to assign game credit. Read-only over the bot API and <strong>includes the login credentials</strong> (<code>username</code>, <code>password</code>, <code>pin</code>) plus the back-office login <code>url</code> — always open the URL from here instead of hardcoding it, so a provider URL change only needs a CRM edit. A company-scoped key returns only its own company's kiosks.</p></div>
 
         <div class="ep">
           <div class="ep-head"><span class="m get">Get</span><span class="ep-path">/api/bot/kiosks</span><span class="use-tag">List</span></div>
@@ -891,6 +891,7 @@
 { <span class="k">"count"</span>: <span class="n">1</span>, <span class="k">"kiosks"</span>: [
   { <span class="k">"kiosk_id"</span>: <span class="n">3</span>, <span class="k">"company_entity_id"</span>: <span class="n">5</span>,
     <span class="k">"game_name"</span>: <span class="s">"Mega888"</span>,
+    <span class="k">"url"</span>: <span class="s">"https://bo.mega888.com/login"</span>,
     <span class="k">"username"</span>: <span class="s">"alpha_mega_master"</span>, <span class="k">"password"</span>: <span class="s">"•••"</span>, <span class="k">"pin"</span>: <span class="s">"1234"</span>,
     <span class="k">"label"</span>: <span class="s">"Master Agent"</span>, <span class="k">"current_credit"</span>: <span class="n">12500.00</span>,
     <span class="k">"status"</span>: <span class="s">"active"</span>, <span class="k">"last_heartbeat_at"</span>: <span class="n">null</span>,

@@ -220,6 +220,7 @@ type Store = {
     company_entity_id: number;
     game_name: string;
     bo_username: string;
+    bo_url?: string;
     bo_password: string;
     bo_pin?: string;
     bo_label?: string;

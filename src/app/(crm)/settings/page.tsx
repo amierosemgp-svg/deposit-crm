@@ -355,7 +355,14 @@ function AddMemberModal({ open, onOpenChange }: { open: boolean; onOpenChange: (
           {kind === "cs" ? (
             <div className="space-y-1.5">
               <Label>Company</Label>
-              <Select value={companyId} onValueChange={(v) => setCompanyId(v ?? "")}>
+              <Select
+                value={companyId}
+                onValueChange={(v) => setCompanyId(v ?? "")}
+                items={companies.map((c) => ({
+                  value: String(c.company_id),
+                  label: c.company_name,
+                }))}
+              >
                 <SelectTrigger className="cursor-pointer"><SelectValue placeholder="Select a company" /></SelectTrigger>
                 <SelectContent>
                   {companies.map((c) => (
@@ -602,7 +609,17 @@ function CreateKeyModal({
           </div>
           <div className="space-y-1.5">
             <Label>Scope</Label>
-            <Select value={scope} onValueChange={(v) => setScope(v ?? "all")}>
+            <Select
+              value={scope}
+              onValueChange={(v) => setScope(v ?? "all")}
+              items={[
+                { value: "all", label: "Full access (all companies)" },
+                ...companies.map((c) => ({
+                  value: String(c.company_id),
+                  label: c.company_name,
+                })),
+              ]}
+            >
               <SelectTrigger className="h-9 w-full cursor-pointer">
                 <SelectValue />
               </SelectTrigger>

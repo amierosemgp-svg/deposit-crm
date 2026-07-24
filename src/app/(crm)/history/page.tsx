@@ -323,7 +323,18 @@ export default function HistoryPage() {
             </SelectContent>
           </Select>
 
-          <Select value={handledBy} onValueChange={(v) => setHandledBy(v ?? "all")}>
+          <Select
+            value={handledBy}
+            onValueChange={(v) => setHandledBy(v ?? "all")}
+            items={[
+              { value: "all", label: "Anyone" },
+              { value: "system", label: "System / bot" },
+              ...users.map((u) => ({
+                value: String(u.user_id),
+                label: u.full_name,
+              })),
+            ]}
+          >
             <SelectTrigger className="h-8 w-[150px]">
               <SelectValue placeholder="Handled by" />
             </SelectTrigger>

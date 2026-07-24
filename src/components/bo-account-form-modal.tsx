@@ -27,6 +27,7 @@ type FormState = {
   company_entity_id: string;
   game_name: string;
   bo_username: string;
+  bo_url: string;
   bo_password: string;
   bo_pin: string;
   bo_label: string;
@@ -39,6 +40,7 @@ const EMPTY: FormState = {
   company_entity_id: "",
   game_name: "",
   bo_username: "",
+  bo_url: "",
   bo_password: "",
   bo_pin: "",
   bo_label: "",
@@ -81,6 +83,7 @@ export function BoAccountFormModal({ open, onOpenChange, account }: Props) {
           company_entity_id: String(account.company_entity_id),
           game_name: account.game_name,
           bo_username: account.bo_username,
+          bo_url: account.bo_url ?? "",
           bo_password: account.bo_password ?? "",
           bo_pin: account.bo_pin ?? "",
           bo_label: account.bo_label ?? "",
@@ -124,6 +127,7 @@ export function BoAccountFormModal({ open, onOpenChange, account }: Props) {
         company_entity_id: Number(form.company_entity_id),
         game_name: form.game_name,
         bo_username: form.bo_username.trim(),
+        bo_url: form.bo_url.trim() || null,
         bo_password: form.bo_password.trim(),
         bo_pin: form.bo_pin.trim() || null,
         bo_label: form.bo_label.trim() || undefined,
@@ -135,6 +139,7 @@ export function BoAccountFormModal({ open, onOpenChange, account }: Props) {
         company_entity_id: Number(form.company_entity_id),
         game_name: form.game_name,
         bo_username: form.bo_username.trim(),
+        bo_url: form.bo_url.trim() || undefined,
         bo_password: form.bo_password.trim(),
         bo_pin: form.bo_pin.trim() || undefined,
         bo_label: form.bo_label.trim() || undefined,
@@ -155,12 +160,12 @@ export function BoAccountFormModal({ open, onOpenChange, account }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg p-0 overflow-hidden gap-0">
+      <DialogContent className="sm:max-w-lg p-0 overflow-hidden gap-0 flex max-h-[calc(100dvh-2rem)] flex-col">
         <DialogTitle className="sr-only">
           {isEdit ? "Edit BO account" : "Add BO account"}
         </DialogTitle>
 
-        <div className="flex items-center gap-3 border-b px-5 py-4">
+        <div className="flex shrink-0 items-center gap-3 border-b px-5 py-4">
           <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary">
             <KeyRound className="h-4.5 w-4.5" />
           </div>
@@ -174,183 +179,207 @@ export function BoAccountFormModal({ open, onOpenChange, account }: Props) {
           </div>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-3.5 p-5">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label>
-                Company <span className="text-rose-600">*</span>
-              </Label>
-              <Select
-                value={form.company_entity_id}
-                onValueChange={(v) => update("company_entity_id", v ?? "")}
-              >
-                <SelectTrigger
-                  className="h-8 w-full cursor-pointer"
-                  aria-invalid={!!errors.company_entity_id}
-                >
-                  <SelectValue placeholder="Select company" />
-                </SelectTrigger>
-                <SelectContent>
-                  {eligibleCompanies.length === 0 && (
-                    <div className="px-3 py-2 text-[12px] text-muted-foreground">
-                      No companies available
-                    </div>
-                  )}
-                  {eligibleCompanies.map((c) => (
-                    <SelectItem
-                      key={c.company_id}
-                      value={String(c.company_id)}
-                      className="cursor-pointer"
-                    >
-                      {c.company_name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label>
-                Game <span className="text-rose-600">*</span>
-              </Label>
-              <Select
-                value={form.game_name}
-                onValueChange={(v) => update("game_name", v ?? "")}
-              >
-                <SelectTrigger
-                  className="h-8 w-full cursor-pointer"
-                  aria-invalid={!!errors.game_name}
-                >
-                  <SelectValue placeholder="Select game" />
-                </SelectTrigger>
-                <SelectContent>
-                  {games.map((g) => (
-                    <SelectItem key={g} value={g} className="cursor-pointer">
-                      {g}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="bo-username">
-                BO username <span className="text-rose-600">*</span>
-              </Label>
-              <Input
-                id="bo-username"
-                value={form.bo_username}
-                onChange={(e) => update("bo_username", e.target.value)}
-                placeholder="alpha_mega_master"
-                aria-invalid={!!errors.bo_username}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="bo-label">Label</Label>
-              <Input
-                id="bo-label"
-                value={form.bo_label}
-                onChange={(e) => update("bo_label", e.target.value)}
-                placeholder="Master Agent, Sub A…"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="bo-password">
-                BO password <span className="text-rose-600">*</span>
-              </Label>
-              <Input
-                id="bo-password"
-                value={form.bo_password}
-                onChange={(e) => update("bo_password", e.target.value)}
-                placeholder="Back-office login password"
-                autoComplete="off"
-                aria-invalid={!!errors.bo_password}
-                className="font-mono"
-              />
-              <p className="text-[10px] text-muted-foreground">
-                The bot uses this to log in and assign game credit.
-              </p>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="bo-pin">PIN (optional)</Label>
-              <Input
-                id="bo-pin"
-                value={form.bo_pin}
-                onChange={(e) => update("bo_pin", e.target.value)}
-                placeholder="Approval PIN, if any"
-                autoComplete="off"
-                inputMode="numeric"
-                className="font-mono"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            {!isEdit ? (
+        <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+          <div className="min-h-0 flex-1 space-y-3.5 overflow-y-auto p-5">
+            <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label htmlFor="bo-credit">Opening credit</Label>
+                <Label>
+                  Company <span className="text-rose-600">*</span>
+                </Label>
+                <Select
+                  value={form.company_entity_id}
+                  onValueChange={(v) => update("company_entity_id", v ?? "")}
+                  items={eligibleCompanies.map((c) => ({
+                    value: String(c.company_id),
+                    label: c.company_name,
+                  }))}
+                >
+                  <SelectTrigger
+                    className="h-8 w-full cursor-pointer"
+                    aria-invalid={!!errors.company_entity_id}
+                  >
+                    <SelectValue placeholder="Select company" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {eligibleCompanies.length === 0 && (
+                      <div className="px-3 py-2 text-[12px] text-muted-foreground">
+                        No companies available
+                      </div>
+                    )}
+                    {eligibleCompanies.map((c) => (
+                      <SelectItem
+                        key={c.company_id}
+                        value={String(c.company_id)}
+                        className="cursor-pointer"
+                      >
+                        {c.company_name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label>
+                  Game <span className="text-rose-600">*</span>
+                </Label>
+                <Select
+                  value={form.game_name}
+                  onValueChange={(v) => update("game_name", v ?? "")}
+                >
+                  <SelectTrigger
+                    className="h-8 w-full cursor-pointer"
+                    aria-invalid={!!errors.game_name}
+                  >
+                    <SelectValue placeholder="Select game" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {games.map((g) => (
+                      <SelectItem key={g} value={g} className="cursor-pointer">
+                        {g}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="bo-username">
+                  BO username <span className="text-rose-600">*</span>
+                </Label>
                 <Input
-                  id="bo-credit"
-                  type="number"
-                  step="0.01"
-                  value={form.current_credit}
-                  onChange={(e) => update("current_credit", e.target.value)}
-                  aria-invalid={!!errors.current_credit}
+                  id="bo-username"
+                  value={form.bo_username}
+                  onChange={(e) => update("bo_username", e.target.value)}
+                  placeholder="alpha_mega_master"
+                  aria-invalid={!!errors.bo_username}
                 />
               </div>
-            ) : (
               <div className="space-y-1.5">
-                <Label>Current credit</Label>
-                <div className="flex h-8 items-center rounded-md border bg-muted/30 px-2.5 text-sm tabular-nums">
-                  {account?.current_credit.toLocaleString("en-MY", {
-                    minimumFractionDigits: 2,
-                  })}
-                </div>
+                <Label htmlFor="bo-label">Label</Label>
+                <Input
+                  id="bo-label"
+                  value={form.bo_label}
+                  onChange={(e) => update("bo_label", e.target.value)}
+                  placeholder="Master Agent, Sub A…"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="bo-url">BO URL</Label>
+              <Input
+                id="bo-url"
+                value={form.bo_url}
+                onChange={(e) => update("bo_url", e.target.value)}
+                placeholder="https://bo.mega888.com/login"
+                inputMode="url"
+                autoComplete="off"
+              />
+              <p className="text-[10px] text-muted-foreground">
+                Back-office login page. The bot reads it from here — if the
+                provider changes the URL, just update this field.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="bo-password">
+                  BO password <span className="text-rose-600">*</span>
+                </Label>
+                <Input
+                  id="bo-password"
+                  value={form.bo_password}
+                  onChange={(e) => update("bo_password", e.target.value)}
+                  placeholder="Back-office login password"
+                  autoComplete="off"
+                  aria-invalid={!!errors.bo_password}
+                  className="font-mono"
+                />
                 <p className="text-[10px] text-muted-foreground">
-                  Use Top Up / Deduct for tracked credit changes.
+                  The bot uses this to log in and assign game credit.
                 </p>
               </div>
-            )}
-            <div className="space-y-1.5">
-              <Label>Status</Label>
-              <Select
-                value={form.status}
-                onValueChange={(v) =>
-                  update("status", (v as "active" | "inactive") ?? "active")
-                }
-              >
-                <SelectTrigger className="h-8 w-full cursor-pointer">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="active" className="cursor-pointer">
-                    Active
-                  </SelectItem>
-                  <SelectItem value="inactive" className="cursor-pointer">
-                    Inactive
-                  </SelectItem>
-                </SelectContent>
-              </Select>
+              <div className="space-y-1.5">
+                <Label htmlFor="bo-pin">PIN (optional)</Label>
+                <Input
+                  id="bo-pin"
+                  value={form.bo_pin}
+                  onChange={(e) => update("bo_pin", e.target.value)}
+                  placeholder="Approval PIN, if any"
+                  autoComplete="off"
+                  inputMode="numeric"
+                  className="font-mono"
+                />
+              </div>
             </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              {!isEdit ? (
+                <div className="space-y-1.5">
+                  <Label htmlFor="bo-credit">Opening credit</Label>
+                  <Input
+                    id="bo-credit"
+                    type="number"
+                    step="0.01"
+                    value={form.current_credit}
+                    onChange={(e) => update("current_credit", e.target.value)}
+                    aria-invalid={!!errors.current_credit}
+                  />
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  <Label>Current credit</Label>
+                  <div className="flex h-8 items-center rounded-md border bg-muted/30 px-2.5 text-sm tabular-nums">
+                    {account?.current_credit.toLocaleString("en-MY", {
+                      minimumFractionDigits: 2,
+                    })}
+                  </div>
+                  <p className="text-[10px] text-muted-foreground">
+                    Use Top Up / Deduct for tracked credit changes.
+                  </p>
+                </div>
+              )}
+              <div className="space-y-1.5">
+                <Label>Status</Label>
+                <Select
+                  value={form.status}
+                  onValueChange={(v) =>
+                    update("status", (v as "active" | "inactive") ?? "active")
+                  }
+                  items={{ active: "Active", inactive: "Inactive" }}
+                >
+                  <SelectTrigger className="h-8 w-full cursor-pointer">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="active" className="cursor-pointer">
+                      Active
+                    </SelectItem>
+                    <SelectItem value="inactive" className="cursor-pointer">
+                      Inactive
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="bo-notes">Notes</Label>
+              <textarea
+                id="bo-notes"
+                value={form.notes}
+                onChange={(e) => update("notes", e.target.value)}
+                rows={2}
+                placeholder="Internal notes about this BO account"
+                className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/30 resize-none"
+              />
+            </div>
+
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="bo-notes">Notes</Label>
-            <textarea
-              id="bo-notes"
-              value={form.notes}
-              onChange={(e) => update("notes", e.target.value)}
-              rows={2}
-              placeholder="Internal notes about this BO account"
-              className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/30 resize-none"
-            />
-          </div>
-
-          <div className="flex items-center justify-end gap-2 border-t bg-muted/30 -mx-5 -mb-5 px-5 py-3 mt-2">
+          <div className="flex shrink-0 items-center justify-end gap-2 border-t bg-muted/30 px-5 py-3">
             <Button
               type="button"
               variant="ghost"

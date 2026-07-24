@@ -625,6 +625,10 @@ export default function WithdrawalsPage() {
               <Select
                 value={payoutAccountId}
                 onValueChange={(v) => setPayoutAccountId(v ?? "")}
+                items={payoutAccounts.map((a) => ({
+                  value: String(a.account_id),
+                  label: `${a.bank_name} · ${a.label ?? a.account_number}`,
+                }))}
               >
                 <SelectTrigger className="h-9 w-full">
                   <SelectValue placeholder="No account deduction" />

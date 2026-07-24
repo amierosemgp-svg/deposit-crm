@@ -817,7 +817,17 @@ export default function ReportDetailPage() {
             <span className="text-[11px] font-medium text-muted-foreground">
               Company
             </span>
-            <Select value={companyId} onValueChange={(v) => setCompanyId(v ?? "all")}>
+            <Select
+              value={companyId}
+              onValueChange={(v) => setCompanyId(v ?? "all")}
+              items={[
+                { value: "all", label: "All Companies" },
+                ...companies.map((c) => ({
+                  value: String(c.company_id),
+                  label: c.company_name,
+                })),
+              ]}
+            >
               <SelectTrigger className="h-8 w-[170px] cursor-pointer">
                 <SelectValue />
               </SelectTrigger>

@@ -173,7 +173,14 @@ export function BankTransferModal({
 
               <div className="space-y-1.5">
                 <Label>From</Label>
-                <Select value={fromId} onValueChange={(v) => setFromId(v ?? "")}>
+                <Select
+                  value={fromId}
+                  onValueChange={(v) => setFromId(v ?? "")}
+                  items={fromAccounts.map((a) => ({
+                    value: String(a.account_id),
+                    label: `${accountLabel(a)} · ${entityName(a.entity_id)}`,
+                  }))}
+                >
                   <SelectTrigger className="h-9 w-full cursor-pointer">
                     <SelectValue placeholder="Source account" />
                   </SelectTrigger>
@@ -207,7 +214,16 @@ export function BankTransferModal({
 
               <div className="space-y-1.5">
                 <Label>To</Label>
-                <Select value={toId} onValueChange={(v) => setToId(v ?? "")}>
+                <Select
+                  value={toId}
+                  onValueChange={(v) => setToId(v ?? "")}
+                  items={toGroups.flatMap((g) =>
+                    g.accounts.map((a) => ({
+                      value: String(a.account_id),
+                      label: `${accountLabel(a)} · ${entityName(g.entityId)}`,
+                    })),
+                  )}
+                >
                   <SelectTrigger className="h-9 w-full cursor-pointer">
                     <SelectValue placeholder="Destination account" />
                   </SelectTrigger>

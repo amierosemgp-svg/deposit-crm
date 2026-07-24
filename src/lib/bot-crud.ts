@@ -110,6 +110,7 @@ export function kioskJson(k: typeof providerBoAccounts.$inferSelect) {
     kiosk_id: k.bo_account_id,
     company_entity_id: k.company_entity_id,
     game_name: k.game_name,
+    url: k.bo_url,
     username: k.bo_username,
     password: k.bo_password,
     pin: k.bo_pin,

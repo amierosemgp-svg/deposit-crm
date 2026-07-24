@@ -596,6 +596,10 @@ export default function DepositsPage() {
                               if (v !== null)
                                 void handleDraft(d.deposit_id, { bonus_percentage: Number(v) });
                             }}
+                            items={bonusOptions.map((p) => ({
+                              value: String(p),
+                              label: `${p}%`,
+                            }))}
                           >
                             <SelectTrigger className="h-7 w-[90px] cursor-pointer">
                               <SelectValue />

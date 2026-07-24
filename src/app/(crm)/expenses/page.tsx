@@ -209,7 +209,17 @@ export default function ExpensesPage() {
             <span className="text-[11px] font-medium text-muted-foreground">
               Company
             </span>
-            <Select value={companyId} onValueChange={(v) => setCompanyId(v ?? "all")}>
+            <Select
+              value={companyId}
+              onValueChange={(v) => setCompanyId(v ?? "all")}
+              items={[
+                { value: "all", label: "All Companies" },
+                ...companies.map((c) => ({
+                  value: String(c.company_id),
+                  label: c.company_name,
+                })),
+              ]}
+            >
               <SelectTrigger className="h-8 w-[160px] cursor-pointer">
                 <SelectValue />
               </SelectTrigger>
@@ -514,7 +524,17 @@ function AddExpenseDialog({
             </div>
             <div className="space-y-1.5">
               <Label>Company (optional)</Label>
-              <Select value={companyId} onValueChange={(v) => setCompanyId(v ?? "none")}>
+              <Select
+                value={companyId}
+                onValueChange={(v) => setCompanyId(v ?? "none")}
+                items={[
+                  { value: "none", label: "— General —" },
+                  ...companies.map((c) => ({
+                    value: String(c.company_id),
+                    label: c.company_name,
+                  })),
+                ]}
+              >
                 <SelectTrigger className="h-8 w-full cursor-pointer">
                   <SelectValue />
                 </SelectTrigger>

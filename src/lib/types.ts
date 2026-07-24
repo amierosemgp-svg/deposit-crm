@@ -237,6 +237,7 @@ export type ProviderBoAccount = {
   company_entity_id: number;
   game_name: string;
   bo_username: string;
+  bo_url?: string | null;
   bo_password?: string | null;
   bo_pin?: string | null;
   bo_label?: string | null;

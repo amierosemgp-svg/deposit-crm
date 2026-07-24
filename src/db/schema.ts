@@ -382,6 +382,9 @@ export const providerBoAccounts = pgTable("provider_bo_accounts", {
     .references(() => entities.entity_id),
   game_name: varchar("game_name", { length: 60 }).notNull(),
   bo_username: varchar("bo_username", { length: 80 }).notNull(),
+  // Back-office login URL — the bot fetches it from here, so a provider URL
+  // change only needs a CRM edit, not a bot redeploy.
+  bo_url: varchar("bo_url", { length: 300 }),
   // Back-office credentials the AI bot uses to log in and assign game credit.
   bo_password: varchar("bo_password", { length: 120 }),
   bo_pin: varchar("bo_pin", { length: 20 }),

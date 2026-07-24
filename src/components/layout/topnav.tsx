@@ -141,6 +141,13 @@ export function TopNav() {
                 onValueChange={(v) =>
                   setSelectedLeaderId(!v || v === "all" ? null : Number(v))
                 }
+                items={[
+                  { value: "all", label: "All Leaders" },
+                  ...leaders.map((l) => ({
+                    value: String(l.entity_id),
+                    label: l.name,
+                  })),
+                ]}
               >
                 <SelectTrigger className="h-9 w-full cursor-pointer">
                   <SelectValue placeholder="All Leaders" />

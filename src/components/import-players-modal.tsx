@@ -233,7 +233,14 @@ export function ImportPlayersModal({ open, onOpenChange }: Props) {
                 <Building2 className="h-3.5 w-3.5 text-muted-foreground" />
                 Target company <span className="text-rose-600">*</span>
               </Label>
-              <Select value={companyId} onValueChange={(v) => setCompanyId(v ?? "")}>
+              <Select
+                value={companyId}
+                onValueChange={(v) => setCompanyId(v ?? "")}
+                items={companies.map((c) => ({
+                  value: String(c.company_id),
+                  label: c.company_name,
+                }))}
+              >
                 <SelectTrigger className="h-8 w-full sm:max-w-xs">
                   <SelectValue placeholder="Select company for all imported players" />
                 </SelectTrigger>

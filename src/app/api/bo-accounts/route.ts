@@ -9,6 +9,7 @@ const createSchema = z.object({
   company_entity_id: z.number().int().positive(),
   game_name: z.string().min(1),
   bo_username: z.string().min(1),
+  bo_url: z.string().trim().min(1).max(300).optional(),
   bo_password: z.string().min(1),
   bo_pin: z.string().optional(),
   bo_label: z.string().optional(),
