@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
 import Link from "next/link";
-import { formatRM, formatDateTime, isBotOnline } from "@/lib/format";
+import { formatRM, formatDateTime, isBotOnline, isOnline } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { StatTile } from "@/components/stat-tile";
@@ -18,6 +18,7 @@ import {
   Users,
   TrendingUp,
   Coins,
+  Landmark,
   Loader2,
   Bot,
   ArrowUpRight,
@@ -79,6 +80,7 @@ export default function DashboardPage() {
   const players = useStore((s) => s.players);
   const entities = useStore((s) => s.entities);
   const boAccounts = useStore((s) => s.boAccounts);
+  const bankAccounts = useStore((s) => s.bankAccounts);
   const expenses = useStore((s) => s.expenses);
   const botHealth = useStore((s) => s.botHealth);
   const userName = useStore((s) => s.userName);
@@ -122,6 +124,11 @@ export default function DashboardPage() {
     () => expenses.filter((e) => companyInScope(e.company_entity_id)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [expenses, selectedCompanyId, selectedLeaderId],
+  );
+  const scopedBankAccounts = useMemo(
+    () => bankAccounts.filter((a) => companyInScope(a.entity_id)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [bankAccounts, selectedCompanyId, selectedLeaderId],
   );
 
   // --- Range-scoped money (deposits by deposit_date, withdrawals/expenses by their date) ---
@@ -171,6 +178,19 @@ export default function DashboardPage() {
     (sum, b) => sum + b.current_credit,
     0,
   );
+  const bankBalance = scopedBankAccounts.reduce(
+    (sum, a) => sum + a.current_balance,
+    0,
+  );
+
+  // Bank/kiosk connectivity: the bot pings each bank login and kiosk it
+  // watches; a row is "online" if it pinged within the 5-minute window.
+  const banksOnline = scopedBankAccounts.filter((a) =>
+    isOnline(a.last_heartbeat_at),
+  ).length;
+  const kiosksOnline = scopedBoAccounts.filter((k) =>
+    isOnline(k.last_heartbeat_at),
+  ).length;
 
   // Bot process health (system-wide, not company-scoped).
   const botsOnline = botHealth.filter((b) =>
@@ -272,7 +292,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Money — respects the date range */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         <StatTile
           title="Deposits"
           value={formatRM(depositsTotal)}
@@ -294,35 +314,108 @@ export default function DashboardPage() {
           tone={profit >= 0 ? "success" : "danger"}
           valueClassName={profit >= 0 ? "text-emerald-600" : "text-rose-600"}
         />
-        <StatTile
-          title="Kiosk Points"
-          value={formatRM(kioskPoints)}
-          sub={`${scopedBoAccounts.length} kiosk${scopedBoAccounts.length === 1 ? "" : "s"}`}
-          icon={Coins}
-        />
       </div>
 
-      {/* Live operational state */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatTile
-          title="Pending Deposits"
-          value={String(pendingDeposits.length)}
-          sub="Waiting for CS action"
-          icon={Clock}
-          tone="warning"
-        />
-        <StatTile
-          title="Processing"
-          value={String(processingDeposits.length)}
-          sub="Bot topping up now"
-          icon={Loader2}
-        />
-        <StatTile
-          title="Active Players"
-          value={String(scopedPlayers.filter((p) => p.status === "active").length)}
-          sub={`${scopedPlayers.length} total`}
-          icon={Users}
-        />
+      {/* Balances & connectivity — live, not range-bound */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <Card className="gap-2 py-4">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1 px-5">
+            <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              <Link href="/provider-accounts" className="cursor-pointer hover:text-foreground">
+                Kiosk Points
+              </Link>
+            </CardTitle>
+            <Coins className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent className="px-5">
+            <div className="text-xl font-semibold tabular-nums">
+              {formatRM(kioskPoints)}
+            </div>
+            <div className="mt-2 max-h-36 space-y-1 overflow-y-auto border-t pt-2">
+              {scopedBoAccounts.length === 0 && (
+                <p className="text-[11px] text-muted-foreground">No kiosks yet.</p>
+              )}
+              {[...scopedBoAccounts]
+                .sort((a, b) => b.current_credit - a.current_credit)
+                .map((k) => (
+                  <div
+                    key={k.bo_account_id}
+                    className="flex items-center justify-between gap-2 text-[12px]"
+                  >
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <span
+                        className={cn(
+                          "h-1.5 w-1.5 shrink-0 rounded-full",
+                          isOnline(k.last_heartbeat_at)
+                            ? "bg-emerald-500"
+                            : "bg-red-500",
+                        )}
+                      />
+                      <span className="truncate">{k.game_name}</span>
+                      {k.bo_label && (
+                        <span className="truncate text-[10px] text-muted-foreground">
+                          {k.bo_label}
+                        </span>
+                      )}
+                    </span>
+                    <span className="font-medium tabular-nums whitespace-nowrap">
+                      {formatRM(k.current_credit)}
+                    </span>
+                  </div>
+                ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="gap-2 py-4">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1 px-5">
+            <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              <Link href="/bank-accounts" className="cursor-pointer hover:text-foreground">
+                Bank Balance
+              </Link>
+            </CardTitle>
+            <Landmark className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent className="px-5">
+            <div className="text-xl font-semibold tabular-nums">
+              {formatRM(bankBalance)}
+            </div>
+            <div className="mt-2 max-h-36 space-y-1 overflow-y-auto border-t pt-2">
+              {scopedBankAccounts.length === 0 && (
+                <p className="text-[11px] text-muted-foreground">
+                  No bank accounts yet.
+                </p>
+              )}
+              {[...scopedBankAccounts]
+                .sort((a, b) => b.current_balance - a.current_balance)
+                .map((a) => (
+                  <div
+                    key={a.account_id}
+                    className="flex items-center justify-between gap-2 text-[12px]"
+                  >
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <span
+                        className={cn(
+                          "h-1.5 w-1.5 shrink-0 rounded-full",
+                          isOnline(a.last_heartbeat_at)
+                            ? "bg-emerald-500"
+                            : "bg-red-500",
+                        )}
+                      />
+                      <span className="truncate">{a.bank_name}</span>
+                      <span className="truncate text-[10px] text-muted-foreground">
+                        {a.label ?? `····${a.account_number.slice(-4)}`}
+                      </span>
+                    </span>
+                    <span className="font-medium tabular-nums whitespace-nowrap">
+                      {formatRM(a.current_balance)}
+                    </span>
+                  </div>
+                ))}
+            </div>
+          </CardContent>
+        </Card>
+
         <Link href="/bot-health" className="cursor-pointer">
           <Card className="gap-2 py-4 h-full transition-colors hover:border-primary/40">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1 px-5">
@@ -352,12 +445,59 @@ export default function DashboardPage() {
                   {botsAttention}
                 </span>
               </div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">Banks online</span>
+                <span className="font-medium tabular-nums">
+                  <span className={statusColor(banksOnline, scopedBankAccounts.length)}>
+                    {banksOnline}
+                  </span>
+                  <span className="text-muted-foreground">
+                    {" "}
+                    / {scopedBankAccounts.length}
+                  </span>
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">Kiosks online</span>
+                <span className="font-medium tabular-nums">
+                  <span className={statusColor(kiosksOnline, scopedBoAccounts.length)}>
+                    {kiosksOnline}
+                  </span>
+                  <span className="text-muted-foreground">
+                    {" "}
+                    / {scopedBoAccounts.length}
+                  </span>
+                </span>
+              </div>
               <p className="text-[10px] text-muted-foreground pt-0.5">
-                Online = pinged &lt; 90s ago · click to view
+                Bots online &lt; 90s · banks &amp; kiosks &lt; 5 min · click to view
               </p>
             </CardContent>
           </Card>
         </Link>
+      </div>
+
+      {/* Live operational state */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <StatTile
+          title="Pending Deposits"
+          value={String(pendingDeposits.length)}
+          sub="Waiting for CS action"
+          icon={Clock}
+          tone="warning"
+        />
+        <StatTile
+          title="Processing"
+          value={String(processingDeposits.length)}
+          sub="Bot topping up now"
+          icon={Loader2}
+        />
+        <StatTile
+          title="Active Players"
+          value={String(scopedPlayers.filter((p) => p.status === "active").length)}
+          sub={`${scopedPlayers.length} total`}
+          icon={Users}
+        />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
