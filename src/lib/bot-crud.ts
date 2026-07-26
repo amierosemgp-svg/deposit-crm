@@ -167,6 +167,8 @@ export function gameTransferJson(t: typeof gameTransfers.$inferSelect) {
 
 export function bankTransferJson(t: typeof bankTransfers.$inferSelect) {
   return {
+    type: "transfer" as const,
+    id: t.transfer_id,
     transfer_id: t.transfer_id,
     from_account_id: t.from_account_id,
     to_account_id: t.to_account_id,

@@ -473,14 +473,14 @@
             <span class="use-tag">List</span>
           </div>
           <div class="ep-body">
-            <div class="prose"><p>Fetch transactions the CRM is waiting on. Deposits and withdrawals are returned as one stream — every item carries a <code>type</code> field (<code>"deposit"</code> or <code>"withdrawal"</code>).</p></div>
+            <div class="prose"><p>Fetch transactions the CRM is waiting on. Deposits, withdrawals and bank transfers are returned as one stream — every item carries a <code>type</code> field (<code>"deposit"</code>, <code>"withdrawal"</code>, or <code>"transfer"</code>). For transfers only, the dedicated <a href="#transfers">Transfers</a> resource offers <code>account_id</code>/<code>offset</code> filters.</p></div>
             <div class="sub">Query parameters</div>
             <div class="tbl-wrap">
               <table>
                 <tr><th>Param</th><th>Default</th><th>Description</th></tr>
-                <tr><td><code>type</code></td><td><code>deposit</code></td><td><code>deposit</code>, <code>withdrawal</code>, or <code>all</code> (both, merged newest-first).</td></tr>
-                <tr><td><code>status</code></td><td><code>pending_match</code></td><td>Comma-separated; matched against whichever type(s) it's valid for. Deposit: <code>pending_match</code>, <code>matched</code>, <code>pending</code>, <code>approved</code>, <code>processing</code>, <code>completed</code>, <code>failed</code>. Withdrawal: <code>requested</code>, <code>credits_pulled</code>, <code>paid</code>, <code>failed</code>.</td></tr>
-                <tr><td><code>game</code></td><td>—</td><td>Filter to a single game, e.g. <code>Mega888</code> (matches a deposit's <code>selected_game</code> / a withdrawal's <code>game_name</code>). <code>selected_game</code> accepted as an alias.</td></tr>
+                <tr><td><code>type</code></td><td><code>deposit</code></td><td><code>deposit</code>, <code>withdrawal</code>, <code>transfer</code>, or <code>all</code> (merged newest-first).</td></tr>
+                <tr><td><code>status</code></td><td><code>pending_match</code></td><td>Comma-separated; matched against whichever type(s) it's valid for. Deposit: <code>pending_match</code>, <code>matched</code>, <code>pending</code>, <code>approved</code>, <code>processing</code>, <code>completed</code>, <code>failed</code>. Withdrawal: <code>requested</code>, <code>credits_pulled</code>, <code>paid</code>, <code>failed</code>. Transfer: <code>pending_confirmation</code>, <code>confirmed</code>, <code>auto_confirmed</code>, <code>rejected</code>, <code>failed</code>.</td></tr>
+                <tr><td><code>game</code></td><td>—</td><td>Filter to a single game, e.g. <code>Mega888</code> (matches a deposit's <code>selected_game</code> / a withdrawal's <code>game_name</code>). <code>selected_game</code> accepted as an alias. Transfers have no game, so a game-filtered <code>type=all</code> omits them.</td></tr>
                 <tr><td><code>limit</code></td><td><code>100</code></td><td>Max rows (up to 500).</td></tr>
               </table>
             </div>
@@ -505,6 +505,26 @@
       <span class="k">"selected_game"</span>: <span class="s">"Mega888"</span>,
       <span class="k">"game_username"</span>: <span class="s">"MEGA_ahmad01"</span>,
       <span class="k">"game_accounts"</span>: [{ <span class="k">"game_name"</span>: <span class="s">"Mega888"</span>, <span class="k">"game_username"</span>: <span class="s">"MEGA_ahmad01"</span> }]
+    }
+  ]
+}
+
+<span class="cmt"># type=transfer → each item is a bank transfer</span>
+<span class="k">curl</span> <span class="s">"$BASE/api/bot/transactions?type=transfer&status=pending_confirmation"</span> -H <span class="s">"X-API-Key: $KEY"</span>
+{
+  <span class="k">"count"</span>: <span class="n">1</span>,
+  <span class="k">"transactions"</span>: [
+    {
+      <span class="k">"type"</span>: <span class="s">"transfer"</span>,
+      <span class="k">"id"</span>: <span class="n">12</span>,
+      <span class="k">"transfer_id"</span>: <span class="n">12</span>,
+      <span class="k">"from_account_id"</span>: <span class="n">3</span>,
+      <span class="k">"to_account_id"</span>: <span class="n">5</span>,
+      <span class="k">"amount"</span>: <span class="n">2000</span>,
+      <span class="k">"reference"</span>: <span class="s">"TRF-…"</span>,
+      <span class="k">"status"</span>: <span class="s">"pending_confirmation"</span>,
+      <span class="k">"expires_at"</span>: <span class="s">"2026-07-27T…"</span>,
+      <span class="k">"created_at"</span>: <span class="s">"2026-07-26T…"</span>
     }
   ]
 }</code></pre>

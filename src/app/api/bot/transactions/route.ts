@@ -1,9 +1,15 @@
 import { and, desc, eq, inArray, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { deposits, entities, transactions, withdrawals } from "@/db/schema";
+import {
+  bankTransfers,
+  deposits,
+  entities,
+  transactions,
+  withdrawals,
+} from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
-import { withdrawalJson } from "@/lib/bot-crud";
+import { bankTransferJson, withdrawalJson } from "@/lib/bot-crud";
 import {
   createBotWithdrawal,
   depositToBotJson,
@@ -32,16 +38,27 @@ const WITHDRAWAL_STATUSES = [
   "failed",
 ] as const;
 
+const TRANSFER_STATUSES = [
+  "pending_confirmation",
+  "confirmed",
+  "auto_confirmed",
+  "rejected",
+  "failed",
+] as const;
+
 /**
  * GET /api/bot/transactions?type=deposit|withdrawal|all&status=...&limit=50
  *
- * Deposits and withdrawals live in separate tables but are exposed here as one
- * transaction stream. Every item carries a `type` ("deposit" | "withdrawal").
+ * Deposits, withdrawals and bank transfers live in separate tables but are
+ * exposed here as one stream. Every item carries a `type`
+ * ("deposit" | "withdrawal" | "transfer").
  *   - type=deposit (default): deposits; status defaults to pending_match.
  *   - type=withdrawal: withdrawal requests.
- *   - type=all: both, merged and sorted newest-first.
+ *   - type=transfer: bank transfers between entity accounts.
+ *   - type=all: all three, merged and sorted newest-first.
  * `status` accepts a comma list; values are matched against whichever type(s)
- * they're valid for.
+ * they're valid for. The `game` filter never matches transfers (they have no
+ * game), so transfers are omitted from a game-filtered `type=all` query.
  */
 export async function GET(request: Request) {
   const auth = await requireBotKey(request);
@@ -56,21 +73,25 @@ export async function GET(request: Request) {
     url.searchParams.get("game") ?? url.searchParams.get("selected_game");
   const limit = Math.min(Number(url.searchParams.get("limit") ?? 100), 500);
 
-  if (!["deposit", "withdrawal", "all"].includes(type)) {
+  if (!["deposit", "withdrawal", "transfer", "all"].includes(type)) {
     return Response.json(
-      { error: "Invalid type. Use: deposit, withdrawal, all" },
+      { error: "Invalid type. Use: deposit, withdrawal, transfer, all" },
       { status: 400 },
     );
   }
 
   const wantDeposits = type === "deposit" || type === "all";
   const wantWithdrawals = type === "withdrawal" || type === "all";
+  // Transfers have no game, so a game-filtered `all` query skips them.
+  const wantTransfers = type === "transfer" || (type === "all" && !game);
   const statusList = statusParam
     ? statusParam.split(",").map((s) => s.trim()).filter(Boolean)
     : null;
 
   const items: Array<
-    ReturnType<typeof depositToBotJson> | ReturnType<typeof withdrawalJson>
+    | ReturnType<typeof depositToBotJson>
+    | ReturnType<typeof withdrawalJson>
+    | ReturnType<typeof bankTransferJson>
   > = [];
 
   if (wantDeposits) {
@@ -142,7 +163,40 @@ export async function GET(request: Request) {
     }
   }
 
-  // Merge newest-first when returning both types, then cap to the limit.
+  if (wantTransfers) {
+    const valid = statusList
+      ? statusList.filter((s) =>
+          (TRANSFER_STATUSES as readonly string[]).includes(s),
+        )
+      : null;
+    // Backward compat: a pure transfer query with a bad status is a 400.
+    if (type === "transfer" && statusList && valid && valid.length === 0) {
+      return Response.json(
+        { error: `Invalid status. Use: ${TRANSFER_STATUSES.join(", ")}` },
+        { status: 400 },
+      );
+    }
+    if (!(statusList && valid && valid.length === 0)) {
+      const conds: SQL[] = [];
+      if (valid) {
+        conds.push(
+          inArray(
+            bankTransfers.status,
+            valid as (typeof TRANSFER_STATUSES)[number][],
+          ),
+        );
+      }
+      const rows = await db
+        .select()
+        .from(bankTransfers)
+        .where(conds.length ? and(...conds) : undefined)
+        .orderBy(desc(bankTransfers.created_at))
+        .limit(limit);
+      items.push(...rows.map(bankTransferJson));
+    }
+  }
+
+  // Merge newest-first when returning multiple types, then cap to the limit.
   if (type === "all") {
     items.sort((a, b) =>
       String(b.created_at).localeCompare(String(a.created_at)),
