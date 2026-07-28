@@ -1025,7 +1025,25 @@
 
         <div class="ep">
           <div class="ep-head"><span class="m get">Get</span><span class="ep-path">/api/bot/game-transfers</span><span class="use-tag">List</span></div>
-          <div class="ep-body"><div class="prose"><p>Filter with <code>?player_id=</code>, <code>?status=</code> (comma-separated: <code>pending</code>, <code>processing</code>, <code>completed</code>, <code>failed</code>), <code>?limit=</code>, <code>?offset=</code>. Poll <code>?status=processing</code> for CS-requested transfers awaiting your back-office move.</p></div></div>
+          <div class="ep-body">
+            <div class="prose"><p>Filter with <code>?player_id=</code>, <code>?status=</code> (comma-separated: <code>pending</code>, <code>processing</code>, <code>completed</code>, <code>failed</code>), <code>?limit=</code>, <code>?offset=</code>. Poll <code>?status=processing</code> for CS-requested transfers awaiting your back-office move. Each item includes <code>from_game_username</code> / <code>to_game_username</code> — the player's account id/login in each game, so you know exactly which in-game accounts to move credits between.</p></div>
+            <div class="code" data-copy>
+              <button class="copy">Copy</button>
+              <pre><code><span class="k">curl</span> <span class="s">"$BASE/api/bot/game-transfers?status=processing"</span> -H <span class="s">"X-API-Key: $KEY"</span>
+
+<span class="cmt"># → 200 OK</span>
+{ <span class="k">"count"</span>: <span class="n">1</span>, <span class="k">"game_transfers"</span>: [
+  { <span class="k">"transfer_id"</span>: <span class="n">42</span>, <span class="k">"player_id"</span>: <span class="n">9</span>,
+    <span class="k">"from_game"</span>: <span class="s">"Joker"</span>, <span class="k">"to_game"</span>: <span class="s">"3win8"</span>,
+    <span class="k">"from_game_username"</span>: <span class="s">"JOKER_aaron01"</span>, <span class="k">"to_game_username"</span>: <span class="s">"3WIN8_aaron"</span>,
+    <span class="k">"transfer_amount"</span>: <span class="n">10</span>, <span class="k">"from_game_balance_before"</span>: <span class="n">570</span>,
+    <span class="k">"status"</span>: <span class="s">"processing"</span>, <span class="k">"created_at"</span>: <span class="s">"2026-07-28T…"</span> } ] }</code></pre>
+            </div>
+            <div class="note">
+              <span class="ic">i</span>
+              <div><code>from_game_username</code> / <code>to_game_username</code> are resolved from the player's recorded <code>game_accounts</code>; either is <code>null</code> if the player has no account on file for that game. Move <code>transfer_amount</code> from <code>from_game_username</code> to <code>to_game_username</code> in the provider back-office, then <code>PATCH …/status</code>.</div>
+            </div>
+          </div>
         </div>
 
         <div class="ep">

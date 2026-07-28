@@ -115,7 +115,10 @@ export async function PATCH(
         .returning();
 
       const [player] = await txn
-        .select({ company_entity_id: players.company_entity_id })
+        .select({
+          company_entity_id: players.company_entity_id,
+          game_accounts: players.game_accounts,
+        })
         .from(players)
         .where(eq(players.player_id, row.player_id));
 
@@ -134,10 +137,14 @@ export async function PATCH(
         },
       });
 
-      return updated;
+      return { transfer: updated, gameAccounts: player?.game_accounts ?? null };
     });
 
-    return Response.json({ transfer: gameTransferJson(result) });
+    return Response.json({
+      transfer: gameTransferJson(result.transfer, {
+        game_accounts: result.gameAccounts,
+      }),
+    });
   } catch (e) {
     return botErrorResponse(e) ?? (console.error(e), jsonError("Server error", 500));
   }

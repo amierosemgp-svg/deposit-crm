@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { gameCredits, gameTransfers, players, transactions } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
+import { playerGameInfoMap } from "@/lib/bot-transactions";
 import { BotError, botErrorResponse, gameTransferJson, jsonError } from "@/lib/bot-crud";
 
 const TRANSFER_STATUSES = [
@@ -43,7 +44,13 @@ export async function GET(request: Request) {
     .limit(limit)
     .offset(offset);
 
-  return Response.json({ count: rows.length, game_transfers: rows.map(gameTransferJson) });
+  const gameInfo = await playerGameInfoMap(rows.map((r) => r.player_id));
+  return Response.json({
+    count: rows.length,
+    game_transfers: rows.map((r) =>
+      gameTransferJson(r, gameInfo.get(r.player_id)),
+    ),
+  });
 }
 
 const createSchema = z.object({
@@ -144,10 +151,17 @@ export async function POST(request: Request) {
         details: { from: body.from_game, to: body.to_game, source: "bot" },
       });
 
-      return transfer;
+      return { transfer, gameAccounts: player.game_accounts };
     });
 
-    return Response.json({ transfer: gameTransferJson(result) }, { status: 201 });
+    return Response.json(
+      {
+        transfer: gameTransferJson(result.transfer, {
+          game_accounts: result.gameAccounts,
+        }),
+      },
+      { status: 201 },
+    );
   } catch (e) {
     return botErrorResponse(e) ?? (console.error(e), jsonError("Server error", 500));
   }

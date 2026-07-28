@@ -152,12 +152,26 @@ export function gameCreditJson(c: typeof gameCredits.$inferSelect) {
   };
 }
 
-export function gameTransferJson(t: typeof gameTransfers.$inferSelect) {
+export function gameTransferJson(
+  t: typeof gameTransfers.$inferSelect,
+  // The player's game_accounts, so we can surface which in-game account to move
+  // credits between (the player's login/ID in from_game and to_game).
+  player?: {
+    game_accounts: Array<{ game_name: string; game_username: string }> | null;
+  } | null,
+) {
+  const accts = player?.game_accounts ?? null;
   return {
     transfer_id: t.transfer_id,
     player_id: t.player_id,
     from_game: t.from_game,
     to_game: t.to_game,
+    // The player's account id/login in each game — what you move credits
+    // between in the provider back-office. null if not recorded for that game.
+    from_game_username:
+      accts?.find((g) => g.game_name === t.from_game)?.game_username ?? null,
+    to_game_username:
+      accts?.find((g) => g.game_name === t.to_game)?.game_username ?? null,
     transfer_amount: t.transfer_amount,
     from_game_balance_before: t.from_game_balance_before,
     status: t.status,
