@@ -1017,17 +1017,39 @@
       <section id="game-transfers">
         <h2>Resource</h2>
         <div class="block-title">Game transfers</div>
-        <div class="prose"><p>Move a player's credits between two games, atomically.</p></div>
+        <div class="prose"><p>Move a player's credits between two of their games. <b>Two flows:</b></p>
+        <ul>
+          <li><b>CS-requested (bot-driven):</b> a CS agent requests a transfer in the CRM. It's created as <code>processing</code> and <b>no credits move yet</b>. You do the real game-provider back-office move, then drive it to <code>completed</code> (credits move then) or <code>failed</code> (nothing to reverse) via the <b>Status</b> endpoint below. Poll <code>GET …?status=processing</code> to find work.</li>
+          <li><b>Bot-initiated:</b> you did a move on your own — <code>POST</code> records it as already <code>completed</code> and moves the credits immediately.</li>
+        </ul></div>
 
         <div class="ep">
           <div class="ep-head"><span class="m get">Get</span><span class="ep-path">/api/bot/game-transfers</span><span class="use-tag">List</span></div>
-          <div class="ep-body"><div class="prose"><p>Filter with <code>?player_id=</code>, <code>?limit=</code>, <code>?offset=</code>.</p></div></div>
+          <div class="ep-body"><div class="prose"><p>Filter with <code>?player_id=</code>, <code>?status=</code> (comma-separated: <code>pending</code>, <code>processing</code>, <code>completed</code>, <code>failed</code>), <code>?limit=</code>, <code>?offset=</code>. Poll <code>?status=processing</code> for CS-requested transfers awaiting your back-office move.</p></div></div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m patch">Patch</span><span class="ep-path">/api/bot/game-transfers/:id/status</span><span class="use-tag">Complete</span></div>
+          <div class="ep-body">
+            <div class="prose"><p>Drive a <code>processing</code> transfer to its end state after your back-office move. Body: <code>status</code> (<code>completed</code> | <code>failed</code>), optional <code>note</code>. On <code>completed</code> the credits are moved <code>from_game</code> → <code>to_game</code> atomically (the source balance is re-validated under a row lock, so a stale balance yields <span class="sc warn">422</span>). On <code>failed</code>, nothing moves.</p></div>
+            <div class="code" data-copy>
+              <button class="copy">Copy</button>
+              <pre><code><span class="k">curl</span> -X PATCH <span class="s">"$BASE/api/bot/game-transfers/42/status"</span> -H <span class="s">"X-API-Key: $KEY"</span> \
+  -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{ "status": "completed" }'</span></code></pre>
+            </div>
+            <div class="codes">
+              <div><span class="sc ok">200</span><span>Transitioned; returns the updated transfer.</span></div>
+              <div><span class="sc warn">409</span><span>Transfer is not <code>processing</code> (already completed/failed).</span></div>
+              <div><span class="sc warn">422</span><span>On <code>completed</code>: <code>from_game</code> balance is now insufficient.</span></div>
+            </div>
+          </div>
         </div>
 
         <div class="ep">
           <div class="ep-head"><span class="m post">Post</span><span class="ep-path">/api/bot/game-transfers</span><span class="use-tag">Create</span></div>
           <div class="ep-body">
-            <div class="prose"><p>Body: <code>player_id</code>, <code>from_game</code>, <code>to_game</code>, <code>amount</code>. <span class="sc warn">422</span> if the <code>from_game</code> balance is insufficient.</p></div>
+            <div class="prose"><p>Bot-initiated — records a move you already performed and applies it immediately (status <code>completed</code>). Body: <code>player_id</code>, <code>from_game</code>, <code>to_game</code>, <code>amount</code>. <span class="sc warn">422</span> if the <code>from_game</code> balance is insufficient.</p></div>
             <div class="code" data-copy>
               <button class="copy">Copy</button>
               <pre><code><span class="k">curl</span> -X POST <span class="s">"$BASE/api/bot/game-transfers"</span> -H <span class="s">"X-API-Key: $KEY"</span> \

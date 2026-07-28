@@ -1,22 +1,39 @@
-import { and, desc, eq, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { gameCredits, gameTransfers, players, transactions } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
 import { BotError, botErrorResponse, gameTransferJson, jsonError } from "@/lib/bot-crud";
 
-/** GET /api/bot/game-transfers?player_id=&limit=&offset= */
+const TRANSFER_STATUSES = [
+  "pending",
+  "processing",
+  "completed",
+  "failed",
+] as const;
+
+/** GET /api/bot/game-transfers?player_id=&status=&limit=&offset= */
 export async function GET(request: Request) {
   const auth = await requireBotKey(request);
   if (!auth.ok) return auth.response;
 
   const url = new URL(request.url);
   const playerId = url.searchParams.get("player_id");
+  const statusParam = url.searchParams.get("status");
   const limit = Math.min(Number(url.searchParams.get("limit") ?? 50), 200);
   const offset = Number(url.searchParams.get("offset") ?? 0);
 
   const filters: SQL[] = [];
   if (playerId) filters.push(eq(gameTransfers.player_id, Number(playerId)));
+  if (statusParam) {
+    const wanted = statusParam
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s): s is (typeof TRANSFER_STATUSES)[number] =>
+        (TRANSFER_STATUSES as readonly string[]).includes(s),
+      );
+    if (wanted.length) filters.push(inArray(gameTransfers.status, wanted));
+  }
 
   const rows = await db
     .select()

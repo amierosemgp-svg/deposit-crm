@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { gameCredits, gameTransfers, players, transactions } from "@/db/schema";
@@ -12,7 +12,14 @@ const createSchema = z.object({
   amount: z.number().positive(),
 });
 
-/** POST /api/game-transfers — move a player's credits between games, atomically. */
+/**
+ * POST /api/game-transfers — CS requests a credit move between two of a
+ * player's games. The credits are NOT moved here: the transfer is created as
+ * "processing" and the bot performs the real game-provider back-office transfer,
+ * then marks it completed (credits move then) or failed (nothing to reverse).
+ * The balance is validated up front so obviously-invalid requests are rejected
+ * early; the bot re-validates atomically at completion.
+ */
 export async function POST(request: Request) {
   try {
     const user = await requireWriteUser();
@@ -44,8 +51,7 @@ export async function POST(request: Request) {
             eq(gameCredits.player_id, body.player_id),
             eq(gameCredits.game_name, body.from_game),
           ),
-        )
-        .for("update");
+        );
       const fromBalance = fromCredit?.current_balance ?? 0;
       if (fromBalance < body.amount) {
         throw new AuthError(
@@ -53,35 +59,6 @@ export async function POST(request: Request) {
           `Insufficient ${body.from_game} balance (${fromBalance.toFixed(2)})`,
         );
       }
-
-      const nowIso = new Date().toISOString();
-      await txn
-        .update(gameCredits)
-        .set({
-          current_balance: +(fromBalance - body.amount).toFixed(2),
-          last_updated_at: nowIso,
-        })
-        .where(
-          and(
-            eq(gameCredits.player_id, body.player_id),
-            eq(gameCredits.game_name, body.from_game),
-          ),
-        );
-      await txn
-        .insert(gameCredits)
-        .values({
-          player_id: body.player_id,
-          game_name: body.to_game,
-          current_balance: body.amount,
-          last_updated_at: nowIso,
-        })
-        .onConflictDoUpdate({
-          target: [gameCredits.player_id, gameCredits.game_name],
-          set: {
-            current_balance: sql`${gameCredits.current_balance} + ${body.amount}`,
-            last_updated_at: nowIso,
-          },
-        });
 
       const [transfer] = await txn
         .insert(gameTransfers)
@@ -91,7 +68,7 @@ export async function POST(request: Request) {
           to_game: body.to_game,
           transfer_amount: body.amount,
           from_game_balance_before: fromBalance,
-          status: "completed",
+          status: "processing",
           handled_by_user_id: user.user_id,
         })
         .returning();
@@ -104,7 +81,7 @@ export async function POST(request: Request) {
         game_name: `${body.from_game} → ${body.to_game}`,
         reference_id: transfer.transfer_id,
         user_id: user.user_id,
-        details: { from: body.from_game, to: body.to_game },
+        details: { action: "initiated", from: body.from_game, to: body.to_game },
       });
 
       return transfer;

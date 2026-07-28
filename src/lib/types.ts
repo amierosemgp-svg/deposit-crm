@@ -170,7 +170,11 @@ export type Withdrawal = {
   updated_at: string;
 };
 
-export type GameTransferStatus = "pending" | "completed" | "failed";
+export type GameTransferStatus =
+  | "pending"
+  | "processing"
+  | "completed"
+  | "failed";
 
 export type GameTransfer = {
   transfer_id: number;

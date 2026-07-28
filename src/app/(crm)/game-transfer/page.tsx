@@ -92,7 +92,9 @@ export default function GameTransferPage() {
       toast.error(res.error ?? "Transfer failed");
       return;
     }
-    toast.success(`Transferred ${formatRM(amt)} from ${fromGame} to ${toGame}`);
+    toast.success(
+      `Transfer requested — processing ${formatRM(amt)} from ${fromGame} to ${toGame}`,
+    );
     setAmount("");
   }
 
@@ -277,7 +279,7 @@ export default function GameTransferPage() {
                         {userName(t.handled_by_user_id)}
                       </td>
                       <td className="px-3 py-2">
-                        <StatusBadge status={t.status === "completed" ? "completed" : t.status === "failed" ? "failed" : "pending"} />
+                        <StatusBadge status={t.status} />
                       </td>
                     </tr>
                   );

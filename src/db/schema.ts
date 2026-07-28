@@ -80,6 +80,7 @@ export const withdrawalStatusEnum = pgEnum("withdrawal_status", [
 
 export const gameTransferStatusEnum = pgEnum("game_transfer_status", [
   "pending",
+  "processing",
   "completed",
   "failed",
 ]);
