@@ -16,6 +16,8 @@ const createSchema = z.object({
   bonus_percentage: z.number().min(0).max(200).optional(),
   receipt_url: z.string().url().optional(),
   notes: z.string().optional(),
+  // Fully manual: no bot bank-match or top-up — CS approves → completes it.
+  skip_bot: z.boolean().optional(),
 });
 
 /**
@@ -44,6 +46,9 @@ export async function POST(request: Request) {
 
     const bonusPct = body.bonus_percentage ?? 0;
     const bonusAmt = +((body.amount * bonusPct) / 100).toFixed(2);
+    // A skip-bot deposit has no bot bank-match step, so it always starts at
+    // "pending" (ready for manual approval), never "pending_match".
+    const status = body.skip_bot ? "pending" : body.status;
     const nowIso = new Date().toISOString();
     const [created] = await db
       .insert(deposits)
@@ -59,8 +64,9 @@ export async function POST(request: Request) {
         bonus_percentage: bonusPct,
         bonus_amount: bonusAmt,
         total_amount: +(body.amount + bonusAmt).toFixed(2),
-        status: body.status,
+        status,
         source: "manual",
+        skip_bot: body.skip_bot ?? false,
         receipt_url: body.receipt_url,
         handled_by_user_id: user.user_id,
         created_at: nowIso,
@@ -75,7 +81,12 @@ export async function POST(request: Request) {
       amount: body.amount,
       reference_id: created.deposit_id,
       user_id: user.user_id,
-      details: { source: "manual", action: "intent_created", status: body.status },
+      details: {
+        source: "manual",
+        action: "intent_created",
+        status,
+        skip_bot: body.skip_bot ?? false,
+      },
     });
 
     return Response.json({ deposit: created }, { status: 201 });

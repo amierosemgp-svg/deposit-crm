@@ -131,6 +131,8 @@ type Store = {
     patch: Partial<Pick<Deposit, "bonus_percentage" | "selected_game" | "player_id">>,
   ) => Promise<MutationResult>;
   approveDeposit: (depositId: number) => Promise<MutationResult>;
+  completeDeposit: (depositId: number) => Promise<MutationResult>;
+  rejectDeposit: (depositId: number) => Promise<MutationResult>;
   reprocessDeposit: (depositId: number) => Promise<MutationResult>;
   createDepositIntent: (input: {
     player_id: number;
@@ -140,6 +142,7 @@ type Store = {
     selected_game?: string;
     bonus_percentage?: number;
     receipt_url?: string;
+    skip_bot?: boolean;
   }) => Promise<MutationResult>;
   createWithdrawal: (input: {
     player_id: number;
@@ -147,8 +150,10 @@ type Store = {
     game_name: string;
     bank_name?: string;
     bank_account_number?: string;
+    skip_bot?: boolean;
   }) => Promise<MutationResult>;
   pullCreditsForWithdrawal: (withdrawalId: number) => Promise<MutationResult>;
+  rejectWithdrawal: (withdrawalId: number) => Promise<MutationResult>;
   markWithdrawalPaid: (
     withdrawalId: number,
     opts?: { paid_from_account_id?: number; proof_url?: string },
@@ -213,6 +218,7 @@ type Store = {
     amount: number;
     reference?: string;
     notes?: string;
+    skip_bot?: boolean;
   }) => Promise<MutationResult>;
   confirmBankTransfer: (transferId: number) => Promise<MutationResult>;
   rejectBankTransfer: (transferId: number) => Promise<MutationResult>;
@@ -512,11 +518,23 @@ export const useStore = create<Store>((set, get) => {
       if (result.ok && d) {
         get().pushNotification({
           kind: "topup",
-          message: `Approved — RM ${d.total_amount.toFixed(2)} top-up dispatched to the bot for ${d.player_username} (${d.selected_game})`,
+          message: d.skip_bot
+            ? `Approved — RM ${d.total_amount.toFixed(2)} for ${d.player_username} (${d.selected_game}); complete it once topped up`
+            : `Approved — RM ${d.total_amount.toFixed(2)} top-up dispatched to the bot for ${d.player_username} (${d.selected_game})`,
         });
       }
       return result;
     },
+
+    completeDeposit: (depositId) =>
+      mutate(
+        `/api/deposits/${depositId}/complete`,
+        { method: "POST" },
+        { kind: "topup", message: "Deposit completed — credit booked" },
+      ),
+
+    rejectDeposit: (depositId) =>
+      mutate(`/api/deposits/${depositId}/reject`, { method: "POST" }),
 
     reprocessDeposit: async (depositId) => {
       // Optimistic: flip the row to "pending" immediately so CS sees it become
@@ -542,6 +560,13 @@ export const useStore = create<Store>((set, get) => {
 
     createWithdrawal: (input) =>
       mutate("/api/withdrawals", { method: "POST", body: JSON.stringify(input) }),
+
+    rejectWithdrawal: (withdrawalId) =>
+      mutate(
+        `/api/withdrawals/${withdrawalId}/reject`,
+        { method: "POST" },
+        { kind: "withdrawal", message: "Withdrawal rejected" },
+      ),
 
     pullCreditsForWithdrawal: async (withdrawalId) => {
       const w = get().withdrawals.find((x) => x.withdrawal_id === withdrawalId);
@@ -606,7 +631,14 @@ export const useStore = create<Store>((set, get) => {
     deleteBankAccount: (accountId) =>
       mutate(`/api/bank-accounts/${accountId}`, { method: "DELETE" }),
 
-    createBankTransfer: ({ fromAccountId, toAccountId, amount, reference, notes }) =>
+    createBankTransfer: ({
+      fromAccountId,
+      toAccountId,
+      amount,
+      reference,
+      notes,
+      skip_bot,
+    }) =>
       mutate(
         "/api/transfers",
         {
@@ -617,6 +649,7 @@ export const useStore = create<Store>((set, get) => {
             amount,
             reference,
             notes,
+            skip_bot,
           }),
         },
         {

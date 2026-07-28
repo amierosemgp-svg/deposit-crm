@@ -11,6 +11,8 @@ const createSchema = z.object({
   game_name: z.string().min(1),
   bank_name: z.string().optional(),
   bank_account_number: z.string().optional(),
+  // Fully manual: the bot never auto-pulls/pays this — CS handles it.
+  skip_bot: z.boolean().optional(),
 });
 
 /** POST /api/withdrawals — CS logs a withdrawal request received on Telegram/WeChat. */
@@ -42,6 +44,7 @@ export async function POST(request: Request) {
         bank_name: body.bank_name,
         bank_account_number: body.bank_account_number,
         source: "manual",
+        skip_bot: body.skip_bot ?? false,
         handled_by_user_id: user.user_id,
       })
       .returning();

@@ -55,6 +55,32 @@ const STATUS_FILTERS: { value: string; tab: string }[] = [
   { value: "all", tab: "All" },
 ];
 
+/** Reject control for manual (skip-bot) deposits — confirms, then fails the row. */
+function RejectDepositButton({
+  depositId,
+  onReject,
+}: {
+  depositId: number;
+  onReject: (id: number) => Promise<{ ok: boolean; error?: string }>;
+}) {
+  return (
+    <Button
+      size="sm"
+      variant="outline"
+      onClick={async () => {
+        if (!confirm("Reject this deposit? It will be marked failed.")) return;
+        const r = await onReject(depositId);
+        if (!r.ok) toast.error(r.error ?? "Reject failed");
+        else toast.success("Deposit rejected");
+      }}
+      className="cursor-pointer gap-1 border-red-300 text-red-700 hover:bg-red-50 hover:text-red-800"
+    >
+      <X className="h-3.5 w-3.5" />
+      Reject
+    </Button>
+  );
+}
+
 export default function DepositsPage() {
   const deposits = useStore((s) => s.deposits);
   const me = useStore((s) => s.me);
@@ -64,6 +90,8 @@ export default function DepositsPage() {
   const companyInScope = useStore((s) => s.companyInScope);
   const updateDraft = useStore((s) => s.updateDepositDraft);
   const approveDeposit = useStore((s) => s.approveDeposit);
+  const completeDeposit = useStore((s) => s.completeDeposit);
+  const rejectDeposit = useStore((s) => s.rejectDeposit);
   const reprocessDeposit = useStore((s) => s.reprocessDeposit);
   const refresh = useStore((s) => s.refresh);
   const companiesFn = useStore((s) => s.companies);
@@ -687,11 +715,52 @@ export default function DepositsPage() {
                       <td className="px-3 py-2">
                         <div className="flex flex-col items-start gap-1">
                           <StatusBadge status={d.status} />
-                          <SourceBadge source={d.source} />
+                          <div className="flex items-center gap-1">
+                            <SourceBadge source={d.source} />
+                            {d.skip_bot && (
+                              <span className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
+                                No bot
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </td>
                       <td className="px-3 py-2 text-right">
-                        {actionable && !isViewer ? (
+                        {!isViewer &&
+                        d.skip_bot &&
+                        (d.status === "pending" || d.status === "matched") ? (
+                          <div className="flex items-center justify-end gap-1.5">
+                            <Button
+                              size="sm"
+                              onClick={async () => {
+                                const r = await approveDeposit(d.deposit_id);
+                                if (!r.ok) toast.error(r.error ?? "Approve failed");
+                              }}
+                              disabled={!canApprove}
+                              className="cursor-pointer bg-emerald-600 text-white hover:bg-emerald-700 disabled:bg-emerald-600/30 disabled:text-white/70"
+                            >
+                              <Zap className="h-3.5 w-3.5" />
+                              Approve
+                            </Button>
+                            <RejectDepositButton depositId={d.deposit_id} onReject={rejectDeposit} />
+                          </div>
+                        ) : !isViewer && d.skip_bot && d.status === "processing" ? (
+                          <div className="flex items-center justify-end gap-1.5">
+                            <Button
+                              size="sm"
+                              onClick={async () => {
+                                const r = await completeDeposit(d.deposit_id);
+                                if (!r.ok) toast.error(r.error ?? "Complete failed");
+                                else toast.success("Deposit completed — credit booked");
+                              }}
+                              className="cursor-pointer bg-emerald-600 text-white hover:bg-emerald-700"
+                            >
+                              <CheckCircle2 className="h-3.5 w-3.5" />
+                              Complete
+                            </Button>
+                            <RejectDepositButton depositId={d.deposit_id} onReject={rejectDeposit} />
+                          </div>
+                        ) : actionable && !isViewer ? (
                           <Button
                             size="sm"
                             onClick={() => setApprovingId(d.deposit_id)}

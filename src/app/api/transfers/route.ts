@@ -15,6 +15,8 @@ const createSchema = z.object({
   amount: z.number().positive(),
   reference: z.string().optional(),
   notes: z.string().optional(),
+  // Fully manual: the bot never acts on it and it never auto-confirms.
+  skip_bot: z.boolean().optional(),
 });
 
 /**
@@ -90,6 +92,7 @@ export async function POST(request: Request) {
           reference: body.reference?.trim() || `TRF-${Date.now()}`,
           notes: body.notes?.trim() || null,
           status: "pending_confirmation",
+          skip_bot: body.skip_bot ?? false,
           initiated_by_user_id: user.user_id,
           expires_at: expiresAt,
           created_at: nowIso,

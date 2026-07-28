@@ -130,6 +130,8 @@ export async function autoConfirmExpiredTransfers(): Promise<number> {
       and(
         eq(bankTransfers.status, "pending_confirmation"),
         lt(bankTransfers.expires_at, nowIso),
+        // Manual (skip-bot) transfers never auto-confirm — a human decides.
+        eq(bankTransfers.skip_bot, false),
       ),
     );
   for (const t of expired) {

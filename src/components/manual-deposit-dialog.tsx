@@ -45,6 +45,7 @@ export function ManualDepositDialog({ open, onOpenChange }: Props) {
   const [game, setGame] = useState("");
   const [bonus, setBonus] = useState("0");
   const [verified, setVerified] = useState(false);
+  const [skipBot, setSkipBot] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -60,6 +61,7 @@ export function ManualDepositDialog({ open, onOpenChange }: Props) {
       setGame("");
       setBonus("0");
       setVerified(false);
+      setSkipBot(false);
       setFile(null);
       setSubmitting(false);
     }
@@ -94,10 +96,11 @@ export function ManualDepositDialog({ open, onOpenChange }: Props) {
       player_id: player.player_id,
       amount: amt,
       bank_name: bank,
-      status: verified ? "pending" : "pending_match",
+      status: verified || skipBot ? "pending" : "pending_match",
       selected_game: game || undefined,
       bonus_percentage: Number(bonus) || 0,
       receipt_url,
+      skip_bot: skipBot,
     });
     setSubmitting(false);
     if (!res.ok) {
@@ -105,9 +108,11 @@ export function ManualDepositDialog({ open, onOpenChange }: Props) {
       return;
     }
     toast.success(
-      verified
-        ? "Manual deposit created — ready for approval"
-        : "Manual deposit intent created — awaiting bank match",
+      skipBot
+        ? "Manual deposit created — approve then complete it (bot skipped)"
+        : verified
+          ? "Manual deposit created — ready for approval"
+          : "Manual deposit intent created — awaiting bank match",
     );
     onOpenChange(false);
   }
@@ -239,21 +244,45 @@ export function ManualDepositDialog({ open, onOpenChange }: Props) {
               </div>
             </div>
 
-            <label className="flex cursor-pointer items-start gap-2.5 rounded-md border bg-muted/20 p-3 select-none">
+            <label
+              className={`flex items-start gap-2.5 rounded-md border bg-muted/20 p-3 select-none ${
+                skipBot ? "cursor-not-allowed opacity-50" : "cursor-pointer"
+              }`}
+            >
               <input
                 type="checkbox"
-                checked={verified}
+                checked={verified || skipBot}
+                disabled={skipBot}
                 onChange={(e) => setVerified(e.target.checked)}
-                className="mt-0.5 h-4 w-4 cursor-pointer accent-primary"
+                className="mt-0.5 h-4 w-4 cursor-pointer accent-primary disabled:cursor-not-allowed"
               />
               <span>
                 <span className="block text-sm font-medium">
                   Receipt already verified
                 </span>
                 <span className="block text-[11px] text-muted-foreground mt-0.5">
-                  {verified
+                  {verified || skipBot
                     ? "Created as Pending — ready to approve immediately."
                     : "Created as Awaiting Bank Match — the bot will confirm the bank transaction."}
+                </span>
+              </span>
+            </label>
+
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-md border border-amber-300 bg-amber-50/60 p-3 select-none">
+              <input
+                type="checkbox"
+                checked={skipBot}
+                onChange={(e) => setSkipBot(e.target.checked)}
+                className="mt-0.5 h-4 w-4 cursor-pointer accent-amber-600"
+              />
+              <span>
+                <span className="block text-sm font-medium">
+                  Handle manually (skip bot)
+                </span>
+                <span className="block text-[11px] text-muted-foreground mt-0.5">
+                  {skipBot
+                    ? "The bot won't match or top up this deposit — you'll Approve then Complete it yourself."
+                    : "Leave off to let the bot verify the bank credit and do the game top-up."}
                 </span>
               </span>
             </label>

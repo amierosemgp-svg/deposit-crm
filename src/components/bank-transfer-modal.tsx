@@ -64,6 +64,7 @@ export function BankTransferModal({
   const [amount, setAmount] = useState("");
   const [reference, setReference] = useState("");
   const [notes, setNotes] = useState("");
+  const [skipBot, setSkipBot] = useState(false);
   const [phase, setPhase] = useState<"input" | "submitting" | "success">("input");
 
   useEffect(() => {
@@ -73,6 +74,7 @@ export function BankTransferModal({
       setAmount("");
       setReference("");
       setNotes("");
+      setSkipBot(false);
       setPhase("input");
     }
   }, [open, defaultFromAccountId]);
@@ -118,6 +120,7 @@ export function BankTransferModal({
       amount: amt,
       reference: reference || undefined,
       notes: notes || undefined,
+      skip_bot: skipBot,
     });
     if (result.ok) {
       setPhase("success");
@@ -287,6 +290,24 @@ export function BankTransferModal({
                   className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/30 resize-none"
                 />
               </div>
+
+              <label className="flex cursor-pointer items-start gap-2.5 rounded-md border border-amber-300 bg-amber-50/60 p-3 select-none">
+                <input
+                  type="checkbox"
+                  checked={skipBot}
+                  onChange={(e) => setSkipBot(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 cursor-pointer accent-amber-600"
+                />
+                <span>
+                  <span className="block text-sm font-medium">
+                    Handle manually (skip bot)
+                  </span>
+                  <span className="block text-[11px] text-muted-foreground mt-0.5">
+                    The bot won&apos;t act on this and it won&apos;t auto-confirm
+                    after 24h — the recipient must Confirm or Reject it.
+                  </span>
+                </span>
+              </label>
 
               {validation && fromId && toId && (
                 <p className="text-[11px] text-rose-600">{validation}</p>

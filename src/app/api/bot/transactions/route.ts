@@ -111,7 +111,8 @@ export async function GET(request: Request) {
     // otherwise (type=all) return every status.
     const statuses = valid ?? (type === "deposit" ? ["pending_match"] : null);
     if (!(statusList && statuses && statuses.length === 0)) {
-      const conds: SQL[] = [];
+      // Manual (skip-bot) deposits are never surfaced to the bot.
+      const conds: SQL[] = [eq(deposits.skip_bot, false)];
       if (statuses) {
         conds.push(
           inArray(
@@ -143,7 +144,8 @@ export async function GET(request: Request) {
         )
       : null;
     if (!(statusList && valid && valid.length === 0)) {
-      const conds: SQL[] = [];
+      // Manual (skip-bot) withdrawals are never surfaced to the bot.
+      const conds: SQL[] = [eq(withdrawals.skip_bot, false)];
       if (valid) {
         conds.push(
           inArray(
@@ -177,7 +179,8 @@ export async function GET(request: Request) {
       );
     }
     if (!(statusList && valid && valid.length === 0)) {
-      const conds: SQL[] = [];
+      // Manual (skip-bot) transfers are never surfaced to the bot.
+      const conds: SQL[] = [eq(bankTransfers.skip_bot, false)];
       if (valid) {
         conds.push(
           inArray(

@@ -1,4 +1,5 @@
 import {
+  boolean,
   integer,
   jsonb,
   numeric,
@@ -215,6 +216,9 @@ export const bankTransfers = pgTable("bank_transfers", {
   reference: varchar("reference", { length: 80 }),
   notes: text("notes"),
   status: bankTransferStatusEnum("status").notNull().default("pending_confirmation"),
+  // When true the transfer is handled manually: the bot never acts on it and
+  // the confirmation window never auto-confirms — a human confirms/rejects.
+  skip_bot: boolean("skip_bot").notNull().default(false),
   // Nullable: bot/system-initiated transfers have no human user.
   initiated_by_user_id: integer("initiated_by_user_id").references(
     () => users.user_id,
@@ -272,6 +276,9 @@ export const deposits = pgTable("deposits", {
   status: depositStatusEnum("status").notNull().default("pending"),
   // Bot-detected bank credits default to "bot"; CRM-entered deposits set "manual".
   source: transactionSourceEnum("source").notNull().default("bot"),
+  // When true the deposit is fully manual: the bot never matches or tops it up;
+  // a human approves → processing → completes (or rejects) it.
+  skip_bot: boolean("skip_bot").notNull().default(false),
   matched_at: timestamp("matched_at", { withTimezone: true, mode: "string" }),
   handled_by_user_id: integer("handled_by_user_id").references(() => users.user_id),
   game_topup_reference: varchar("game_topup_reference", { length: 80 }),
@@ -303,6 +310,9 @@ export const withdrawals = pgTable("withdrawals", {
     .notNull()
     .default(0),
   status: withdrawalStatusEnum("status").notNull().default("requested"),
+  // When true the bot never auto-pulls/pays this withdrawal; CS handles it
+  // manually (pull → paid) and can reject it.
+  skip_bot: boolean("skip_bot").notNull().default(false),
   // CS-entered requests default to "manual"; bot-created requests set "bot".
   source: transactionSourceEnum("source").notNull().default("manual"),
   handled_by_user_id: integer("handled_by_user_id").references(() => users.user_id),

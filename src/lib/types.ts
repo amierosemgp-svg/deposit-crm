@@ -141,6 +141,7 @@ export type Deposit = {
   selected_game: string | null;
   status: DepositStatus;
   source?: TransactionSource;
+  skip_bot?: boolean;
   matched_at?: string | null;
   handled_by_user_id?: number | null;
   game_topup_reference?: string | null;
@@ -160,6 +161,7 @@ export type Withdrawal = {
   credit_pulled_amount: number;
   status: WithdrawalStatus;
   source?: TransactionSource;
+  skip_bot?: boolean;
   handled_by_user_id?: number | null;
   bank_name?: string | null;
   bank_account_number?: string | null;
@@ -229,6 +231,7 @@ export type BankTransfer = {
   reference?: string | null;
   notes?: string | null;
   status: BankTransferStatus;
+  skip_bot?: boolean;
   initiated_by_user_id: number;
   confirmed_by_user_id?: number | null;
   confirmed_at?: string | null;

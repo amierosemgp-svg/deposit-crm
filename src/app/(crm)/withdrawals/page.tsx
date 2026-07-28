@@ -35,6 +35,7 @@ import {
   Plus,
   Search,
   Users,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -57,6 +58,7 @@ export default function WithdrawalsPage() {
   const playerById = useStore((s) => s.playerById);
   const markPaid = useStore((s) => s.markWithdrawalPaid);
   const createWithdrawal = useStore((s) => s.createWithdrawal);
+  const rejectWithdrawal = useStore((s) => s.rejectWithdrawal);
   const uploadFile = useStore((s) => s.uploadFile);
   const me = useStore((s) => s.me);
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
@@ -77,6 +79,7 @@ export default function WithdrawalsPage() {
   const [newAmount, setNewAmount] = useState("");
   const [newBankName, setNewBankName] = useState("");
   const [newBankAccount, setNewBankAccount] = useState("");
+  const [newSkipBot, setNewSkipBot] = useState(false);
   const [playerPickerOpen, setPlayerPickerOpen] = useState(false);
   const [newSubmitting, setNewSubmitting] = useState(false);
 
@@ -177,6 +180,7 @@ export default function WithdrawalsPage() {
     setNewAmount("");
     setNewBankName("");
     setNewBankAccount("");
+    setNewSkipBot(false);
   }
 
   async function handleCreateWithdrawal() {
@@ -188,6 +192,7 @@ export default function WithdrawalsPage() {
       game_name: newGame,
       bank_name: newBankName.trim() || undefined,
       bank_account_number: newBankAccount.trim() || undefined,
+      skip_bot: newSkipBot,
     });
     setNewSubmitting(false);
     if (!res.ok) {
@@ -390,19 +395,42 @@ export default function WithdrawalsPage() {
                     <td className="px-3 py-2">
                       <div className="flex flex-col items-start gap-1">
                         <StatusBadge status={w.status} />
-                        <SourceBadge source={w.source} />
+                        <div className="flex items-center gap-1">
+                          <SourceBadge source={w.source} />
+                          {w.skip_bot && (
+                            <span className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
+                              No bot
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </td>
                     <td className="px-3 py-2 text-right">
                       {canPull && (
-                        <Button
-                          size="sm"
-                          onClick={() => setPullingId(w.withdrawal_id)}
-                          className="cursor-pointer bg-blue-600 text-white hover:bg-blue-700"
-                        >
-                          <ArrowDownToLine className="h-3.5 w-3.5" />
-                          Pull Credits
-                        </Button>
+                        <div className="flex items-center justify-end gap-1.5">
+                          <Button
+                            size="sm"
+                            onClick={() => setPullingId(w.withdrawal_id)}
+                            className="cursor-pointer bg-blue-600 text-white hover:bg-blue-700"
+                          >
+                            <ArrowDownToLine className="h-3.5 w-3.5" />
+                            Pull Credits
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={async () => {
+                              if (!confirm("Reject this withdrawal request? It will be marked failed.")) return;
+                              const r = await rejectWithdrawal(w.withdrawal_id);
+                              if (!r.ok) toast.error(r.error ?? "Reject failed");
+                              else toast.success("Withdrawal rejected");
+                            }}
+                            className="cursor-pointer gap-1 border-red-300 text-red-700 hover:bg-red-50 hover:text-red-800"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                            Reject
+                          </Button>
+                        </div>
                       )}
                       {canPay && (
                         <Button
@@ -572,6 +600,24 @@ export default function WithdrawalsPage() {
                 />
               </div>
             </div>
+
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-md border border-amber-300 bg-amber-50/60 p-3 select-none">
+              <input
+                type="checkbox"
+                checked={newSkipBot}
+                onChange={(e) => setNewSkipBot(e.target.checked)}
+                className="mt-0.5 h-4 w-4 cursor-pointer accent-amber-600"
+              />
+              <span>
+                <span className="block text-sm font-medium">
+                  Handle manually (skip bot)
+                </span>
+                <span className="block text-[11px] text-muted-foreground mt-0.5">
+                  The bot won&apos;t auto-process this — you pull credits and mark
+                  paid (or reject) yourself.
+                </span>
+              </span>
+            </label>
           </div>
 
           <DialogFooter>
