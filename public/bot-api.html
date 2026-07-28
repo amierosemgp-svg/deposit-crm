@@ -473,15 +473,19 @@
             <span class="use-tag">List</span>
           </div>
           <div class="ep-body">
-            <div class="prose"><p>Fetch transactions the CRM is waiting on. Deposits, withdrawals and bank transfers are returned as one stream — every item carries a <code>type</code> field (<code>"deposit"</code>, <code>"withdrawal"</code>, or <code>"transfer"</code>). For transfers only, the dedicated <a href="#transfers">Transfers</a> resource offers <code>account_id</code>/<code>offset</code> filters.</p>
+            <div class="prose"><p>Fetch transactions the CRM is waiting on. Deposits, withdrawals, bank transfers and game transfers are returned as one stream — every item carries a <code>type</code> field (<code>"deposit"</code>, <code>"withdrawal"</code>, <code>"transfer"</code>, or <code>"game_transfer"</code>). For bank transfers only, the dedicated <a href="#transfers">Transfers</a> resource offers <code>account_id</code>/<code>offset</code> filters.</p>
             <p><b>Manual items are never returned.</b> Deposits, withdrawals and transfers created with <em>"Handle manually (skip bot)"</em> are excluded from every bot endpoint — a human approves/completes/confirms them in the CRM, so your bot never sees or acts on them.</p></div>
+            <div class="note">
+              <span class="ic">i</span>
+              <div><b><code>transfer</code> ≠ <code>game_transfer</code>.</b> <code>type=transfer</code> is a <b>bank</b> transfer between company/leader bank accounts (statuses <code>pending_confirmation</code>, <code>confirmed</code>, …). Credits moving between a player's games are <code>type=game_transfer</code> (statuses <code>pending</code>, <code>processing</code>, …) — see <a href="#game-transfers">Game transfers</a>. <code>?type=transfer&amp;status=processing</code> is a <code>400</code>, and a plain <code>?type=transfer</code> returns bank transfers only, which is usually empty. To find CS-requested game credit moves waiting on you, use <code>?type=game_transfer&amp;status=processing</code>.</div>
+            </div>
             <div class="sub">Query parameters</div>
             <div class="tbl-wrap">
               <table>
                 <tr><th>Param</th><th>Default</th><th>Description</th></tr>
-                <tr><td><code>type</code></td><td><code>deposit</code></td><td><code>deposit</code>, <code>withdrawal</code>, <code>transfer</code>, or <code>all</code> (merged newest-first).</td></tr>
-                <tr><td><code>status</code></td><td><code>pending_match</code></td><td>Comma-separated; matched against whichever type(s) it's valid for. Deposit: <code>pending_match</code>, <code>matched</code>, <code>pending</code>, <code>approved</code>, <code>processing</code>, <code>completed</code>, <code>failed</code>. Withdrawal: <code>requested</code>, <code>credits_pulled</code>, <code>paid</code>, <code>failed</code>. Transfer: <code>pending_confirmation</code>, <code>confirmed</code>, <code>auto_confirmed</code>, <code>rejected</code>, <code>failed</code>.</td></tr>
-                <tr><td><code>game</code></td><td>—</td><td>Filter to a single game, e.g. <code>Mega888</code> (matches a deposit's <code>selected_game</code> / a withdrawal's <code>game_name</code>). <code>selected_game</code> accepted as an alias. Transfers have no game, so a game-filtered <code>type=all</code> omits them.</td></tr>
+                <tr><td><code>type</code></td><td><code>deposit</code></td><td><code>deposit</code>, <code>withdrawal</code>, <code>transfer</code> (bank), <code>game_transfer</code>, or <code>all</code> (merged newest-first).</td></tr>
+                <tr><td><code>status</code></td><td><code>pending_match</code></td><td>Comma-separated; matched against whichever type(s) it's valid for. Deposit: <code>pending_match</code>, <code>matched</code>, <code>pending</code>, <code>approved</code>, <code>processing</code>, <code>completed</code>, <code>failed</code>. Withdrawal: <code>requested</code>, <code>credits_pulled</code>, <code>paid</code>, <code>failed</code>. Bank transfer: <code>pending_confirmation</code>, <code>confirmed</code>, <code>auto_confirmed</code>, <code>rejected</code>, <code>failed</code>. Game transfer: <code>pending</code>, <code>processing</code>, <code>completed</code>, <code>failed</code>.</td></tr>
+                <tr><td><code>game</code></td><td>—</td><td>Filter to a single game, e.g. <code>Mega888</code> (matches a deposit's <code>selected_game</code> / a withdrawal's <code>game_name</code> / either side of a game transfer). <code>selected_game</code> accepted as an alias. Bank transfers have no game, so a game-filtered <code>type=all</code> omits them.</td></tr>
                 <tr><td><code>limit</code></td><td><code>100</code></td><td>Max rows (up to 500).</td></tr>
               </table>
             </div>
@@ -528,7 +532,30 @@
       <span class="k">"created_at"</span>: <span class="s">"2026-07-26T…"</span>
     }
   ]
-}</code></pre>
+}
+
+<span class="cmt"># type=game_transfer → CS-requested game credit moves waiting on your back-office move</span>
+<span class="k">curl</span> <span class="s">"$BASE/api/bot/transactions?type=game_transfer&status=processing"</span> -H <span class="s">"X-API-Key: $KEY"</span>
+{
+  <span class="k">"count"</span>: <span class="n">1</span>,
+  <span class="k">"transactions"</span>: [
+    {
+      <span class="k">"type"</span>: <span class="s">"game_transfer"</span>,
+      <span class="k">"id"</span>: <span class="n">42</span>,
+      <span class="k">"transfer_id"</span>: <span class="n">42</span>,
+      <span class="k">"player_id"</span>: <span class="n">9</span>,
+      <span class="k">"from_game"</span>: <span class="s">"Mega888"</span>,
+      <span class="k">"to_game"</span>: <span class="s">"918Kiss"</span>,
+      <span class="k">"from_game_username"</span>: <span class="s">"MEGA_ahmad01"</span>,
+      <span class="k">"to_game_username"</span>: <span class="s">"KISS_ahmad01"</span>,
+      <span class="k">"transfer_amount"</span>: <span class="n">1</span>,
+      <span class="k">"from_game_balance_before"</span>: <span class="n">23.83</span>,
+      <span class="k">"status"</span>: <span class="s">"processing"</span>,
+      <span class="k">"created_at"</span>: <span class="s">"2026-07-28T…"</span>
+    }
+  ]
+}
+<span class="cmt"># then finish it: PATCH /api/bot/game-transfers/42/status {"status":"completed"}</span></code></pre>
             </div>
             <div class="note">
               <span class="ic">i</span>

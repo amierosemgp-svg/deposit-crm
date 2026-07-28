@@ -162,6 +162,8 @@ export function gameTransferJson(
 ) {
   const accts = player?.game_accounts ?? null;
   return {
+    type: "game_transfer" as const,
+    id: t.transfer_id,
     transfer_id: t.transfer_id,
     player_id: t.player_id,
     from_game: t.from_game,

@@ -1,15 +1,20 @@
-import { and, desc, eq, inArray, type SQL } from "drizzle-orm";
+import { and, desc, eq, inArray, or, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import {
   bankTransfers,
   deposits,
   entities,
+  gameTransfers,
   transactions,
   withdrawals,
 } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
-import { bankTransferJson, withdrawalJson } from "@/lib/bot-crud";
+import {
+  bankTransferJson,
+  gameTransferJson,
+  withdrawalJson,
+} from "@/lib/bot-crud";
 import {
   createBotWithdrawal,
   depositToBotJson,
@@ -46,26 +51,51 @@ const TRANSFER_STATUSES = [
   "failed",
 ] as const;
 
+const GAME_TRANSFER_STATUSES = [
+  "pending",
+  "processing",
+  "completed",
+  "failed",
+] as const;
+
+// `transfer` = bank transfer between entity accounts; `game_transfer` = a
+// player's credits moved between two games. They are different tables and
+// different workflows — accept a couple of spellings so the two aren't confused.
+const TYPE_ALIASES: Record<string, string> = {
+  "game-transfer": "game_transfer",
+  game_transfers: "game_transfer",
+  "game-transfers": "game_transfer",
+  gametransfer: "game_transfer",
+  transfers: "transfer",
+  deposits: "deposit",
+  withdrawals: "withdrawal",
+};
+
 /**
- * GET /api/bot/transactions?type=deposit|withdrawal|all&status=...&limit=50
+ * GET /api/bot/transactions?type=deposit|withdrawal|transfer|game_transfer|all&status=...&limit=50
  *
- * Deposits, withdrawals and bank transfers live in separate tables but are
- * exposed here as one stream. Every item carries a `type`
- * ("deposit" | "withdrawal" | "transfer").
+ * Deposits, withdrawals, bank transfers and game transfers live in separate
+ * tables but are exposed here as one stream. Every item carries a `type`
+ * ("deposit" | "withdrawal" | "transfer" | "game_transfer").
  *   - type=deposit (default): deposits; status defaults to pending_match.
  *   - type=withdrawal: withdrawal requests.
  *   - type=transfer: bank transfers between entity accounts.
- *   - type=all: all three, merged and sorted newest-first.
+ *   - type=game_transfer: CS-requested game credit moves. `status=processing`
+ *     is the bot's work queue — do the provider-side move, then
+ *     PATCH /api/bot/game-transfers/:id/status.
+ *   - type=all: all four, merged and sorted newest-first.
  * `status` accepts a comma list; values are matched against whichever type(s)
- * they're valid for. The `game` filter never matches transfers (they have no
- * game), so transfers are omitted from a game-filtered `type=all` query.
+ * they're valid for. The `game` filter never matches bank transfers (they have
+ * no game), so those are omitted from a game-filtered `type=all` query; game
+ * transfers match on either side (from_game or to_game).
  */
 export async function GET(request: Request) {
   const auth = await requireBotKey(request);
   if (!auth.ok) return auth.response;
 
   const url = new URL(request.url);
-  const type = (url.searchParams.get("type") ?? "deposit").toLowerCase();
+  const rawType = (url.searchParams.get("type") ?? "deposit").toLowerCase();
+  const type = TYPE_ALIASES[rawType] ?? rawType;
   const statusParam = url.searchParams.get("status");
   // Filter to a single game (deposit.selected_game / withdrawal.game_name),
   // e.g. ?game=Mega888. Accepts `game` or `selected_game`.
@@ -73,17 +103,23 @@ export async function GET(request: Request) {
     url.searchParams.get("game") ?? url.searchParams.get("selected_game");
   const limit = Math.min(Number(url.searchParams.get("limit") ?? 100), 500);
 
-  if (!["deposit", "withdrawal", "transfer", "all"].includes(type)) {
+  if (
+    !["deposit", "withdrawal", "transfer", "game_transfer", "all"].includes(type)
+  ) {
     return Response.json(
-      { error: "Invalid type. Use: deposit, withdrawal, transfer, all" },
+      {
+        error:
+          "Invalid type. Use: deposit, withdrawal, transfer, game_transfer, all",
+      },
       { status: 400 },
     );
   }
 
   const wantDeposits = type === "deposit" || type === "all";
   const wantWithdrawals = type === "withdrawal" || type === "all";
-  // Transfers have no game, so a game-filtered `all` query skips them.
+  // Bank transfers have no game, so a game-filtered `all` query skips them.
   const wantTransfers = type === "transfer" || (type === "all" && !game);
+  const wantGameTransfers = type === "game_transfer" || type === "all";
   const statusList = statusParam
     ? statusParam.split(",").map((s) => s.trim()).filter(Boolean)
     : null;
@@ -92,6 +128,7 @@ export async function GET(request: Request) {
     | ReturnType<typeof depositToBotJson>
     | ReturnType<typeof withdrawalJson>
     | ReturnType<typeof bankTransferJson>
+    | ReturnType<typeof gameTransferJson>
   > = [];
 
   if (wantDeposits) {
@@ -196,6 +233,53 @@ export async function GET(request: Request) {
         .orderBy(desc(bankTransfers.created_at))
         .limit(limit);
       items.push(...rows.map(bankTransferJson));
+    }
+  }
+
+  if (wantGameTransfers) {
+    const valid = statusList
+      ? statusList.filter((s) =>
+          (GAME_TRANSFER_STATUSES as readonly string[]).includes(s),
+        )
+      : null;
+    // A pure game_transfer query with a status that means nothing here is a
+    // 400 rather than a silently empty list — the same contract as the other
+    // pure-type queries.
+    if (type === "game_transfer" && statusList && valid && valid.length === 0) {
+      return Response.json(
+        { error: `Invalid status. Use: ${GAME_TRANSFER_STATUSES.join(", ")}` },
+        { status: 400 },
+      );
+    }
+    if (!(statusList && valid && valid.length === 0)) {
+      const conds: SQL[] = [];
+      if (valid) {
+        conds.push(
+          inArray(
+            gameTransfers.status,
+            valid as (typeof GAME_TRANSFER_STATUSES)[number][],
+          ),
+        );
+      }
+      // A game transfer touches two games; match either side.
+      if (game) {
+        conds.push(
+          or(
+            eq(gameTransfers.from_game, game),
+            eq(gameTransfers.to_game, game),
+          )!,
+        );
+      }
+      const rows = await db
+        .select()
+        .from(gameTransfers)
+        .where(conds.length ? and(...conds) : undefined)
+        .orderBy(desc(gameTransfers.created_at))
+        .limit(limit);
+      const gameInfo = await playerGameInfoMap(rows.map((r) => r.player_id));
+      items.push(
+        ...rows.map((r) => gameTransferJson(r, gameInfo.get(r.player_id))),
+      );
     }
   }
 

@@ -30,10 +30,16 @@ export async function GET(request: Request) {
     const wanted = statusParam
       .split(",")
       .map((s) => s.trim())
+      .filter(Boolean)
       .filter((s): s is (typeof TRANSFER_STATUSES)[number] =>
         (TRANSFER_STATUSES as readonly string[]).includes(s),
       );
-    if (wanted.length) filters.push(inArray(gameTransfers.status, wanted));
+    // Don't silently ignore a status we don't know — that returns every
+    // transfer and reads as "the filter worked, there's just nothing there".
+    if (!wanted.length) {
+      return jsonError(`Invalid status. Use: ${TRANSFER_STATUSES.join(", ")}`);
+    }
+    filters.push(inArray(gameTransfers.status, wanted));
   }
 
   const rows = await db
