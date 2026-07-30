@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { gameAccountPool } from "@/db/schema";
@@ -53,11 +53,7 @@ export async function GET(request: Request) {
     if (!wanted.length) {
       return jsonError(`Invalid status. Use: ${POOL_STATUSES.join(", ")}`);
     }
-    filters.push(
-      wanted.length === 1
-        ? eq(gameAccountPool.status, wanted[0])
-        : sql`${gameAccountPool.status} in ${wanted}`,
-    );
+    filters.push(inArray(gameAccountPool.status, wanted));
   }
 
   const rows = await db
