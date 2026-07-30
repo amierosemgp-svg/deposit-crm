@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { StatTile } from "@/components/stat-tile";
 import { ListLoading } from "@/components/list-loading";
-import { BotLiveFeed } from "@/components/bot-live-feed";
 import { useStore } from "@/lib/store";
 import { formatDateTime, formatRelative, isBotOnline } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -226,8 +225,6 @@ export default function BotHealthPage() {
           </table>
         </div>
       </Card>
-
-      <BotLiveFeed />
     </div>
   );
 }

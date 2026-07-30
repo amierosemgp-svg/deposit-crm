@@ -3,6 +3,7 @@ import { TopNav } from "@/components/layout/topnav";
 import { PlayerProfileProvider } from "@/components/player-name-link";
 import { ClientOnly } from "@/components/client-only";
 import { StoreHydrator } from "@/components/store-hydrator";
+import { BotLiveFeed } from "@/components/bot-live-feed";
 
 export default function CrmLayout({
   children,
@@ -31,6 +32,11 @@ export default function CrmLayout({
           </main>
         </div>
       </div>
+      {/* Docked bottom-left on every page. Client-only: it polls on mount and
+          has nothing meaningful to render on the server. */}
+      <ClientOnly>
+        <BotLiveFeed />
+      </ClientOnly>
     </PlayerProfileProvider>
   );
 }

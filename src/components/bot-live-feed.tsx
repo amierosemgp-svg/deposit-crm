@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { formatDateTime } from "@/lib/format";
-import { Card, CardHeader, CardTitle } from "@/components/ui/card";
-import { Activity, Pause, Play } from "lucide-react";
+import { Activity, ChevronDown, Pause, Play, Radio } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 type BotEvent = {
   event_id: number;
@@ -27,28 +27,45 @@ const LEVEL_STYLE: Record<BotEvent["level"], string> = {
 };
 
 const MAX_ROWS = 300;
-const POLL_MS = 4000;
+// Collapsed, the feed is only feeding a badge — no reason to poll as hard.
+const POLL_OPEN_MS = 4000;
+const POLL_CLOSED_MS = 15000;
 
 /**
- * What the bot is doing, as it does it.
+ * What the bot is doing, as it does it — docked bottom-left on every page.
  *
- * Tails /api/bot-events with `since_id` so each poll only carries what's new.
- * Pausing matters more than it looks: the feed is read when something is going
- * wrong, and a list that reorders under the cursor is unreadable at exactly
- * that moment.
+ * Lives in the CRM layout rather than on one page: the feed is what you want
+ * open *while* working a queue, not something to navigate away to. Collapsed it
+ * is a pill with an unread count; the badge turns red when any of those unread
+ * events was a warning or error, so a problem is visible without opening it.
  */
 export function BotLiveFeed() {
   const [events, setEvents] = useState<BotEvent[]>([]);
+  const [open, setOpen] = useState(false);
   const [paused, setPaused] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Ref, not state: the poll loop reads it without re-subscribing each tick.
+  const [unread, setUnread] = useState(0);
+  const [unreadBad, setUnreadBad] = useState(false);
+
+  // The one piece of cross-tick state the loop needs; `open` is a dependency
+  // of poll instead, so no ref juggling is required for it.
   const sinceId = useRef(0);
+  // Two polls overlapping would both read the same sinceId and both prepend
+  // the same batch. Cheaper to never let them overlap than to reconcile after.
+  const inFlight = useRef(false);
+  // Event ids already taken, so a duplicate can never reach the list.
+  const seenIds = useRef<Set<number>>(new Set());
 
   const poll = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    // Captured before sinceId moves: the first response backfills history,
+    // which is not "new" and must not light up the unread badge.
+    const isFirstLoad = sinceId.current === 0;
     try {
-      const url = sinceId.current
-        ? `/api/bot-events?since_id=${sinceId.current}`
-        : "/api/bot-events?limit=100";
+      const url = isFirstLoad
+        ? "/api/bot-events?limit=100"
+        : `/api/bot-events?since_id=${sinceId.current}`;
       const res = await fetch(url);
       const data = await res.json();
       if (data.error) {
@@ -56,63 +73,163 @@ export function BotLiveFeed() {
         return;
       }
       setError(null);
-      if (!data.events?.length) return;
+      const fresh: BotEvent[] = data.events ?? [];
+      if (!fresh.length) return;
+
       sinceId.current = Math.max(sinceId.current, data.latest_id ?? 0);
-      setEvents((prev) => [...data.events, ...prev].slice(0, MAX_ROWS));
+
+      // Belt and braces alongside the in-flight guard: event_id is unique, so
+      // filtering against what we've already taken makes a repeated row
+      // impossible however we got here. Done outside the state updater, which
+      // React may defer or run twice.
+      const incoming = fresh.filter((e) => !seenIds.current.has(e.event_id));
+      if (!incoming.length) return;
+      for (const e of incoming) seenIds.current.add(e.event_id);
+      // sinceId only moves forward, so an id well behind it can never come
+      // back — no need to remember every event of a long session.
+      if (seenIds.current.size > MAX_ROWS * 4) {
+        seenIds.current = new Set(
+          [...seenIds.current].sort((a, b) => b - a).slice(0, MAX_ROWS),
+        );
+      }
+
+      setEvents((prev) => [...incoming, ...prev].slice(0, MAX_ROWS));
+
+      // Only badge what the panel isn't already showing.
+      if (!open && !isFirstLoad) {
+        setUnread((n) => Math.min(n + incoming.length, 99));
+        if (incoming.some((e) => e.level === "warn" || e.level === "error")) {
+          setUnreadBad(true);
+        }
+      }
     } catch {
       setError("Could not reach the feed");
+    } finally {
+      inFlight.current = false;
     }
-  }, []);
+  }, [open]);
 
   useEffect(() => {
     if (paused) return;
     void poll();
-    const id = setInterval(() => void poll(), POLL_MS);
+    const id = setInterval(
+      () => void poll(),
+      open ? POLL_OPEN_MS : POLL_CLOSED_MS,
+    );
     return () => clearInterval(id);
-  }, [paused, poll]);
+  }, [paused, open, poll]);
 
-  return (
-    <Card className="p-0 gap-0 overflow-hidden">
-      <CardHeader className="flex-row items-center justify-between border-b">
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Activity
-            className={`h-4 w-4 ${paused ? "text-muted-foreground" : "text-emerald-600"}`}
-          />
-          Bot Live Feed
+  // Escape closes the panel — it sits over the page, so it needs a way out
+  // that doesn't require aiming at the chevron.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  function expand() {
+    setOpen(true);
+    setUnread(0);
+    setUnreadBad(false);
+  }
+
+  // ---- Collapsed: a pill ----
+  if (!open) {
+    return (
+      <button
+        onClick={expand}
+        aria-label="Open bot live feed"
+        className="fixed bottom-4 left-4 z-40 inline-flex cursor-pointer items-center gap-2 rounded-full border bg-popover/95 py-2 pl-3 pr-3.5 text-[12px] font-medium shadow-lg backdrop-blur transition-shadow hover:shadow-xl"
+      >
+        <span className="relative flex h-2 w-2">
           {!paused && (
-            <span className="relative flex h-2 w-2">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
-            </span>
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
           )}
-        </CardTitle>
-        <button
-          onClick={() => setPaused((p) => !p)}
-          className="inline-flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
-        >
-          {paused ? (
-            <>
-              <Play className="h-3 w-3" /> Resume
-            </>
-          ) : (
-            <>
-              <Pause className="h-3 w-3" /> Pause
-            </>
-          )}
-        </button>
-      </CardHeader>
+          <span
+            className={cn(
+              "relative inline-flex h-2 w-2 rounded-full",
+              paused ? "bg-muted-foreground" : "bg-emerald-500",
+            )}
+          />
+        </span>
+        Bot Feed
+        {unread > 0 && (
+          <span
+            className={cn(
+              "inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold text-white",
+              unreadBad ? "bg-red-600" : "bg-primary",
+            )}
+          >
+            {unread > 98 ? "99+" : unread}
+          </span>
+        )}
+      </button>
+    );
+  }
 
-      <div className="max-h-[460px] overflow-y-auto">
+  // ---- Expanded: the panel ----
+  return (
+    <div className="fixed bottom-4 left-4 z-40 flex max-h-[min(70vh,520px)] w-[min(420px,calc(100vw-2rem))] flex-col overflow-hidden rounded-xl border bg-popover shadow-2xl">
+      <div className="flex items-center gap-2 border-b px-3 py-2">
+        <Radio
+          className={cn(
+            "h-4 w-4",
+            paused ? "text-muted-foreground" : "text-emerald-600",
+          )}
+        />
+        <span className="text-[13px] font-semibold">Bot Live Feed</span>
+        {!paused && (
+          <span className="relative flex h-2 w-2">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+          </span>
+        )}
+
+        <div className="ml-auto flex items-center gap-1">
+          <button
+            onClick={() => setPaused((p) => !p)}
+            title={paused ? "Resume" : "Pause"}
+            className="inline-flex cursor-pointer items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            {paused ? (
+              <>
+                <Play className="h-3 w-3" /> Resume
+              </>
+            ) : (
+              <>
+                <Pause className="h-3 w-3" /> Pause
+              </>
+            )}
+          </button>
+          <button
+            onClick={() => setOpen(false)}
+            aria-label="Collapse bot live feed"
+            className="cursor-pointer rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <ChevronDown className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto">
         {error ? (
-          <p className="px-4 py-6 text-center text-sm text-rose-600">{error}</p>
-        ) : events.length === 0 ? (
-          <p className="px-4 py-10 text-center text-sm text-muted-foreground">
-            Nothing yet. Events appear here as the bot posts them to{" "}
-            <code className="rounded bg-muted px-1 py-0.5 text-[11px]">
-              POST /api/bot/events
-            </code>
-            .
+          <p className="px-3 py-6 text-center text-[12px] text-rose-600">
+            {error}
           </p>
+        ) : events.length === 0 ? (
+          <div className="px-4 py-8 text-center">
+            <Activity className="mx-auto mb-2 h-5 w-5 text-muted-foreground/50" />
+            <p className="text-[12px] text-muted-foreground">
+              Nothing yet. Events appear here as the bot posts them to{" "}
+              <code className="rounded bg-muted px-1 py-0.5 text-[11px]">
+                POST /api/bot/events
+              </code>
+              .
+            </p>
+          </div>
         ) : (
           <ul className="divide-y">
             {events.map((e) => {
@@ -127,31 +244,34 @@ export function BotLiveFeed() {
                         ? `player #${e.player_id}`
                         : null;
               return (
-                <li key={e.event_id} className="px-4 py-2 hover:bg-muted/30">
+                <li key={e.event_id} className="px-3 py-2 hover:bg-muted/40">
                   <div className="flex flex-wrap items-center gap-1.5">
                     <span
-                      className={`inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium uppercase ${LEVEL_STYLE[e.level]}`}
+                      className={cn(
+                        "inline-flex items-center rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase",
+                        LEVEL_STYLE[e.level],
+                      )}
                     >
                       {e.level}
                     </span>
-                    <span className="font-mono text-[12px] font-medium">
+                    <span className="font-mono text-[11.5px] font-medium">
                       {e.event}
                     </span>
                     {ref && (
-                      <span className="text-[11px] text-muted-foreground">
+                      <span className="text-[10.5px] text-muted-foreground">
                         {ref}
                       </span>
                     )}
-                    <span className="ml-auto whitespace-nowrap text-[11px] text-muted-foreground">
+                    <span className="ml-auto whitespace-nowrap text-[10.5px] text-muted-foreground">
                       {formatDateTime(e.occurred_at)}
                     </span>
                   </div>
                   {e.message && (
-                    <p className="mt-0.5 text-[12px] text-muted-foreground">
+                    <p className="mt-0.5 text-[11.5px] leading-snug text-muted-foreground">
                       {e.message}
                     </p>
                   )}
-                  <p className="text-[10px] text-muted-foreground/70">
+                  <p className="text-[9.5px] text-muted-foreground/70">
                     {e.bot_id}
                   </p>
                 </li>
@@ -160,6 +280,6 @@ export function BotLiveFeed() {
           </ul>
         )}
       </div>
-    </Card>
+    </div>
   );
 }
