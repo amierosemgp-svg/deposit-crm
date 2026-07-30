@@ -239,6 +239,11 @@
   .flow .st.done { border-color: var(--m-post); color: var(--m-post); }
   .flow .st.fail { border-color: var(--err); color: var(--err); }
   .flow .ar { color: var(--ink-faint); font-weight: 700; }
+  /* ASCII state diagram — branching flows the chip row above can't express */
+  .ascii-flow { margin: 14px 0 4px; padding: 12px 14px; overflow-x: auto;
+                border: 1px solid var(--border); border-radius: 8px;
+                background: var(--surface); font-family: var(--mono);
+                font-size: 12.5px; line-height: 1.5; color: var(--ink); }
 
   .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 14px; }
   .patcard { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 16px 17px; }
@@ -300,6 +305,8 @@
         <a href="#withdrawals">Withdrawals</a>
         <a href="#game-credits">Game credits</a>
         <a href="#game-transfers">Game transfers</a>
+        <a href="#game-account-pool">Game account pool</a>
+        <a href="#events">Live feed</a>
         <a href="#transfers">Bank transfers</a>
       </div>
       <div class="grp">
@@ -477,14 +484,14 @@
             <p><b>Manual items are never returned.</b> Deposits, withdrawals and transfers created with <em>"Handle manually (skip bot)"</em> are excluded from every bot endpoint — a human approves/completes/confirms them in the CRM, so your bot never sees or acts on them.</p></div>
             <div class="note">
               <span class="ic">i</span>
-              <div><b><code>transfer</code> ≠ <code>game_transfer</code>.</b> <code>type=transfer</code> is a <b>bank</b> transfer between company/leader bank accounts (statuses <code>pending_confirmation</code>, <code>confirmed</code>, …). Credits moving between a player's games are <code>type=game_transfer</code> (statuses <code>pending</code>, <code>processing</code>, …) — see <a href="#game-transfers">Game transfers</a>. <code>?type=transfer&amp;status=processing</code> is a <code>400</code>, and a plain <code>?type=transfer</code> returns bank transfers only, which is usually empty. To find CS-requested game credit moves waiting on you, use <code>?type=game_transfer&amp;status=processing</code>.</div>
+              <div><b><code>transfer</code> ≠ <code>game_transfer</code>.</b> <code>type=transfer</code> is a <b>bank</b> transfer between company/leader bank accounts (statuses <code>pending_confirmation</code>, <code>confirmed</code>, …). Credits moving between a player's games are <code>type=game_transfer</code> (statuses <code>pending</code>, <code>solving</code>, <code>processing</code>, …) — see <a href="#game-transfers">Game transfers</a>. <code>?type=transfer&amp;status=processing</code> is a <code>400</code>, and a plain <code>?type=transfer</code> returns bank transfers only, which is usually empty. To find CS-requested game credit moves waiting on you, use <code>?type=game_transfer&amp;status=pending,solving</code>.</div>
             </div>
             <div class="sub">Query parameters</div>
             <div class="tbl-wrap">
               <table>
                 <tr><th>Param</th><th>Default</th><th>Description</th></tr>
                 <tr><td><code>type</code></td><td><code>deposit</code></td><td><code>deposit</code>, <code>withdrawal</code>, <code>transfer</code> (bank), <code>game_transfer</code>, or <code>all</code> (merged newest-first).</td></tr>
-                <tr><td><code>status</code></td><td><code>pending_match</code></td><td>Comma-separated; matched against whichever type(s) it's valid for. Deposit: <code>pending_match</code>, <code>matched</code>, <code>pending</code>, <code>approved</code>, <code>processing</code>, <code>completed</code>, <code>failed</code>. Withdrawal: <code>requested</code>, <code>credits_pulled</code>, <code>paid</code>, <code>failed</code>. Bank transfer: <code>pending_confirmation</code>, <code>confirmed</code>, <code>auto_confirmed</code>, <code>rejected</code>, <code>failed</code>. Game transfer: <code>pending</code>, <code>processing</code>, <code>completed</code>, <code>failed</code>.</td></tr>
+                <tr><td><code>status</code></td><td><code>pending_match</code></td><td>Comma-separated; matched against whichever type(s) it's valid for. Deposit: <code>pending_match</code>, <code>matched</code>, <code>pending</code>, <code>approved</code>, <code>processing</code>, <code>completed</code>, <code>failed</code>. Withdrawal: <code>requested</code>, <code>credits_pulled</code>, <code>paid</code>, <code>failed</code>. Bank transfer: <code>pending_confirmation</code>, <code>confirmed</code>, <code>auto_confirmed</code>, <code>rejected</code>, <code>failed</code>. Game transfer: <code>pending</code>, <code>solving</code>, <code>processing</code>, <code>completed</code>, <code>failed</code>.</td></tr>
                 <tr><td><code>game</code></td><td>—</td><td>Filter to a single game, e.g. <code>Mega888</code> (matches a deposit's <code>selected_game</code> / a withdrawal's <code>game_name</code> / either side of a game transfer). <code>selected_game</code> accepted as an alias. Bank transfers have no game, so a game-filtered <code>type=all</code> omits them.</td></tr>
                 <tr><td><code>limit</code></td><td><code>100</code></td><td>Max rows (up to 500).</td></tr>
               </table>
@@ -534,8 +541,8 @@
   ]
 }
 
-<span class="cmt"># type=game_transfer → CS-requested game credit moves waiting on your back-office move</span>
-<span class="k">curl</span> <span class="s">"$BASE/api/bot/transactions?type=game_transfer&status=processing"</span> -H <span class="s">"X-API-Key: $KEY"</span>
+<span class="cmt"># type=game_transfer → CS-requested game credit moves waiting on you</span>
+<span class="k">curl</span> <span class="s">"$BASE/api/bot/transactions?type=game_transfer&status=pending,solving"</span> -H <span class="s">"X-API-Key: $KEY"</span>
 {
   <span class="k">"count"</span>: <span class="n">1</span>,
   <span class="k">"transactions"</span>: [
@@ -550,12 +557,12 @@
       <span class="k">"to_game_username"</span>: <span class="s">"KISS_ahmad01"</span>,
       <span class="k">"transfer_amount"</span>: <span class="n">1</span>,
       <span class="k">"from_game_balance_before"</span>: <span class="n">23.83</span>,
-      <span class="k">"status"</span>: <span class="s">"processing"</span>,
+      <span class="k">"status"</span>: <span class="s">"pending"</span>, <span class="k">"attempt_count"</span>: <span class="n">1</span>,
       <span class="k">"created_at"</span>: <span class="s">"2026-07-28T…"</span>
     }
   ]
 }
-<span class="cmt"># then finish it: PATCH /api/bot/game-transfers/42/status {"status":"completed"}</span></code></pre>
+<span class="cmt"># claim it, then finish it — see Game transfers below</span></code></pre>
             </div>
             <div class="note">
               <span class="ic">i</span>
@@ -1047,17 +1054,31 @@
         <div class="block-title">Game transfers</div>
         <div class="prose"><p>Move a player's credits between two of their games. <b>Two flows:</b></p>
         <ul>
-          <li><b>CS-requested (bot-driven):</b> a CS agent requests a transfer in the CRM. It's created as <code>processing</code> and <b>no credits move yet</b>. You do the real game-provider back-office move, then drive it to <code>completed</code> (credits move then) or <code>failed</code> (nothing to reverse) via the <b>Status</b> endpoint below. Poll <code>GET …?status=processing</code> to find work.</li>
+          <li><b>CS-requested (bot-driven):</b> a CS agent requests a transfer in the CRM. It's queued as <code>pending</code> and <b>no credits move yet</b>. You claim it, do the real game-provider back-office move, then drive it to <code>completed</code> (credits move then) or <code>failed</code> (nothing to reverse).</li>
           <li><b>Bot-initiated:</b> you did a move on your own — <code>POST</code> records it as already <code>completed</code> and moves the credits immediately.</li>
-        </ul></div>
+        </ul>
+        <pre class="ascii-flow"><code>pending ──you claim──▶ processing ──▶ completed
+   ▲                       │       └─▶ failed
+   └──── solving ◀─stalled─┘</code></pre>
+        </div>
+
+        <div class="note warn">
+          <span class="ic">!</span>
+          <div><b>This changed — one line to update in your bot.</b> Transfers used to be created directly as <code>processing</code>. They are now queued as <code>pending</code>. <b>Poll <code>?status=pending,solving</code></b> — a bot still polling <code>?status=processing</code> will see an empty queue forever.</div>
+        </div>
+
+        <div class="prose">
+          <p><b>Stalled transfers are re-queued automatically.</b> A transfer we haven't heard back on for <b>5 minutes</b> — whether you never claimed it, or claimed it and went quiet — is moved to <code>solving</code> with <code>attempt_count</code> bumped and its clock reset. <code>solving</code> is both what CS sees ("we're recovering this") and the re-queue: you pick those up exactly like <code>pending</code> ones. After <b>3 attempts</b> it is failed automatically with a note.</p>
+          <p><b><code>solving</code> means you have seen this transfer before.</b> Check the provider back-office before moving credits again — otherwise a transfer that actually succeeded but failed to report back gets moved twice.</p>
+        </div>
 
         <div class="ep">
           <div class="ep-head"><span class="m get">Get</span><span class="ep-path">/api/bot/game-transfers</span><span class="use-tag">List</span></div>
           <div class="ep-body">
-            <div class="prose"><p>Filter with <code>?player_id=</code>, <code>?status=</code> (comma-separated: <code>pending</code>, <code>processing</code>, <code>completed</code>, <code>failed</code>), <code>?limit=</code>, <code>?offset=</code>. Poll <code>?status=processing</code> for CS-requested transfers awaiting your back-office move. Each item includes <code>from_game_username</code> / <code>to_game_username</code> — the player's account id/login in each game, so you know exactly which in-game accounts to move credits between.</p></div>
+            <div class="prose"><p>Filter with <code>?player_id=</code>, <code>?status=</code> (comma-separated: <code>pending</code>, <code>solving</code>, <code>processing</code>, <code>completed</code>, <code>failed</code>), <code>?limit=</code>, <code>?offset=</code>. An unknown status is a <span class="sc warn">400</span> rather than a silently unfiltered list. Poll <code>?status=pending,solving</code> for work. Each item includes <code>from_game_username</code> / <code>to_game_username</code> — the player's account id/login in each game, so you know exactly which in-game accounts to move credits between.</p></div>
             <div class="code" data-copy>
               <button class="copy">Copy</button>
-              <pre><code><span class="k">curl</span> <span class="s">"$BASE/api/bot/game-transfers?status=processing"</span> -H <span class="s">"X-API-Key: $KEY"</span>
+              <pre><code><span class="k">curl</span> <span class="s">"$BASE/api/bot/game-transfers?status=pending,solving"</span> -H <span class="s">"X-API-Key: $KEY"</span>
 
 <span class="cmt"># → 200 OK</span>
 { <span class="k">"count"</span>: <span class="n">1</span>, <span class="k">"game_transfers"</span>: [
@@ -1065,28 +1086,53 @@
     <span class="k">"from_game"</span>: <span class="s">"Joker"</span>, <span class="k">"to_game"</span>: <span class="s">"3win8"</span>,
     <span class="k">"from_game_username"</span>: <span class="s">"JOKER_aaron01"</span>, <span class="k">"to_game_username"</span>: <span class="s">"3WIN8_aaron"</span>,
     <span class="k">"transfer_amount"</span>: <span class="n">10</span>, <span class="k">"from_game_balance_before"</span>: <span class="n">570</span>,
-    <span class="k">"status"</span>: <span class="s">"processing"</span>, <span class="k">"created_at"</span>: <span class="s">"2026-07-28T…"</span> } ] }</code></pre>
+    <span class="k">"status"</span>: <span class="s">"pending"</span>, <span class="k">"note"</span>: <span class="s">null</span>, <span class="k">"attempt_count"</span>: <span class="n">1</span>,
+    <span class="k">"created_at"</span>: <span class="s">"2026-07-28T…"</span>,
+    <span class="k">"started_at"</span>: <span class="s">"2026-07-28T…"</span>, <span class="k">"completed_at"</span>: <span class="s">null</span> } ] }</code></pre>
             </div>
             <div class="note">
               <span class="ic">i</span>
-              <div><code>from_game_username</code> / <code>to_game_username</code> are resolved from the player's recorded <code>game_accounts</code>; either is <code>null</code> if the player has no account on file for that game. Move <code>transfer_amount</code> from <code>from_game_username</code> to <code>to_game_username</code> in the provider back-office, then <code>PATCH …/status</code>.</div>
+              <div><code>from_game_username</code> / <code>to_game_username</code> are resolved from the player's recorded <code>game_accounts</code>; either is <code>null</code> if the player has no account on file for that game. <code>started_at</code> is when it was queued or last claimed/re-queued — the 5-minute stall clock runs from there.</div>
             </div>
           </div>
         </div>
 
         <div class="ep">
-          <div class="ep-head"><span class="m patch">Patch</span><span class="ep-path">/api/bot/game-transfers/:id/status</span><span class="use-tag">Complete</span></div>
+          <div class="ep-head"><span class="m patch">Patch</span><span class="ep-path">/api/bot/game-transfers/:id/status</span><span class="use-tag">Claim &amp; complete</span></div>
           <div class="ep-body">
-            <div class="prose"><p>Drive a <code>processing</code> transfer to its end state after your back-office move. Body: <code>status</code> (<code>completed</code> | <code>failed</code>), optional <code>note</code>. On <code>completed</code> the credits are moved <code>from_game</code> → <code>to_game</code> atomically (the source balance is re-validated under a row lock, so a stale balance yields <span class="sc warn">422</span>). On <code>failed</code>, nothing moves.</p></div>
+            <div class="prose">
+              <p>Drives a transfer through its lifecycle. Body: <code>status</code> (<code>processing</code> | <code>completed</code> | <code>failed</code>), optional <code>note</code>.</p>
+              <ul>
+                <li><code>processing</code> — <b>claim it.</b> You're starting the back-office move now. Valid from <code>pending</code> or <code>solving</code>. Claiming one you already hold is a no-op, not an error, so retrying after a timeout is safe. Claiming also restarts the 5-minute stall clock, so it measures from when you started rather than when CS asked.</li>
+                <li><code>completed</code> — credits move <code>from_game</code> → <code>to_game</code> atomically. The source balance is re-validated under a row lock, so a stale balance yields <span class="sc warn">422</span> and nothing moves.</li>
+                <li><code>failed</code> — nothing moves, nothing to reverse.</li>
+              </ul>
+              <p>Claiming is <b>optional</b> — going straight from <code>pending</code> to <code>completed</code> still works. You only lose the "is anyone actually on this" signal.</p>
+            </div>
             <div class="code" data-copy>
               <button class="copy">Copy</button>
-              <pre><code><span class="k">curl</span> -X PATCH <span class="s">"$BASE/api/bot/game-transfers/42/status"</span> -H <span class="s">"X-API-Key: $KEY"</span> \
+              <pre><code><span class="cmt"># 1. claim it — you're starting now</span>
+<span class="k">curl</span> -X PATCH <span class="s">"$BASE/api/bot/game-transfers/42/status"</span> -H <span class="s">"X-API-Key: $KEY"</span> \
   -H <span class="s">"Content-Type: application/json"</span> \
-  -d <span class="s">'{ "status": "completed" }'</span></code></pre>
+  -d <span class="s">'{ "status": "processing" }'</span>
+
+<span class="cmt"># 2a. it worked</span>
+<span class="k">curl</span> -X PATCH <span class="s">"$BASE/api/bot/game-transfers/42/status"</span> -H <span class="s">"X-API-Key: $KEY"</span> \
+  -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{ "status": "completed", "note": "moved in Mega888 BO" }'</span>
+
+<span class="cmt"># 2b. it didn't — the note is what CS reads next to the status</span>
+<span class="k">curl</span> -X PATCH <span class="s">"$BASE/api/bot/game-transfers/42/status"</span> -H <span class="s">"X-API-Key: $KEY"</span> \
+  -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{ "status": "failed", "note": "Mega888 BO rejected it: account locked" }'</span></code></pre>
+            </div>
+            <div class="note">
+              <span class="ic">i</span>
+              <div><b>Always send a <code>note</code> when you fail one.</b> It's stored on the transfer and shown to CS as the reason. A failure without one just reads as "failed, no reason given" and someone has to come and ask you.</div>
             </div>
             <div class="codes">
               <div><span class="sc ok">200</span><span>Transitioned; returns the updated transfer.</span></div>
-              <div><span class="sc warn">409</span><span>Transfer is not <code>processing</code> (already completed/failed).</span></div>
+              <div><span class="sc warn">409</span><span>Already <code>completed</code> or <code>failed</code> — it can't be changed.</span></div>
               <div><span class="sc warn">422</span><span>On <code>completed</code>: <code>from_game</code> balance is now insufficient.</span></div>
             </div>
           </div>
@@ -1101,6 +1147,165 @@
               <pre><code><span class="k">curl</span> -X POST <span class="s">"$BASE/api/bot/game-transfers"</span> -H <span class="s">"X-API-Key: $KEY"</span> \
   -H <span class="s">"Content-Type: application/json"</span> \
   -d <span class="s">'{ "player_id": 1001, "from_game": "918kiss", "to_game": "mega888", "amount": 50 }'</span></code></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="game-account-pool">
+        <h2>Resource</h2>
+        <div class="block-title">Game account pool</div>
+        <div class="prose">
+          <p>Game accounts you've registered at a provider <b>ahead of demand</b>, waiting to be handed to players. Registering an account is a round-trip to the provider back office — far too slow to do while a player waits. Create them in batches, push them here, and assigning one to a player becomes instant.</p>
+          <p><code>company_entity_id</code> reserves a batch for one company; leave it off for shared stock. Reserved accounts are handed out before shared ones. A company-scoped API key may only stock its own company.</p>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m get">Get</span><span class="ep-path">/api/bot/game-account-pool?stock=1</span><span class="use-tag">Stock levels</span></div>
+          <div class="ep-body">
+            <div class="prose"><p>Per-game counts of unassigned accounts. <b>Poll this to decide when to go and register more.</b></p></div>
+            <div class="code" data-copy>
+              <button class="copy">Copy</button>
+              <pre><code><span class="k">curl</span> <span class="s">"$BASE/api/bot/game-account-pool?stock=1"</span> -H <span class="s">"X-API-Key: $KEY"</span>
+
+<span class="cmt"># → 200 OK</span>
+{ <span class="k">"stock"</span>: [ { <span class="k">"game_name"</span>: <span class="s">"Mega888"</span>, <span class="k">"available"</span>: <span class="n">3</span> },
+             { <span class="k">"game_name"</span>: <span class="s">"918Kiss"</span>, <span class="k">"available"</span>: <span class="n">0</span> } ] }</code></pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m post">Post</span><span class="ep-path">/api/bot/game-account-pool</span><span class="use-tag">Add stock</span></div>
+          <div class="ep-body">
+            <div class="prose"><p>Add accounts you've registered. One <code>{game_name, game_username, game_password?, company_entity_id?, note?}</code>, or <code>{accounts: [...]}</code> up to 500.</p></div>
+            <div class="code" data-copy>
+              <button class="copy">Copy</button>
+              <pre><code><span class="k">curl</span> -X POST <span class="s">"$BASE/api/bot/game-account-pool"</span> -H <span class="s">"X-API-Key: $KEY"</span> \
+  -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{ "accounts": [
+        { "game_name": "Mega888", "game_username": "MEGA_00871", "game_password": "a1b2c3" },
+        { "game_name": "Mega888", "game_username": "MEGA_00872", "game_password": "d4e5f6" }
+      ] }'</span>
+
+<span class="cmt"># → 201 Created</span>
+{ <span class="k">"added"</span>: <span class="n">2</span>, <span class="k">"duplicates"</span>: <span class="n">0</span>, <span class="k">"stock"</span>: [ … ] }</code></pre>
+            </div>
+            <div class="note">
+              <span class="ic">i</span>
+              <div><b>Idempotent on <code>(game_name, game_username)</code>.</b> Re-running a batch after a timeout adds nothing and reports the repeats as <code>duplicates</code>. It will never resurrect an account that has since been assigned or retired.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m patch">Patch</span><span class="ep-path">/api/bot/game-account-pool/:id</span><span class="use-tag">Retire</span></div>
+          <div class="ep-body">
+            <div class="prose"><p>Body: <code>status</code> (<code>retired</code> | <code>available</code>), optional <code>note</code>. Retire an account the provider has banned or closed, or put a retired one back into circulation.</p></div>
+            <div class="codes">
+              <div><span class="sc ok">200</span><span>Updated.</span></div>
+              <div><span class="sc warn">409</span><span>Assigned to a player — unlink it from them first.</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m post">Post</span><span class="ep-path">/api/bot/players</span><span class="use-tag">Create with accounts</span></div>
+          <div class="ep-body">
+            <div class="prose"><p>Pass <code>auto_assign_games</code> to have pooled accounts attached the moment you create a player. Use this instead of <code>game_accounts</code> when the pool is stocked; use <code>game_accounts</code> when you registered an account inline for this one player.</p></div>
+            <div class="code" data-copy>
+              <button class="copy">Copy</button>
+              <pre><code><span class="k">curl</span> -X POST <span class="s">"$BASE/api/bot/players"</span> -H <span class="s">"X-API-Key: $KEY"</span> \
+  -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{ "username": "ahmadtan88", "full_name": "Ahmad Tan",
+        "telegram_username": "@ahmadtan88", "company_entity_id": 3,
+        "auto_assign_games": ["Mega888", "918Kiss"] }'</span>
+
+<span class="cmt"># → 201 Created</span>
+{ <span class="k">"player"</span>: { <span class="k">"player_id"</span>: <span class="n">1001</span>,
+    <span class="k">"game_accounts"</span>: [ { <span class="k">"game_name"</span>: <span class="s">"Mega888"</span>, <span class="k">"game_username"</span>: <span class="s">"MEGA_00871"</span> } ] },
+  <span class="k">"assigned_accounts"</span>: [
+    { <span class="k">"game_name"</span>: <span class="s">"Mega888"</span>, <span class="k">"game_username"</span>: <span class="s">"MEGA_00871"</span>,
+      <span class="k">"game_password"</span>: <span class="s">"a1b2c3"</span>, <span class="k">"pool_id"</span>: <span class="n">87</span> } ],
+  <span class="k">"unavailable"</span>: [
+    { <span class="k">"game_name"</span>: <span class="s">"918Kiss"</span>, <span class="k">"reason"</span>: <span class="s">"No 918Kiss accounts left in the pool …"</span> } ] }</code></pre>
+            </div>
+            <div class="note">
+              <span class="ic">i</span>
+              <div>A game the pool has run dry on lands in <code>unavailable</code> rather than failing the whole call — the player is created and usable either way. <b>Check <code>unavailable</code></b> and top the pool up. Assignment is atomic under a row lock, so two concurrent requests can never be handed the same provider account, and a player is never given a second account for a game they already have.</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="events">
+        <h2>Resource</h2>
+        <div class="block-title">Live feed</div>
+        <div class="prose">
+          <p>Post what you're doing, as you do it. The CRM shows this as a live feed on the <b>Bot Health</b> page, so CS can see what the bot is up to instead of guessing from a transfer that hasn't moved.</p>
+          <p><a href="#heartbeat">Heartbeat</a> answers "is the bot up, what step is it on" as one overwritten row. This is the running narrative underneath it — one row per event, kept for <b>14 days</b>, so that when something fails overnight someone can read back what the bot was doing at the time.</p>
+        </div>
+
+        <div class="note">
+          <span class="ic">i</span>
+          <div><b>This never changes any transaction's state.</b> It's a log — posting is always safe, and if it fails, keep working and drop the event. Don't use it to report a transfer outcome; that's <a href="#game-transfers"><code>PATCH /api/bot/game-transfers/:id/status</code></a>.</div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m post">Post</span><span class="ep-path">/api/bot/events</span><span class="use-tag">Publish</span></div>
+          <div class="ep-body">
+            <div class="sub">Fields</div>
+            <div class="tbl-wrap">
+              <table>
+                <tr><th>Field</th><th>Required</th><th>Description</th></tr>
+                <tr><td><code>bot_id</code></td><td>yes</td><td>Which bot. The same id you heartbeat with.</td></tr>
+                <tr><td><code>event</code></td><td>yes</td><td>Short machine-readable tag, e.g. <code>transfer.claimed</code>, <code>login.failed</code>.</td></tr>
+                <tr><td><code>level</code></td><td>—</td><td><code>debug</code> | <code>info</code> | <code>warn</code> | <code>error</code>. Default <code>info</code>.</td></tr>
+                <tr><td><code>message</code></td><td>—</td><td>Human-readable line — this is what CS reads.</td></tr>
+                <tr><td><code>context</code></td><td>—</td><td>Any JSON: provider responses, timings, screenshot URLs.</td></tr>
+                <tr><td><code>game_transfer_id</code><br><code>deposit_id</code><br><code>withdrawal_id</code><br><code>player_id</code></td><td>—</td><td>Link the event to a record so the feed can be filtered down to it.</td></tr>
+                <tr><td><code>occurred_at</code></td><td>—</td><td>When it really happened. Defaults to now — set it when flushing a buffer so batched events keep their real timings.</td></tr>
+              </table>
+            </div>
+            <div class="code" data-copy>
+              <button class="copy">Copy</button>
+              <pre><code><span class="cmt"># as it happens</span>
+<span class="k">curl</span> -X POST <span class="s">"$BASE/api/bot/events"</span> -H <span class="s">"X-API-Key: $KEY"</span> \
+  -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{ "bot_id": "openclaw-1", "event": "transfer.claimed",
+        "message": "Claimed transfer 42, opening Mega888 BO",
+        "game_transfer_id": 42 }'</span>
+
+<span class="cmt"># or buffer and flush — up to 500 at a time</span>
+<span class="k">curl</span> -X POST <span class="s">"$BASE/api/bot/events"</span> -H <span class="s">"X-API-Key: $KEY"</span> \
+  -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{ "bot_id": "openclaw-1", "events": [
+        { "event": "bo.login", "message": "Logged in to Mega888",
+          "occurred_at": "2026-07-30T09:15:02Z" },
+        { "event": "transfer.moved", "message": "Moved RM 10.00",
+          "game_transfer_id": 42, "occurred_at": "2026-07-30T09:15:09Z" },
+        { "event": "bo.error", "level": "error", "message": "918Kiss BO timed out",
+          "context": { "attempt": 2, "timeout_ms": 30000 },
+          "occurred_at": "2026-07-30T09:15:41Z" }
+      ] }'</span>
+
+<span class="cmt"># → 201 Created</span>
+{ <span class="k">"accepted"</span>: <span class="n">3</span> }</code></pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m get">Get</span><span class="ep-path">/api/bot/events</span><span class="use-tag">Tail</span></div>
+          <div class="ep-body">
+            <div class="prose"><p>Filter with <code>?bot_id=</code>, <code>?level=</code> (comma-separated), <code>?game_transfer_id=</code> / <code>?deposit_id=</code> / <code>?withdrawal_id=</code> / <code>?player_id=</code>, <code>?limit=</code> (default 100, cap 500). Newest first.</p>
+            <p>To tail it, keep the <code>latest_id</code> from each response and pass it back as <code>since_id</code>, so each poll only carries what's new.</p></div>
+            <div class="code" data-copy>
+              <button class="copy">Copy</button>
+              <pre><code><span class="k">curl</span> <span class="s">"$BASE/api/bot/events?since_id=4417&limit=100"</span> -H <span class="s">"X-API-Key: $KEY"</span>
+
+<span class="cmt"># → 200 OK</span>
+{ <span class="k">"count"</span>: <span class="n">3</span>, <span class="k">"latest_id"</span>: <span class="n">4420</span>, <span class="k">"events"</span>: [ … ] }</code></pre>
             </div>
           </div>
         </div>
@@ -1191,6 +1396,13 @@
           <span class="ar">└ or →</span>
           <span class="st fail">failed</span>
         </div>
+
+        <div class="block-title" style="margin-top:26px">Game transfer status lifecycle</div>
+        <div class="prose"><p>A CS-requested credit move. Queued as <code>pending</code>, claimed by you into <code>processing</code>, then driven to a terminal state. One we haven't heard back on for 5 minutes is re-queued as <code>solving</code> — see <a href="#game-transfers">Game transfers</a>.</p></div>
+        <pre class="ascii-flow"><code>pending ──you claim──▶ processing ──▶ completed
+   ▲                       │       └─▶ failed
+   └──── solving ◀─stalled─┘</code></pre>
+        <div class="prose"><p><code>pending</code> shows in the CRM as <b>Initializing</b>. <code>solving</code> means we have already handed you this transfer once — check the provider back office before moving credits again.</p></div>
       </section>
 
       <!-- ERRORS -->
