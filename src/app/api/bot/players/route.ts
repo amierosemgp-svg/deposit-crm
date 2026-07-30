@@ -4,6 +4,11 @@ import { db } from "@/db";
 import { entities, players } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
 import { isUniqueViolation, jsonError, playerJson } from "@/lib/bot-crud";
+import {
+  assignAccountFromPool,
+  PoolError,
+  type AssignedAccount,
+} from "@/lib/game-account-pool";
 
 /** GET /api/bot/players?company_entity_id=&q=&status=&limit=&offset= */
 export async function GET(request: Request) {
@@ -57,6 +62,10 @@ const createSchema = z.object({
   game_accounts: z
     .array(z.object({ game_name: z.string(), game_username: z.string() }))
     .optional(),
+  // Games to pull a pre-registered account from the pool for, right after the
+  // player is created. Use this instead of game_accounts when you've stocked
+  // the pool ahead of time and just want the player wired up.
+  auto_assign_games: z.array(z.string().min(1)).max(20).optional(),
 });
 
 /**
@@ -107,7 +116,39 @@ export async function POST(request: Request) {
         game_accounts: body.game_accounts,
       })
       .returning();
-    return Response.json({ player: playerJson(created) }, { status: 201 });
+
+    // Pull pool accounts for the requested games. A game the pool has run dry
+    // on is reported rather than failing the whole call — the player exists and
+    // is usable, they're just short an account.
+    const assigned: AssignedAccount[] = [];
+    const unavailable: Array<{ game_name: string; reason: string }> = [];
+    for (const game of body.auto_assign_games ?? []) {
+      try {
+        const account = await assignAccountFromPool(created.player_id, game, {
+          source: "bot",
+        });
+        if (account) assigned.push(account);
+        else unavailable.push({ game_name: game, reason: "already linked" });
+      } catch (err) {
+        if (err instanceof PoolError) {
+          unavailable.push({ game_name: game, reason: err.message });
+        } else throw err;
+      }
+    }
+
+    const [fresh] = assigned.length
+      ? await db.select().from(players).where(eq(players.player_id, created.player_id))
+      : [created];
+
+    return Response.json(
+      {
+        player: playerJson(fresh),
+        ...(body.auto_assign_games?.length
+          ? { assigned_accounts: assigned, unavailable }
+          : {}),
+      },
+      { status: 201 },
+    );
   } catch (e) {
     if (isUniqueViolation(e)) return jsonError("Username already exists", 409);
     console.error(e);

@@ -11,6 +11,7 @@ import type {
   Entity,
   Expense,
   ExpenseCategory,
+  GameAccountStock,
   GameCredit,
   GameTransfer,
   Me,
@@ -73,6 +74,7 @@ type StateResponse = {
   boAdjustments: ProviderBoAdjustment[];
   expenses: Expense[];
   botHealth: BotHealth[];
+  gameAccountStock: GameAccountStock[];
   settings: ServerSettings;
 };
 
@@ -92,6 +94,7 @@ type Store = {
   boAdjustments: ProviderBoAdjustment[];
   expenses: Expense[];
   botHealth: BotHealth[];
+  gameAccountStock: GameAccountStock[];
   settings: ServerSettings;
   notifications: Notification[];
 
@@ -170,6 +173,11 @@ type Store = {
     id: number;
     assign?: boolean;
   }) => Promise<MutationResult>;
+  /** Give a player the next free pooled account for a game. */
+  autoAssignGameAccount: (
+    playerId: number,
+    gameName: string,
+  ) => Promise<MutationResult>;
   createPlayer: (input: {
     username: string;
     full_name: string;
@@ -355,6 +363,7 @@ export const useStore = create<Store>((set, get) => {
     boAdjustments: [],
     expenses: [],
     botHealth: [],
+    gameAccountStock: [],
     settings: {},
     notifications: [],
     selectedCompanyId: null,
@@ -610,6 +619,12 @@ export const useStore = create<Store>((set, get) => {
       mutate("/api/assignments", {
         method: "POST",
         body: JSON.stringify({ kind, id, assign }),
+      }),
+
+    autoAssignGameAccount: (playerId, gameName) =>
+      mutate(`/api/players/${playerId}/auto-assign-game`, {
+        method: "POST",
+        body: JSON.stringify({ game_name: gameName }),
       }),
 
     createPlayer: (input) =>

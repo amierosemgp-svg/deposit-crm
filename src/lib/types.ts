@@ -212,6 +212,15 @@ export type GameTransfer = {
   completed_at: string | null;
 };
 
+/** How many pre-registered accounts the bot has left, per game. */
+export type GameAccountStock = {
+  game_name: string;
+  available: number;
+};
+
+/** Below this, the pool is warned about in the UI so the bot can top it up. */
+export const LOW_GAME_ACCOUNT_STOCK = 5;
+
 export type GameCredit = {
   player_id: number;
   game_name: string;

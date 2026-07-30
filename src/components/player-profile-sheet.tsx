@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/select";
 import { StatusBadge } from "./status-badge";
 import { GameAccountHistory } from "./game-account-history";
+import { AutoAssignGameButton } from "./auto-assign-game-button";
 import { Separator } from "@/components/ui/separator";
 import {
   Send,
@@ -518,6 +519,11 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
                     </Button>
                   )}
                 </div>
+                {!isViewer && (
+                  <div className="mb-2">
+                    <AutoAssignGameButton playerId={player.player_id} />
+                  </div>
+                )}
                 {gameFormOpen && (
                   <div className="mb-2 rounded-md border bg-muted/20 p-3 space-y-2">
                     <div className="grid grid-cols-2 gap-2">

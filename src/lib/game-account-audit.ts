@@ -3,6 +3,9 @@ import { db } from "@/db";
 
 export type GameAccount = { game_name: string; game_username: string };
 
+/** Anything that can run an insert — the pool, or a caller's open transaction. */
+type Executor = Pick<typeof db, "insert">;
+
 /**
  * Record what changed between two game_accounts lists.
  *
@@ -20,6 +23,9 @@ export async function recordGameAccountChanges(
   before: GameAccount[] | null,
   after: GameAccount[] | null,
   by: { userId?: number | null; source?: "bot" | "manual" } = {},
+  // Pass the open transaction when the change is part of one, so the audit row
+  // rolls back with it rather than outliving a failed assignment.
+  executor: Executor = db,
 ): Promise<void> {
   const prev = new Map((before ?? []).map((g) => [g.game_name, g.game_username]));
   const next = new Map((after ?? []).map((g) => [g.game_name, g.game_username]));
@@ -67,5 +73,5 @@ export async function recordGameAccountChanges(
     }
   }
 
-  if (rows.length) await db.insert(gameAccountAudit).values(rows);
+  if (rows.length) await executor.insert(gameAccountAudit).values(rows);
 }

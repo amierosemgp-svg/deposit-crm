@@ -9,6 +9,7 @@ import {
   serial,
   text,
   timestamp,
+  unique,
   varchar,
 } from "drizzle-orm/pg-core";
 
@@ -83,6 +84,15 @@ export const gameAccountActionEnum = pgEnum("game_account_action", [
   "added",
   "updated",
   "removed",
+]);
+
+export const poolAccountStatusEnum = pgEnum("pool_account_status", [
+  // Registered at the provider, not yet handed to a player.
+  "available",
+  // Handed to a player; game_accounts on that player is the live record.
+  "assigned",
+  // Withdrawn from circulation (banned, provider closed it, bad batch).
+  "retired",
 ]);
 
 export const gameTransferStatusEnum = pgEnum("game_transfer_status", [
@@ -373,6 +383,55 @@ export const gameAccountAudit = pgTable("game_account_audit", {
     .notNull()
     .defaultNow(),
 });
+
+/**
+ * Game accounts the bot has registered at a provider ahead of demand.
+ *
+ * Registering an account takes a round-trip to the provider back-office, which
+ * is far too slow to do while a player waits. The bot creates them in batches
+ * and pushes them here; assigning one to a player is then just claiming a row.
+ *
+ * The pool is a staging area, not the source of truth — once assigned, the
+ * player's own game_accounts list is what the rest of the CRM reads. The row
+ * stays behind so it can't be handed out twice and so there's a record of where
+ * the id came from.
+ */
+export const gameAccountPool = pgTable(
+  "game_account_pool",
+  {
+    pool_id: serial("pool_id").primaryKey(),
+    game_name: varchar("game_name", { length: 60 }).notNull(),
+    game_username: varchar("game_username", { length: 120 }).notNull(),
+    // Optional: some providers hand back a password the player needs.
+    game_password: varchar("game_password", { length: 120 }),
+    // Null = usable by any company. Set to reserve a batch for one company.
+    company_entity_id: integer("company_entity_id").references(
+      () => entities.entity_id,
+    ),
+    status: poolAccountStatusEnum("status").notNull().default("available"),
+    assigned_player_id: integer("assigned_player_id").references(
+      () => players.player_id,
+    ),
+    assigned_at: timestamp("assigned_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    // Why it was retired, or any note the bot attached on creation.
+    note: text("note"),
+    source: transactionSourceEnum("source").notNull().default("bot"),
+    created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    // The same provider account must never enter the pool twice — that's how
+    // two players end up sharing one game id.
+    unique("game_account_pool_game_username_key").on(
+      t.game_name,
+      t.game_username,
+    ),
+  ],
+);
 
 // ---------- Game credits ----------
 

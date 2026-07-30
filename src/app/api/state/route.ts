@@ -23,6 +23,7 @@ import {
   visibleEntityIds,
   visibleEntityTree,
 } from "@/lib/api-helpers";
+import { poolStock } from "@/lib/game-account-pool";
 
 /**
  * GET /api/state — the CRM's single scoped hydration endpoint.
@@ -210,6 +211,10 @@ export async function GET() {
       boAdjustments: scopedAdjustments,
       expenses: scopedExpenses,
       botHealth: bots,
+      // Counts only — how many pre-registered accounts are left per game, so
+      // the UI can warn before the pool runs dry. The accounts themselves are
+      // never shipped to the browser.
+      gameAccountStock: await poolStock(),
       settings: Object.fromEntries(allSettings.map((s) => [s.key, s.value])),
     });
   } catch (e) {
