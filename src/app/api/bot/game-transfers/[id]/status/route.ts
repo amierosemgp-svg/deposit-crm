@@ -110,7 +110,16 @@ export async function PATCH(
 
       const [updated] = await txn
         .update(gameTransfers)
-        .set({ status: body.status })
+        .set({
+          status: body.status,
+          completed_at: nowIso,
+          // Keep the reason on the row itself, not just buried in the audit
+          // trail — CS reads it off the transfer list.
+          note: body.note ?? null,
+          // A transfer that somehow reached here without a start time still
+          // gets one, so the UI never shows an end without a start.
+          started_at: row.started_at ?? row.created_at,
+        })
         .where(eq(gameTransfers.transfer_id, transferId))
         .returning();
 

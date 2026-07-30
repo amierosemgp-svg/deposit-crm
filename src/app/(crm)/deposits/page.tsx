@@ -20,6 +20,8 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { StatusBadge, SourceBadge } from "@/components/status-badge";
+import { SearchableSelect } from "@/components/searchable-select";
+import { AssigneeCell } from "@/components/assignee-cell";
 import { PlayerNameLink } from "@/components/player-name-link";
 import { ApprovalFlowModal } from "@/components/approval-flow-modal";
 import { AssignPlayerSheet } from "@/components/assign-player-sheet";
@@ -112,6 +114,7 @@ export default function DepositsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [assignTargets, setAssignTargets] = useState<number[] | null>(null);
   const [bulkApproving, setBulkApproving] = useState(false);
+  const [bulkSettingGame, setBulkSettingGame] = useState(false);
   const [manualDepositOpen, setManualDepositOpen] = useState(false);
 
   const scopedDeposits = useMemo(
@@ -206,6 +209,56 @@ export default function DepositsPage() {
         ? new Set()
         : new Set([...prev, ...selectableIds]),
     );
+  }
+
+  /**
+   * Games offered for a batch: every game linked to at least one selected
+   * deposit's player. A game only some of them have is still worth offering —
+   * the ones that can't take it are reported rather than silently skipped.
+   */
+  const batchGameOptions = useMemo(() => {
+    const games = new Set<string>();
+    for (const d of filtered) {
+      if (!selected.includes(d.deposit_id) || d.player_id == null) continue;
+      for (const g of playerById(d.player_id)?.game_accounts ?? []) {
+        games.add(g.game_name);
+      }
+    }
+    return [...games].sort((a, b) => a.localeCompare(b));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtered, selected]);
+
+  /** Apply one game provider to every selected deposit whose player has it. */
+  async function handleBulkGame(game: string) {
+    if (bulkApproving || bulkSettingGame) return;
+    const targets = filtered.filter(
+      (d) =>
+        selected.includes(d.deposit_id) &&
+        d.player_id != null &&
+        (playerById(d.player_id)?.game_accounts ?? []).some(
+          (g) => g.game_name === game,
+        ),
+    );
+    const skipped = selected.length - targets.length;
+    if (targets.length === 0) {
+      toast.error(`No selected deposit has a ${game} account linked`);
+      return;
+    }
+    setBulkSettingGame(true);
+    let ok = 0;
+    let failed = 0;
+    for (const d of targets) {
+      const res = await updateDraft(d.deposit_id, { selected_game: game });
+      if (res.ok) ok += 1;
+      else failed += 1;
+    }
+    setBulkSettingGame(false);
+    if (ok > 0) toast.success(`${game} set on ${ok} deposit${ok === 1 ? "" : "s"}`);
+    if (failed > 0) toast.error(`${failed} could not be updated`);
+    if (skipped > 0)
+      toast.warning(
+        `${skipped} skipped — no ${game} account linked to that player`,
+      );
   }
 
   async function handleBulkApprove() {
@@ -383,6 +436,16 @@ export default function DepositsPage() {
                   <UserPlus className="h-3.5 w-3.5" />
                   Assign player
                 </Button>
+                <SearchableSelect
+                  value={null}
+                  onValueChange={(g) => void handleBulkGame(g)}
+                  options={batchGameOptions}
+                  placeholder={bulkSettingGame ? "Setting…" : "Set game"}
+                  emptyMessage="No games linked to the selected players"
+                  searchPlaceholder="Search game…"
+                  disabled={bulkApproving || bulkSettingGame}
+                  className="h-8 w-[130px] text-[12px]"
+                />
                 <Button
                   size="sm"
                   onClick={() => void handleBulkApprove()}
@@ -508,6 +571,9 @@ export default function DepositsPage() {
                 <th className="px-3 py-2.5 text-right font-medium whitespace-nowrap">Total</th>
                 <th className="px-3 py-2.5 text-left font-medium">Game</th>
                 <th className="px-3 py-2.5 text-left font-medium">Status</th>
+                <th className="px-3 py-2.5 text-left font-medium whitespace-nowrap">
+                  Handled by
+                </th>
                 <th className="px-3 py-2.5 text-right font-medium">Action</th>
               </tr>
             </thead>
@@ -683,29 +749,19 @@ export default function DepositsPage() {
                               ? "Assign a player first"
                               : "No games linked to this player";
                             return (
-                              <Select
+                              <SearchableSelect
                                 value={d.selected_game ?? null}
                                 onValueChange={(v) => {
                                   if (v) void handleDraft(d.deposit_id, { selected_game: v });
                                 }}
-                              >
-                                <SelectTrigger className="h-7 w-[120px] cursor-pointer">
-                                  <SelectValue placeholder="Pick game" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {options.length === 0 ? (
-                                    <div className="px-2 py-1.5 text-[11px] text-muted-foreground">
-                                      {emptyMsg}
-                                    </div>
-                                  ) : (
-                                    options.map((g) => (
-                                      <SelectItem key={g} value={g}>
-                                        {g}
-                                      </SelectItem>
-                                    ))
-                                  )}
-                                </SelectContent>
-                              </Select>
+                                options={[...options].sort((a, b) =>
+                                  a.localeCompare(b),
+                                )}
+                                placeholder="Pick game"
+                                emptyMessage={emptyMsg}
+                                searchPlaceholder="Search game…"
+                                className="h-7 w-[130px] px-2 text-[12px]"
+                              />
                             );
                           })()
                         ) : (
@@ -724,6 +780,13 @@ export default function DepositsPage() {
                             )}
                           </div>
                         </div>
+                      </td>
+                      <td className="px-3 py-2">
+                        <AssigneeCell
+                          kind="deposit"
+                          id={d.deposit_id}
+                          assignedToUserId={d.assigned_to_user_id}
+                        />
                       </td>
                       <td className="px-3 py-2 text-right">
                         {!isViewer &&

@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { players } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
+import { recordGameAccountChanges } from "@/lib/game-account-audit";
 
 const patchSchema = z.object({
   full_name: z.string().min(1).optional(),
@@ -55,6 +56,17 @@ export async function PATCH(
       .set(parsed.data)
       .where(eq(players.player_id, playerId))
       .returning();
+
+    // Only when the caller actually sent game_accounts — an unrelated patch
+    // must not look like every account was removed.
+    if (parsed.data.game_accounts !== undefined) {
+      await recordGameAccountChanges(
+        playerId,
+        row.game_accounts,
+        updated.game_accounts,
+        { userId: user.user_id, source: "manual" },
+      );
+    }
 
     return Response.json({ player: updated });
   } catch (e) {

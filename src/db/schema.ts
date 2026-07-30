@@ -79,6 +79,12 @@ export const withdrawalStatusEnum = pgEnum("withdrawal_status", [
   "failed",
 ]);
 
+export const gameAccountActionEnum = pgEnum("game_account_action", [
+  "added",
+  "updated",
+  "removed",
+]);
+
 export const gameTransferStatusEnum = pgEnum("game_transfer_status", [
   "pending",
   "processing",
@@ -281,6 +287,11 @@ export const deposits = pgTable("deposits", {
   skip_bot: boolean("skip_bot").notNull().default(false),
   matched_at: timestamp("matched_at", { withTimezone: true, mode: "string" }),
   handled_by_user_id: integer("handled_by_user_id").references(() => users.user_id),
+  // The CS agent who claimed this deposit ("Assign to me").
+  assigned_to_user_id: integer("assigned_to_user_id").references(
+    () => users.user_id,
+  ),
+  assigned_at: timestamp("assigned_at", { withTimezone: true, mode: "string" }),
   game_topup_reference: varchar("game_topup_reference", { length: 80 }),
   receipt_url: text("receipt_url"),
   created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
@@ -316,6 +327,11 @@ export const withdrawals = pgTable("withdrawals", {
   // CS-entered requests default to "manual"; bot-created requests set "bot".
   source: transactionSourceEnum("source").notNull().default("manual"),
   handled_by_user_id: integer("handled_by_user_id").references(() => users.user_id),
+  // The CS agent who claimed this withdrawal ("Assign to me").
+  assigned_to_user_id: integer("assigned_to_user_id").references(
+    () => users.user_id,
+  ),
+  assigned_at: timestamp("assigned_at", { withTimezone: true, mode: "string" }),
   bank_name: varchar("bank_name", { length: 60 }),
   bank_account_number: varchar("bank_account_number", { length: 60 }),
   paid_from_account_id: integer("paid_from_account_id").references(
@@ -327,6 +343,33 @@ export const withdrawals = pgTable("withdrawals", {
     .notNull()
     .defaultNow(),
   updated_at: timestamp("updated_at", { withTimezone: true, mode: "string" })
+    .notNull()
+    .defaultNow(),
+});
+
+/**
+ * Every change to a player's game accounts, one row per account touched.
+ * players.game_accounts is a jsonb blob that gets rewritten wholesale on edit,
+ * so without this there is no record of who removed an account or what the
+ * game id used to be — the question CS actually asks after a bad top-up.
+ */
+export const gameAccountAudit = pgTable("game_account_audit", {
+  audit_id: serial("audit_id").primaryKey(),
+  player_id: integer("player_id")
+    .notNull()
+    .references(() => players.player_id),
+  game_name: varchar("game_name", { length: 60 }).notNull(),
+  action: gameAccountActionEnum("action").notNull(),
+  // Null on "added"; the game id as it was before the change otherwise.
+  old_game_username: varchar("old_game_username", { length: 120 }),
+  // Null on "removed"; the game id as it is after the change otherwise.
+  new_game_username: varchar("new_game_username", { length: 120 }),
+  // Null when the bot made the change rather than a person.
+  changed_by_user_id: integer("changed_by_user_id").references(
+    () => users.user_id,
+  ),
+  source: transactionSourceEnum("source").notNull().default("manual"),
+  created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
     .notNull()
     .defaultNow(),
 });
@@ -375,13 +418,38 @@ export const gameTransfers = pgTable("game_transfers", {
     mode: "number",
   }).notNull(),
   status: gameTransferStatusEnum("status").notNull().default("completed"),
+  // Why a transfer ended the way it did — the bot's `note` on
+  // PATCH /:id/status. Its reason for failing, most usefully.
+  note: text("note"),
+  // How many times the move has been attempted. 1 on the first try; the stuck-
+  // transfer sweep bumps it each time it restarts a stalled transfer.
+  attempt_count: integer("attempt_count").notNull().default(1),
   // Nullable: bot/system-initiated transfers have no human user.
   handled_by_user_id: integer("handled_by_user_id").references(
     () => users.user_id,
   ),
+  // The CS agent who claimed this transfer ("Assign to me"), so two agents
+  // don't work the same one. Independent of handled_by_user_id, which records
+  // who actually created it.
+  assigned_to_user_id: integer("assigned_to_user_id").references(
+    () => users.user_id,
+  ),
+  assigned_at: timestamp("assigned_at", {
+    withTimezone: true,
+    mode: "string",
+  }),
   created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
     .notNull()
     .defaultNow(),
+  // When the transfer entered "processing" — the clock the bot is racing.
+  // Null only for a transfer still sitting in "pending".
+  started_at: timestamp("started_at", { withTimezone: true, mode: "string" }),
+  // When it reached a terminal state (completed or failed). Null while in
+  // flight; with started_at it gives the time the move actually took.
+  completed_at: timestamp("completed_at", {
+    withTimezone: true,
+    mode: "string",
+  }),
 });
 
 // ---------- Provider back-office ----------

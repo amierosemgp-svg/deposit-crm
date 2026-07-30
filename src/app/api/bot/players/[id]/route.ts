@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { players } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
 import { isFkViolation, jsonError, playerJson } from "@/lib/bot-crud";
+import { recordGameAccountChanges } from "@/lib/game-account-audit";
 
 /** Resolve a player by numeric id or username. */
 async function findPlayer(id: string) {
@@ -69,6 +70,16 @@ export async function PATCH(
     .set(patch)
     .where(eq(players.player_id, row.player_id))
     .returning();
+
+  if (patch.game_accounts !== undefined) {
+    await recordGameAccountChanges(
+      row.player_id,
+      row.game_accounts,
+      updated.game_accounts,
+      { source: "bot" },
+    );
+  }
+
   return Response.json({ player: playerJson(updated) });
 }
 

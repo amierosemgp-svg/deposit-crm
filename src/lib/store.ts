@@ -164,6 +164,12 @@ type Store = {
     toGame: string;
     amount: number;
   }) => Promise<MutationResult>;
+  /** Claim a transaction so other agents can see who's on it (or release it). */
+  setAssignment: (input: {
+    kind: "deposit" | "withdrawal" | "game_transfer";
+    id: number;
+    assign?: boolean;
+  }) => Promise<MutationResult>;
   createPlayer: (input: {
     username: string;
     full_name: string;
@@ -598,6 +604,12 @@ export const useStore = create<Store>((set, get) => {
           to_game: toGame,
           amount,
         }),
+      }),
+
+    setAssignment: ({ kind, id, assign = true }) =>
+      mutate("/api/assignments", {
+        method: "POST",
+        body: JSON.stringify({ kind, id, assign }),
       }),
 
     createPlayer: (input) =>

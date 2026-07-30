@@ -1,8 +1,14 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useStore } from "@/lib/store";
-import { formatRM, formatDateTime } from "@/lib/format";
+import {
+  formatRM,
+  formatDateTime,
+  formatDuration,
+} from "@/lib/format";
+import { MAX_TRANSFER_ATTEMPTS, type GameTransfer } from "@/lib/types";
+import { AssigneeCell } from "@/components/assignee-cell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,6 +25,53 @@ import { StatusBadge } from "@/components/status-badge";
 import { ListLoading } from "@/components/list-loading";
 import { ArrowLeftRight, Loader2, Search } from "lucide-react";
 import { toast } from "sonner";
+
+/**
+ * When a transfer last moved. Finished ones show the completed/failed time and
+ * how long the move took; one still in flight shows how long it has been
+ * running, which is the number CS actually watches — a transfer sitting in
+ * "processing" is the bot failing to report back.
+ */
+function TransferTiming({ transfer }: { transfer: GameTransfer }) {
+  // Stays null until mount, so SSR and the first client render agree.
+  const [now, setNow] = useState<string | null>(null);
+  useEffect(() => {
+    const tick = () => setNow(new Date().toISOString());
+    tick();
+    const id = setInterval(tick, 30_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const started = transfer.started_at ?? transfer.created_at;
+  const ended = transfer.completed_at;
+  const inFlight =
+    transfer.status === "pending" || transfer.status === "processing";
+
+  if (ended) {
+    return (
+      <div className="leading-snug">
+        <div>{formatDateTime(ended)}</div>
+        <div className="text-[11px] text-muted-foreground">
+          took {formatDuration(started, ended)}
+        </div>
+      </div>
+    );
+  }
+
+  if (inFlight) {
+    return (
+      <div className="leading-snug">
+        <div className="text-muted-foreground">—</div>
+        <div className="text-[11px] text-muted-foreground">
+          {now ? `running ${formatDuration(started, now)}` : " "}
+        </div>
+      </div>
+    );
+  }
+
+  // Finished before end times were being recorded.
+  return <span className="text-muted-foreground italic">not recorded</span>;
+}
 
 export default function GameTransferPage() {
   const [playerQuery, setPlayerQuery] = useState("");
@@ -239,15 +292,21 @@ export default function GameTransferPage() {
                   <th className="px-3 py-2.5 text-left font-medium">From</th>
                   <th className="px-3 py-2.5 text-left font-medium">To</th>
                   <th className="px-3 py-2.5 text-right font-medium">Amount</th>
-                  <th className="px-3 py-2.5 text-left font-medium">By</th>
+                  <th className="px-3 py-2.5 text-left font-medium">
+                    Requested by
+                  </th>
+                  <th className="px-3 py-2.5 text-left font-medium">
+                    Handled by
+                  </th>
                   <th className="px-3 py-2.5 text-left font-medium">Status</th>
+                  <th className="px-3 py-2.5 text-left font-medium">Updated</th>
                 </tr>
               </thead>
               <tbody>
                 {scopedTransfers.length === 0 && (
                   <tr className="border-t">
                     <td
-                      colSpan={7}
+                      colSpan={9}
                       className="px-3 py-10 text-center text-sm text-muted-foreground"
                     >
                       {!hydrated ? (
@@ -278,8 +337,40 @@ export default function GameTransferPage() {
                       <td className="px-3 py-2 text-[12px] text-muted-foreground">
                         {userName(t.handled_by_user_id)}
                       </td>
-                      <td className="px-3 py-2">
+                      <td className="px-3 py-2 align-top">
+                        <AssigneeCell
+                          kind="game_transfer"
+                          id={t.transfer_id}
+                          assignedToUserId={t.assigned_to_user_id}
+                        />
+                      </td>
+                      <td className="px-3 py-2 align-top">
                         <StatusBadge status={t.status} />
+                        {t.attempt_count > 1 && t.status === "processing" && (
+                          <p className="mt-1 text-[11px] text-amber-600">
+                            retry {t.attempt_count} of {MAX_TRANSFER_ATTEMPTS}
+                          </p>
+                        )}
+                        {t.note && (
+                          <p
+                            className={`mt-1 max-w-[220px] text-[11px] leading-snug ${
+                              t.status === "failed"
+                                ? "text-red-600"
+                                : "text-muted-foreground"
+                            }`}
+                            title={t.note}
+                          >
+                            {t.note}
+                          </p>
+                        )}
+                        {t.status === "failed" && !t.note && (
+                          <p className="mt-1 text-[11px] italic text-muted-foreground">
+                            No reason given
+                          </p>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 align-top whitespace-nowrap text-[12px]">
+                        <TransferTiming transfer={t} />
                       </td>
                     </tr>
                   );

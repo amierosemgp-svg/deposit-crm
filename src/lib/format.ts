@@ -24,6 +24,35 @@ export function formatShortDateTime(iso: string): string {
   return `${day} ${month}, ${hh}:${mm}`;
 }
 
+/** Wall-clock only (18:42) — for when the date is already on the row. */
+export function formatClock(iso: string): string {
+  const d = new Date(iso);
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
+/** A span of time, coarsest useful unit first: "8s", "4m 12s", "2h 5m". */
+export function formatDuration(fromIso: string, toIso: string): string {
+  const ms = new Date(toIso).getTime() - new Date(fromIso).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "—";
+  const secs = Math.floor(ms / 1000);
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) {
+    const rem = secs % 60;
+    return rem ? `${mins}m ${rem}s` : `${mins}m`;
+  }
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) {
+    const rem = mins % 60;
+    return rem ? `${hrs}h ${rem}m` : `${hrs}h`;
+  }
+  const days = Math.floor(hrs / 24);
+  const rem = hrs % 24;
+  return rem ? `${days}d ${rem}h` : `${days}d`;
+}
+
 export function formatRelative(iso: string): string {
   const d = new Date(iso).getTime();
   const now = Date.now();

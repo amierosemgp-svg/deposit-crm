@@ -69,6 +69,8 @@ export async function POST(request: Request) {
           transfer_amount: body.amount,
           from_game_balance_before: fromBalance,
           status: "processing",
+          // Created straight into "processing", so the clock starts now.
+          started_at: new Date().toISOString(),
           handled_by_user_id: user.user_id,
         })
         .returning();

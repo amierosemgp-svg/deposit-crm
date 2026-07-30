@@ -19,6 +19,7 @@ import { authErrorResponse, requireUser } from "@/lib/auth";
 import {
   autoConfirmExpiredTransfers,
   depositScopeFilter,
+  retryStuckGameTransfers,
   visibleEntityIds,
   visibleEntityTree,
 } from "@/lib/api-helpers";
@@ -32,8 +33,10 @@ export async function GET() {
   try {
     const user = await requireUser();
 
-    // Lazy sweep: settle any transfer whose confirmation window expired
+    // Lazy sweeps, on the 10s poll: settle any bank transfer whose confirmation
+    // window expired, and restart any game transfer the bot has gone quiet on.
     await autoConfirmExpiredTransfers();
+    await retryStuckGameTransfers();
 
     const entityTree = await visibleEntityTree(user);
     const entityIds = await visibleEntityIds(user);

@@ -177,7 +177,11 @@ export function gameTransferJson(
     transfer_amount: t.transfer_amount,
     from_game_balance_before: t.from_game_balance_before,
     status: t.status,
+    // Why it ended this way — the reason it failed, when it failed.
+    note: t.note,
     created_at: t.created_at,
+    started_at: t.started_at,
+    completed_at: t.completed_at,
   };
 }
 

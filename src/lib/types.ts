@@ -144,6 +144,9 @@ export type Deposit = {
   skip_bot?: boolean;
   matched_at?: string | null;
   handled_by_user_id?: number | null;
+  /** The CS agent who claimed it. Null until someone assigns it. */
+  assigned_to_user_id?: number | null;
+  assigned_at?: string | null;
   game_topup_reference?: string | null;
   receipt_url?: string | null;
   created_at: string;
@@ -163,6 +166,9 @@ export type Withdrawal = {
   source?: TransactionSource;
   skip_bot?: boolean;
   handled_by_user_id?: number | null;
+  /** The CS agent who claimed it. Null until someone assigns it. */
+  assigned_to_user_id?: number | null;
+  assigned_at?: string | null;
   bank_name?: string | null;
   bank_account_number?: string | null;
   paid_from_account_id?: number | null;
@@ -178,6 +184,11 @@ export type GameTransferStatus =
   | "completed"
   | "failed";
 
+/** A transfer the bot hasn't reported back on within this window is stuck. */
+export const STUCK_TRANSFER_MS = 5 * 60 * 1000;
+/** How many times a stalled transfer is restarted before we give up on it. */
+export const MAX_TRANSFER_ATTEMPTS = 3;
+
 export type GameTransfer = {
   transfer_id: number;
   player_id: number;
@@ -186,8 +197,19 @@ export type GameTransfer = {
   transfer_amount: number;
   from_game_balance_before: number;
   status: GameTransferStatus;
+  /** The bot's reason for the outcome — why it failed, when it failed. */
+  note: string | null;
+  /** 1 on the first try; bumped each time the stuck-transfer sweep restarts it. */
+  attempt_count: number;
   handled_by_user_id: number;
+  /** The CS agent who claimed it. Null until someone assigns it. */
+  assigned_to_user_id: number | null;
+  assigned_at: string | null;
   created_at: string;
+  /** Entered "processing". Null only while still "pending". */
+  started_at: string | null;
+  /** Reached "completed" or "failed". Null while in flight. */
+  completed_at: string | null;
 };
 
 export type GameCredit = {

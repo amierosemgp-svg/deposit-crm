@@ -24,6 +24,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { StatusBadge, SourceBadge } from "@/components/status-badge";
+import { SearchableSelect } from "@/components/searchable-select";
+import { AssigneeCell } from "@/components/assignee-cell";
 import { PlayerNameLink } from "@/components/player-name-link";
 import { PullbackFlowModal } from "@/components/pullback-flow-modal";
 import {
@@ -166,8 +168,11 @@ export default function WithdrawalsPage() {
   );
 
   const newPlayer = newPlayerId ? playerById(Number(newPlayerId)) : undefined;
-  // Games the selected player has linked accounts for; none until a player is picked.
-  const newGames = (newPlayer?.game_accounts ?? []).map((g) => g.game_name);
+  // Games the selected player has linked accounts for; none until a player is
+  // picked. Sorted A–Z so the list is in the same order every time.
+  const newGames = (newPlayer?.game_accounts ?? [])
+    .map((g) => g.game_name)
+    .sort((a, b) => a.localeCompare(b));
   const newBalance =
     newPlayer && newGame ? getBalance(newPlayer.player_id, newGame) : 0;
   const newAmt = Number(newAmount) || 0;
@@ -335,6 +340,9 @@ export default function WithdrawalsPage() {
                 <th className="px-3 py-2.5 text-right font-medium whitespace-nowrap">Current Balance</th>
                 <th className="px-3 py-2.5 text-right font-medium whitespace-nowrap">Pulled</th>
                 <th className="px-3 py-2.5 text-left font-medium">Status</th>
+                <th className="px-3 py-2.5 text-left font-medium whitespace-nowrap">
+                  Handled by
+                </th>
                 <th className="px-3 py-2.5 text-right font-medium">Action</th>
               </tr>
             </thead>
@@ -342,7 +350,7 @@ export default function WithdrawalsPage() {
               {sorted.length === 0 && (
                 <tr className="border-t">
                   <td
-                    colSpan={8}
+                    colSpan={9}
                     className="px-3 py-10 text-center text-sm text-muted-foreground"
                   >
                     {!hydrated ? (
@@ -404,6 +412,13 @@ export default function WithdrawalsPage() {
                           )}
                         </div>
                       </div>
+                    </td>
+                    <td className="px-3 py-2">
+                      <AssigneeCell
+                        kind="withdrawal"
+                        id={w.withdrawal_id}
+                        assignedToUserId={w.assigned_to_user_id}
+                      />
                     </td>
                     <td className="px-3 py-2 text-right">
                       {canPull && (
@@ -533,26 +548,18 @@ export default function WithdrawalsPage() {
 
             <div className="space-y-1.5">
               <Label>Game</Label>
-              <Select value={newGame} onValueChange={(v) => setNewGame(v ?? "")}>
-                <SelectTrigger className="h-9 w-full">
-                  <SelectValue placeholder="Select game" />
-                </SelectTrigger>
-                <SelectContent>
-                  {newGames.length === 0 ? (
-                    <div className="px-2 py-1.5 text-[11px] text-muted-foreground">
-                      {newPlayer
-                        ? "No games linked to this player"
-                        : "Select a player first"}
-                    </div>
-                  ) : (
-                    newGames.map((g) => (
-                      <SelectItem key={g} value={g}>
-                        {g}
-                      </SelectItem>
-                    ))
-                  )}
-                </SelectContent>
-              </Select>
+              <SearchableSelect
+                value={newGame || null}
+                onValueChange={(v) => setNewGame(v)}
+                options={newGames}
+                placeholder="Select game"
+                emptyMessage={
+                  newPlayer
+                    ? "No games linked to this player"
+                    : "Select a player first"
+                }
+                searchPlaceholder="Search game…"
+              />
               {newPlayer && newGame && (
                 <p className="text-[11px] text-muted-foreground">
                   Current {newGame} balance:{" "}

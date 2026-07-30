@@ -23,6 +23,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { StatusBadge } from "./status-badge";
+import { GameAccountHistory } from "./game-account-history";
 import { Separator } from "@/components/ui/separator";
 import {
   Send,
@@ -74,6 +75,8 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
   const [gameFormOpen, setGameFormOpen] = useState(false);
   const [gameForm, setGameForm] = useState(EMPTY_GAME);
   const [savingGame, setSavingGame] = useState(false);
+  // Bumped after any game-account write so the history list refetches.
+  const [gameAuditVersion, setGameAuditVersion] = useState(0);
   // Index into player.game_accounts being edited, or null when adding.
   const [editingGame, setEditingGame] = useState<number | null>(null);
 
@@ -180,6 +183,7 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
     });
     setSavingGame(false);
     if (res.ok) {
+      setGameAuditVersion((v) => v + 1);
       toast.success(editingGame === null ? "Game account linked" : "Game account updated");
       setGameForm(EMPTY_GAME);
       setGameFormOpen(false);
@@ -197,8 +201,10 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
     const res = await updatePlayer(player.player_id, {
       game_accounts: (player.game_accounts ?? []).filter((_, i) => i !== index),
     });
-    if (res.ok) toast.success("Game account removed");
-    else toast.error(res.error ?? "Failed to remove game account");
+    if (res.ok) {
+      setGameAuditVersion((v) => v + 1);
+      toast.success("Game account removed");
+    } else toast.error(res.error ?? "Failed to remove game account");
   }
 
   async function saveNotes() {
@@ -630,6 +636,11 @@ export function PlayerProfileSheet({ playerId, open, onOpenChange }: Props) {
                     No game accounts linked. Top-ups will require manual game username entry.
                   </p>
                 )}
+
+                <GameAccountHistory
+                  playerId={player.player_id}
+                  refreshKey={gameAuditVersion}
+                />
               </section>
 
               <Separator />

@@ -5,10 +5,12 @@ import {
   bankTransfers,
   deposits,
   entities,
+  gameTransfers,
   settings,
   transactions,
 } from "@/db/schema";
 import type { AuthedUser } from "./auth";
+import { MAX_TRANSFER_ATTEMPTS, STUCK_TRANSFER_MS } from "./types";
 
 export function jsonError(message: string, status = 400) {
   return Response.json({ error: message }, { status });
@@ -172,4 +174,120 @@ export async function autoConfirmExpiredTransfers(): Promise<number> {
     });
   }
   return expired.length;
+}
+
+/**
+ * Restart game transfers the bot has gone quiet on.
+ *
+ * A transfer sits in "processing" from the moment CS requests it until the bot
+ * reports back. When many land at once the bot can drop one — and nothing else
+ * ever moves it, so CS watches a transfer hang forever. This sweep restarts the
+ * clock on anything quiet for STUCK_TRANSFER_MS, which puts it back at the head
+ * of the bot's `?status=processing` queue for another attempt, and fails it with
+ * a reason once it has burned through MAX_TRANSFER_ATTEMPTS.
+ *
+ * No credits move here either way: a "processing" transfer hasn't moved any yet.
+ *
+ * Runs lazily on every /api/state read (CS has the page open, so it self-heals
+ * while anyone is watching) and from the cron as a safety net.
+ */
+export async function retryStuckGameTransfers(): Promise<{
+  restarted: number;
+  failed: number;
+}> {
+  const nowIso = new Date().toISOString();
+  const cutoff = new Date(Date.now() - STUCK_TRANSFER_MS).toISOString();
+
+  const stuck = await db
+    .select()
+    .from(gameTransfers)
+    .where(
+      and(
+        eq(gameTransfers.status, "processing"),
+        // started_at is backfilled for every row, but fall back to created_at
+        // so a transfer can never dodge the sweep by having a null start.
+        or(
+          lt(gameTransfers.started_at, cutoff),
+          and(
+            isNull(gameTransfers.started_at),
+            lt(gameTransfers.created_at, cutoff),
+          ),
+        ),
+      ),
+    );
+
+  let restarted = 0;
+  let failed = 0;
+
+  for (const t of stuck) {
+    await db.transaction(async (txn) => {
+      // Re-read under a lock: the bot may have reported back in the meantime,
+      // in which case this transfer is no longer ours to touch.
+      const [locked] = await txn
+        .select()
+        .from(gameTransfers)
+        .where(
+          and(
+            eq(gameTransfers.transfer_id, t.transfer_id),
+            eq(gameTransfers.status, "processing"),
+          ),
+        )
+        .for("update");
+      if (!locked) return;
+
+      const attempts = locked.attempt_count ?? 1;
+
+      if (attempts >= MAX_TRANSFER_ATTEMPTS) {
+        await txn
+          .update(gameTransfers)
+          .set({
+            status: "failed",
+            completed_at: nowIso,
+            note: `Gave up after ${attempts} attempts — the bot never reported back. No credits were moved; retry the transfer or move it in the provider back-office by hand.`,
+          })
+          .where(eq(gameTransfers.transfer_id, t.transfer_id));
+        await txn.insert(transactions).values({
+          player_id: locked.player_id,
+          type: "game_transfer",
+          amount: locked.transfer_amount,
+          game_name: `${locked.from_game} → ${locked.to_game}`,
+          reference_id: locked.transfer_id,
+          details: {
+            source: "system",
+            action: "failed",
+            reason: "no bot response",
+            attempts,
+          },
+        });
+        failed += 1;
+        return;
+      }
+
+      await txn
+        .update(gameTransfers)
+        .set({
+          attempt_count: attempts + 1,
+          // Restarting the clock is what re-queues it: the bot polls
+          // ?status=processing, and CS sees the running time reset.
+          started_at: nowIso,
+          note: `No response for ${Math.round(STUCK_TRANSFER_MS / 60000)}m — restarted (attempt ${attempts + 1} of ${MAX_TRANSFER_ATTEMPTS}).`,
+        })
+        .where(eq(gameTransfers.transfer_id, t.transfer_id));
+      await txn.insert(transactions).values({
+        player_id: locked.player_id,
+        type: "game_transfer",
+        amount: locked.transfer_amount,
+        game_name: `${locked.from_game} → ${locked.to_game}`,
+        reference_id: locked.transfer_id,
+        details: {
+          source: "system",
+          action: "restarted",
+          attempt: attempts + 1,
+        },
+      });
+      restarted += 1;
+    });
+  }
+
+  return { restarted, failed };
 }
