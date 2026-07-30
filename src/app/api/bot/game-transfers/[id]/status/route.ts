@@ -11,19 +11,31 @@ import {
 } from "@/lib/bot-crud";
 
 const bodySchema = z.object({
-  status: z.enum(["completed", "failed"]),
+  status: z.enum(["processing", "completed", "failed"]),
   note: z.string().max(500).optional(),
 });
 
+/** Statuses a transfer can still be driven out of. */
+const OPEN_STATUSES = ["pending", "solving", "processing"] as const;
+
 /**
  * PATCH /api/bot/game-transfers/:id/status
- * The bot drives a CS-requested game credit transfer to its end state after
- * doing the real game-provider back-office move.
- *   - completed: credits are moved from_game → to_game atomically (validated
- *     under a row lock — the balance may have changed since the request).
- *   - failed: no credits move, nothing to reverse.
- * Only a "processing" transfer can transition; re-sending the same terminal
- * state is a 409.
+ * The bot drives a CS-requested game credit transfer through its lifecycle:
+ *
+ *   pending ──claim──▶ processing ──▶ completed
+ *      ▲                   │       └─▶ failed
+ *      └─ solving ◀─stalled┘
+ *
+ *   - processing: claim it — you're starting the back-office move now. From
+ *     "pending" or "solving" only; claiming twice is a no-op, not an error, so
+ *     a retried claim after a timeout is safe.
+ *   - completed: credits move from_game → to_game atomically (validated under a
+ *     row lock — the balance may have changed since the request).
+ *   - failed: no credits move, nothing to reverse. Send a `note` saying why.
+ *
+ * Claiming is optional: a bot that goes straight from pending to completed
+ * still works. It only costs you the "is anyone actually on this" signal.
+ * A transfer that already reached a terminal state is a 409.
  */
 export async function PATCH(
   request: Request,
@@ -52,11 +64,39 @@ export async function PATCH(
         .where(eq(gameTransfers.transfer_id, transferId))
         .for("update");
       if (!row) throw new BotError(404, "Game transfer not found");
-      if (row.status !== "processing") {
-        throw new BotError(409, `Transfer is "${row.status}", expected processing`);
+      if (!(OPEN_STATUSES as readonly string[]).includes(row.status)) {
+        throw new BotError(
+          409,
+          `Transfer already ${row.status} — it can't be changed`,
+        );
       }
 
       const nowIso = new Date().toISOString();
+
+      // Claiming: mark that the bot has started, and restart the stall clock so
+      // the 5-minute sweep measures from "work began", not "CS asked".
+      if (body.status === "processing") {
+        const [owner] = await txn
+          .select({ game_accounts: players.game_accounts })
+          .from(players)
+          .where(eq(players.player_id, row.player_id));
+
+        // Already claimed — a retried claim after a timeout, not an error.
+        if (row.status === "processing") {
+          return { transfer: row, gameAccounts: owner?.game_accounts ?? null };
+        }
+
+        const [claimed] = await txn
+          .update(gameTransfers)
+          .set({
+            status: "processing",
+            started_at: nowIso,
+            note: body.note ?? row.note,
+          })
+          .where(eq(gameTransfers.transfer_id, transferId))
+          .returning();
+        return { transfer: claimed, gameAccounts: owner?.game_accounts ?? null };
+      }
 
       if (body.status === "completed") {
         // Re-validate the source balance atomically — it may have moved since

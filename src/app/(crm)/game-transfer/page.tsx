@@ -7,7 +7,11 @@ import {
   formatDateTime,
   formatDuration,
 } from "@/lib/format";
-import { MAX_TRANSFER_ATTEMPTS, type GameTransfer } from "@/lib/types";
+import {
+  IN_FLIGHT_TRANSFER_STATUSES,
+  MAX_TRANSFER_ATTEMPTS,
+  type GameTransfer,
+} from "@/lib/types";
 import { AssigneeCell } from "@/components/assignee-cell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -44,8 +48,9 @@ function TransferTiming({ transfer }: { transfer: GameTransfer }) {
 
   const started = transfer.started_at ?? transfer.created_at;
   const ended = transfer.completed_at;
-  const inFlight =
-    transfer.status === "pending" || transfer.status === "processing";
+  const inFlight = (
+    IN_FLIGHT_TRANSFER_STATUSES as string[]
+  ).includes(transfer.status);
 
   if (ended) {
     return (
@@ -146,7 +151,7 @@ export default function GameTransferPage() {
       return;
     }
     toast.success(
-      `Transfer requested — processing ${formatRM(amt)} from ${fromGame} to ${toGame}`,
+      `Transfer queued — ${formatRM(amt)} from ${fromGame} to ${toGame}, waiting for the bot`,
     );
     setAmount("");
   }
@@ -345,8 +350,19 @@ export default function GameTransferPage() {
                         />
                       </td>
                       <td className="px-3 py-2 align-top">
-                        <StatusBadge status={t.status} />
-                        {t.attempt_count > 1 && t.status === "processing" && (
+                        <StatusBadge
+                          status={t.status}
+                          // "pending" here means queued for the bot, not
+                          // awaiting a person.
+                          label={t.status === "pending" ? "Initializing" : undefined}
+                        />
+                        {t.status === "solving" && (
+                          <p className="mt-1 text-[11px] text-violet-700">
+                            recovering — attempt {t.attempt_count} of{" "}
+                            {MAX_TRANSFER_ATTEMPTS}
+                          </p>
+                        )}
+                        {t.status === "processing" && t.attempt_count > 1 && (
                           <p className="mt-1 text-[11px] text-amber-600">
                             retry {t.attempt_count} of {MAX_TRANSFER_ATTEMPTS}
                           </p>

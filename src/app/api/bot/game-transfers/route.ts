@@ -8,6 +8,7 @@ import { BotError, botErrorResponse, gameTransferJson, jsonError } from "@/lib/b
 
 const TRANSFER_STATUSES = [
   "pending",
+  "solving",
   "processing",
   "completed",
   "failed",

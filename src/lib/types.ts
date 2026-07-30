@@ -180,9 +180,17 @@ export type Withdrawal = {
 
 export type GameTransferStatus =
   | "pending"
+  | "solving"
   | "processing"
   | "completed"
   | "failed";
+
+/** Statuses that still need the bot to do something. */
+export const IN_FLIGHT_TRANSFER_STATUSES: GameTransferStatus[] = [
+  "pending",
+  "solving",
+  "processing",
+];
 
 /** A transfer the bot hasn't reported back on within this window is stuck. */
 export const STUCK_TRANSFER_MS = 5 * 60 * 1000;

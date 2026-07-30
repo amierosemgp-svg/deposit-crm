@@ -53,6 +53,7 @@ const TRANSFER_STATUSES = [
 
 const GAME_TRANSFER_STATUSES = [
   "pending",
+  "solving",
   "processing",
   "completed",
   "failed",
@@ -80,9 +81,10 @@ const TYPE_ALIASES: Record<string, string> = {
  *   - type=deposit (default): deposits; status defaults to pending_match.
  *   - type=withdrawal: withdrawal requests.
  *   - type=transfer: bank transfers between entity accounts.
- *   - type=game_transfer: CS-requested game credit moves. `status=processing`
- *     is the bot's work queue — do the provider-side move, then
- *     PATCH /api/bot/game-transfers/:id/status.
+ *   - type=game_transfer: CS-requested game credit moves.
+ *     `status=pending,solving` is the bot's work queue — claim one with
+ *     PATCH /api/bot/game-transfers/:id/status {status:"processing"}, do the
+ *     provider-side move, then PATCH it to completed/failed.
  *   - type=all: all four, merged and sorted newest-first.
  * `status` accepts a comma list; values are matched against whichever type(s)
  * they're valid for. The `game` filter never matches bank transfers (they have

@@ -1,10 +1,16 @@
 import { cn } from "@/lib/utils";
-import type { BankTransferStatus, DepositStatus, WithdrawalStatus } from "@/lib/types";
+import type {
+  BankTransferStatus,
+  DepositStatus,
+  GameTransferStatus,
+  WithdrawalStatus,
+} from "@/lib/types";
 
 type Kind =
   | DepositStatus
   | WithdrawalStatus
   | BankTransferStatus
+  | GameTransferStatus
   | "active"
   | "inactive"
   | "suspended";
@@ -19,6 +25,9 @@ const STYLES: Record<string, string> = {
   rejected: "bg-red-500/10 text-red-700 border-red-500/30",
   approved: "bg-blue-500/10 text-blue-700 border-blue-500/30",
   processing: "bg-blue-500/10 text-blue-700 border-blue-500/30",
+  // A transfer being auto-recovered — deliberately louder than "pending", it
+  // means something already went wrong once.
+  solving: "bg-violet-500/10 text-violet-700 border-violet-500/30",
   completed: "bg-emerald-500/10 text-emerald-700 border-emerald-500/30",
   failed: "bg-red-500/10 text-red-700 border-red-500/30",
   requested: "bg-amber-500/10 text-amber-700 border-amber-500/30",
@@ -30,6 +39,7 @@ const STYLES: Record<string, string> = {
 };
 
 const LABELS: Record<string, string> = {
+  solving: "Solving",
   credits_pulled: "Credits Pulled",
   pending_match: "Awaiting Bank Match",
   matched: "Bank Matched",
@@ -37,9 +47,21 @@ const LABELS: Record<string, string> = {
   auto_confirmed: "Auto-confirmed",
 };
 
-export function StatusBadge({ status }: { status: Kind }) {
+export function StatusBadge({
+  status,
+  // Same status word can mean different things per record type — a "pending"
+  // game transfer is "Initializing" (waiting for the bot), not the same
+  // "Pending" as a deposit awaiting CS.
+  label: labelOverride,
+}: {
+  status: Kind;
+  label?: string;
+}) {
   const cls = STYLES[status] ?? "bg-zinc-500/10 text-zinc-700 border-zinc-500/30";
-  const label = LABELS[status] ?? status.charAt(0).toUpperCase() + status.slice(1);
+  const label =
+    labelOverride ??
+    LABELS[status] ??
+    status.charAt(0).toUpperCase() + status.slice(1);
   return (
     <span
       className={cn(

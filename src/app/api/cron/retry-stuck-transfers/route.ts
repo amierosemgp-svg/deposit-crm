@@ -1,4 +1,4 @@
-import { retryStuckGameTransfers } from "@/lib/api-helpers";
+import { retryStuckGameTransfers, trimBotEvents } from "@/lib/api-helpers";
 
 /**
  * GET /api/cron/retry-stuck-transfers — Vercel Cron target (see vercel.json).
@@ -17,5 +17,8 @@ export async function GET(request: Request) {
     }
   }
   const { restarted, failed } = await retryStuckGameTransfers();
-  return Response.json({ ok: true, restarted, failed });
+  // Piggybacked on this sweep rather than given its own cron — the feed only
+  // needs trimming occasionally, and this already runs on a timer.
+  const trimmed = await trimBotEvents();
+  return Response.json({ ok: true, restarted, failed, trimmed });
 }

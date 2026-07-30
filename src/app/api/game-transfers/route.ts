@@ -14,9 +14,10 @@ const createSchema = z.object({
 
 /**
  * POST /api/game-transfers — CS requests a credit move between two of a
- * player's games. The credits are NOT moved here: the transfer is created as
- * "processing" and the bot performs the real game-provider back-office transfer,
- * then marks it completed (credits move then) or failed (nothing to reverse).
+ * player's games. The credits are NOT moved here: the transfer is queued as
+ * "pending" (Initializing), the bot claims it into "processing", performs the
+ * real game-provider back-office transfer, then marks it completed (credits
+ * move then) or failed (nothing to reverse).
  * The balance is validated up front so obviously-invalid requests are rejected
  * early; the bot re-validates atomically at completion.
  */
@@ -68,8 +69,11 @@ export async function POST(request: Request) {
           to_game: body.to_game,
           transfer_amount: body.amount,
           from_game_balance_before: fromBalance,
-          status: "processing",
-          // Created straight into "processing", so the clock starts now.
+          // "pending" = Initializing: queued, waiting for the bot to claim it.
+          // The bot moves it to "processing" when it actually starts the
+          // provider-side move, so a transfer nobody picked up is
+          // distinguishable from one that's genuinely in progress.
+          status: "pending",
           started_at: new Date().toISOString(),
           handled_by_user_id: user.user_id,
         })

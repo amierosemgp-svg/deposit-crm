@@ -86,6 +86,13 @@ export const gameAccountActionEnum = pgEnum("game_account_action", [
   "removed",
 ]);
 
+export const botEventLevelEnum = pgEnum("bot_event_level", [
+  "debug",
+  "info",
+  "warn",
+  "error",
+]);
+
 export const poolAccountStatusEnum = pgEnum("pool_account_status", [
   // Registered at the provider, not yet handed to a player.
   "available",
@@ -95,8 +102,20 @@ export const poolAccountStatusEnum = pgEnum("pool_account_status", [
   "retired",
 ]);
 
+/**
+ * A CS-requested transfer's lifecycle:
+ *
+ *   pending ──bot claims──▶ processing ──▶ completed
+ *      ▲                        │      └──▶ failed
+ *      └──── solving ◀── stalled ┘
+ *
+ * "pending" is a transfer waiting for the bot to pick it up; "solving" is one
+ * the recovery sweep re-queued after the bot went quiet on it. Both are work
+ * the bot should claim; solving additionally means "you have seen this before".
+ */
 export const gameTransferStatusEnum = pgEnum("game_transfer_status", [
   "pending",
+  "solving",
   "processing",
   "completed",
   "failed",
@@ -638,6 +657,41 @@ export const botHealth = pgTable("bot_health", {
     .notNull()
     .defaultNow(),
   updated_at: timestamp("updated_at", { withTimezone: true, mode: "string" })
+    .notNull()
+    .defaultNow(),
+});
+
+/**
+ * The bot's live feed — what it is doing, as it does it.
+ *
+ * bot_health answers "is the bot up and what step is it on" as a single
+ * overwritten row. This is the running narrative underneath it: one row per
+ * event, kept so that when a transfer fails at 2am someone can read back what
+ * the bot was doing at the time. Deliberately append-only and cheap to write —
+ * the bot should be able to post freely without thinking about cost.
+ *
+ * Trimmed by the retention sweep; this is an operational log, not a ledger.
+ */
+export const botEvents = pgTable("bot_events", {
+  event_id: serial("event_id").primaryKey(),
+  bot_id: varchar("bot_id", { length: 80 }).notNull(),
+  level: botEventLevelEnum("level").notNull().default("info"),
+  // Short machine-readable tag, e.g. "transfer.claimed", "login.failed".
+  event: varchar("event", { length: 80 }).notNull(),
+  message: text("message"),
+  // Whatever the bot wants to attach — screenshots, provider responses, timings.
+  context: jsonb("context").$type<Record<string, unknown>>(),
+  // Optional links back to the record this is about, so a feed can be filtered
+  // down to one transfer/deposit/player.
+  player_id: integer("player_id").references(() => players.player_id),
+  game_transfer_id: integer("game_transfer_id"),
+  deposit_id: integer("deposit_id"),
+  withdrawal_id: integer("withdrawal_id"),
+  // When the bot says it happened; may lag created_at if it batched the post.
+  occurred_at: timestamp("occurred_at", { withTimezone: true, mode: "string" })
+    .notNull()
+    .defaultNow(),
+  created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
     .notNull()
     .defaultNow(),
 });

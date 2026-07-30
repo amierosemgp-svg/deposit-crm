@@ -5,12 +5,17 @@ import {
   bankTransfers,
   deposits,
   entities,
+  botEvents,
   gameTransfers,
   settings,
   transactions,
 } from "@/db/schema";
 import type { AuthedUser } from "./auth";
-import { MAX_TRANSFER_ATTEMPTS, STUCK_TRANSFER_MS } from "./types";
+import {
+  IN_FLIGHT_TRANSFER_STATUSES,
+  MAX_TRANSFER_ATTEMPTS,
+  STUCK_TRANSFER_MS,
+} from "./types";
 
 export function jsonError(message: string, status = 400) {
   return Response.json({ error: message }, { status });
@@ -177,19 +182,21 @@ export async function autoConfirmExpiredTransfers(): Promise<number> {
 }
 
 /**
- * Restart game transfers the bot has gone quiet on.
+ * Re-queue game transfers the bot has gone quiet on.
  *
- * A transfer sits in "processing" from the moment CS requests it until the bot
- * reports back. When many land at once the bot can drop one — and nothing else
- * ever moves it, so CS watches a transfer hang forever. This sweep restarts the
- * clock on anything quiet for STUCK_TRANSFER_MS, which puts it back at the head
- * of the bot's `?status=processing` queue for another attempt, and fails it with
- * a reason once it has burned through MAX_TRANSFER_ATTEMPTS.
+ * A transfer waits in "pending" for the bot to claim it, then sits in
+ * "processing" until the bot reports back. When many land at once the bot can
+ * drop one — and nothing else ever moves it, so CS watches a transfer hang
+ * forever. This sweep moves anything quiet for STUCK_TRANSFER_MS into
+ * "solving", which is both the visible "we are recovering this" state and a
+ * re-queue: the bot picks solving items up the same as pending ones. After
+ * MAX_TRANSFER_ATTEMPTS it is failed with a reason instead.
  *
- * No credits move here either way: a "processing" transfer hasn't moved any yet.
+ * No credits move here either way — a transfer that hasn't completed hasn't
+ * moved any.
  *
- * Runs lazily on every /api/state read (CS has the page open, so it self-heals
- * while anyone is watching) and from the cron as a safety net.
+ * Runs lazily on every /api/state read (so it self-heals while anyone has the
+ * CRM open) and from the cron as a safety net.
  */
 export async function retryStuckGameTransfers(): Promise<{
   restarted: number;
@@ -203,7 +210,7 @@ export async function retryStuckGameTransfers(): Promise<{
     .from(gameTransfers)
     .where(
       and(
-        eq(gameTransfers.status, "processing"),
+        inArray(gameTransfers.status, IN_FLIGHT_TRANSFER_STATUSES),
         // started_at is backfilled for every row, but fall back to created_at
         // so a transfer can never dodge the sweep by having a null start.
         or(
@@ -221,21 +228,24 @@ export async function retryStuckGameTransfers(): Promise<{
 
   for (const t of stuck) {
     await db.transaction(async (txn) => {
-      // Re-read under a lock: the bot may have reported back in the meantime,
-      // in which case this transfer is no longer ours to touch.
+      // Re-read under a lock: the bot may have claimed or finished it in the
+      // meantime, in which case this transfer is no longer ours to touch.
       const [locked] = await txn
         .select()
         .from(gameTransfers)
         .where(
           and(
             eq(gameTransfers.transfer_id, t.transfer_id),
-            eq(gameTransfers.status, "processing"),
+            inArray(gameTransfers.status, IN_FLIGHT_TRANSFER_STATUSES),
           ),
         )
         .for("update");
       if (!locked) return;
+      // It moved since the scan — give the new state its own full window.
+      if (locked.started_at && locked.started_at > cutoff) return;
 
       const attempts = locked.attempt_count ?? 1;
+      const minutes = Math.round(STUCK_TRANSFER_MS / 60000);
 
       if (attempts >= MAX_TRANSFER_ATTEMPTS) {
         await txn
@@ -266,11 +276,12 @@ export async function retryStuckGameTransfers(): Promise<{
       await txn
         .update(gameTransfers)
         .set({
+          status: "solving",
           attempt_count: attempts + 1,
           // Restarting the clock is what re-queues it: the bot polls
-          // ?status=processing, and CS sees the running time reset.
+          // ?status=pending,solving, and CS sees the running time reset.
           started_at: nowIso,
-          note: `No response for ${Math.round(STUCK_TRANSFER_MS / 60000)}m — restarted (attempt ${attempts + 1} of ${MAX_TRANSFER_ATTEMPTS}).`,
+          note: `No response for ${minutes}m — re-queued (attempt ${attempts + 1} of ${MAX_TRANSFER_ATTEMPTS}).`,
         })
         .where(eq(gameTransfers.transfer_id, t.transfer_id));
       await txn.insert(transactions).values({
@@ -281,7 +292,7 @@ export async function retryStuckGameTransfers(): Promise<{
         reference_id: locked.transfer_id,
         details: {
           source: "system",
-          action: "restarted",
+          action: "solving",
           attempt: attempts + 1,
         },
       });
@@ -290,4 +301,26 @@ export async function retryStuckGameTransfers(): Promise<{
   }
 
   return { restarted, failed };
+}
+
+/** How long the bot's live feed is kept before being trimmed. */
+export const BOT_EVENT_RETENTION_DAYS = 14;
+
+/**
+ * Trim the bot's live feed.
+ *
+ * The feed is written freely — the bot shouldn't have to think about cost when
+ * deciding whether to post — so something has to bound it. This is an
+ * operational log, not a ledger: a fortnight is long enough to investigate
+ * anything anyone is still asking about.
+ */
+export async function trimBotEvents(): Promise<number> {
+  const cutoff = new Date(
+    Date.now() - BOT_EVENT_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+  ).toISOString();
+  const deleted = await db
+    .delete(botEvents)
+    .where(lt(botEvents.created_at, cutoff))
+    .returning({ event_id: botEvents.event_id });
+  return deleted.length;
 }
