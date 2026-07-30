@@ -41,6 +41,7 @@ import {
   Loader2,
   RotateCcw,
   UserPlus,
+  UserCheck,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -99,6 +100,7 @@ export default function DepositsPage() {
   const companiesFn = useStore((s) => s.companies);
   const banksFn = useStore((s) => s.banks);
   const playerById = useStore((s) => s.playerById);
+  const setAssignment = useStore((s) => s.setAssignment);
   const bonusOptionsFn = useStore((s) => s.bonusOptions);
 
   const banks = banksFn();
@@ -115,6 +117,7 @@ export default function DepositsPage() {
   const [assignTargets, setAssignTargets] = useState<number[] | null>(null);
   const [bulkApproving, setBulkApproving] = useState(false);
   const [bulkSettingGame, setBulkSettingGame] = useState(false);
+  const [bulkAssigning, setBulkAssigning] = useState(false);
   const [manualDepositOpen, setManualDepositOpen] = useState(false);
 
   const scopedDeposits = useMemo(
@@ -259,6 +262,26 @@ export default function DepositsPage() {
       toast.warning(
         `${skipped} skipped — no ${game} account linked to that player`,
       );
+  }
+
+  /** Claim every selected deposit that isn't already someone else's. */
+  async function handleBulkAssign() {
+    if (selected.length === 0 || bulkAssigning) return;
+    setBulkAssigning(true);
+    const res = await setAssignment({ kind: "deposit", ids: selected });
+    setBulkAssigning(false);
+    if (!res.ok) {
+      toast.error(res.error ?? "Could not assign");
+      return;
+    }
+    toast.success(
+      `${res.changed} deposit${res.changed === 1 ? "" : "s"} assigned to you`,
+    );
+    if (res.skipped) {
+      toast.warning(
+        `${res.skipped} skipped — already assigned to someone else`,
+      );
+    }
   }
 
   async function handleBulkApprove() {
@@ -435,6 +458,21 @@ export default function DepositsPage() {
                 >
                   <UserPlus className="h-3.5 w-3.5" />
                   Assign player
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void handleBulkAssign()}
+                  disabled={bulkApproving || bulkAssigning}
+                  title="Claim these deposits so other agents can see you're on them"
+                  className="cursor-pointer"
+                >
+                  {bulkAssigning ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <UserCheck className="h-3.5 w-3.5" />
+                  )}
+                  Assign to me
                 </Button>
                 <SearchableSelect
                   value={null}

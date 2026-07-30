@@ -167,12 +167,17 @@ type Store = {
     toGame: string;
     amount: number;
   }) => Promise<MutationResult>;
-  /** Claim a transaction so other agents can see who's on it (or release it). */
+  /**
+   * Claim transactions so other agents can see who's on them (or release
+   * them). Pass `id` for one or `ids` for a batch; returns how many actually
+   * changed and how many were skipped because someone else holds them.
+   */
   setAssignment: (input: {
     kind: "deposit" | "withdrawal" | "game_transfer";
-    id: number;
+    id?: number;
+    ids?: number[];
     assign?: boolean;
-  }) => Promise<MutationResult>;
+  }) => Promise<MutationResult & { changed?: number; skipped?: number }>;
   /** Give a player the next free pooled account for a game. */
   autoAssignGameAccount: (
     playerId: number,
@@ -615,11 +620,19 @@ export const useStore = create<Store>((set, get) => {
         }),
       }),
 
-    setAssignment: ({ kind, id, assign = true }) =>
-      mutate("/api/assignments", {
-        method: "POST",
-        body: JSON.stringify({ kind, id, assign }),
-      }),
+    setAssignment: async ({ kind, id, ids, assign = true }) => {
+      const res = await api<{ changed: number; skipped: number }>(
+        "/api/assignments",
+        { method: "POST", body: JSON.stringify({ kind, id, ids, assign }) },
+      );
+      if (!res.ok) return { ok: false, error: res.error };
+      await get().refresh();
+      return {
+        ok: true,
+        changed: res.data?.changed ?? 0,
+        skipped: res.data?.skipped ?? 0,
+      };
+    },
 
     autoAssignGameAccount: (playerId, gameName) =>
       mutate(`/api/players/${playerId}/auto-assign-game`, {

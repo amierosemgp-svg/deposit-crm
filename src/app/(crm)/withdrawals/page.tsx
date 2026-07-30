@@ -36,6 +36,7 @@ import {
   Paperclip,
   Plus,
   Search,
+  UserCheck,
   Users,
   X,
 } from "lucide-react";
@@ -62,6 +63,7 @@ export default function WithdrawalsPage() {
   const createWithdrawal = useStore((s) => s.createWithdrawal);
   const rejectWithdrawal = useStore((s) => s.rejectWithdrawal);
   const uploadFile = useStore((s) => s.uploadFile);
+  const setAssignment = useStore((s) => s.setAssignment);
   const me = useStore((s) => s.me);
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
   const selectedLeaderId = useStore((s) => s.selectedLeaderId);
@@ -72,6 +74,8 @@ export default function WithdrawalsPage() {
 
   const [pullingId, setPullingId] = useState<number | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>("requested");
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkAssigning, setBulkAssigning] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
 
   // --- New Withdrawal dialog state ---
@@ -178,6 +182,61 @@ export default function WithdrawalsPage() {
   const newAmt = Number(newAmount) || 0;
   const newValid =
     !!newPlayer && !!newGame && newAmt > 0 && newAmt <= newBalance;
+
+  // Only rows still needing work are worth claiming; a paid withdrawal has
+  // nobody left to handle it.
+  const selectableIds = useMemo(
+    () =>
+      isViewer
+        ? []
+        : sorted
+            .filter(
+              (w) => w.status === "requested" || w.status === "credits_pulled",
+            )
+            .map((w) => w.withdrawal_id),
+    [sorted, isViewer],
+  );
+  // Drop anything that left the filter since it was ticked.
+  const selected = useMemo(
+    () => selectableIds.filter((id) => selectedIds.has(id)),
+    [selectableIds, selectedIds],
+  );
+
+  function toggleRow(withdrawalId: number) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(withdrawalId)) next.delete(withdrawalId);
+      else next.add(withdrawalId);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    setSelectedIds((prev) =>
+      selected.length === selectableIds.length && selectableIds.length > 0
+        ? new Set()
+        : new Set([...prev, ...selectableIds]),
+    );
+  }
+
+  /** Claim every selected withdrawal that isn't already someone else's. */
+  async function handleBulkAssign() {
+    if (selected.length === 0 || bulkAssigning) return;
+    setBulkAssigning(true);
+    const res = await setAssignment({ kind: "withdrawal", ids: selected });
+    setBulkAssigning(false);
+    if (!res.ok) {
+      toast.error(res.error ?? "Could not assign");
+      return;
+    }
+    toast.success(
+      `${res.changed} withdrawal${res.changed === 1 ? "" : "s"} assigned to you`,
+    );
+    if (res.skipped) {
+      toast.warning(`${res.skipped} skipped — already assigned to someone else`);
+    }
+    setSelectedIds(new Set());
+  }
 
   function resetNewForm() {
     setNewPlayerId("");
@@ -290,6 +349,38 @@ export default function WithdrawalsPage() {
               className="h-8 w-[240px] pl-8"
             />
           </div>
+          {selected.length > 0 && (
+            <div className="ml-auto flex items-center gap-1.5">
+              <span className="mr-1 text-[11px] font-medium">
+                {selected.length} selected
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void handleBulkAssign()}
+                disabled={bulkAssigning}
+                title="Claim these so other agents can see you're on them"
+                className="cursor-pointer"
+              >
+                {bulkAssigning ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <UserCheck className="h-3.5 w-3.5" />
+                )}
+                Assign to me
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setSelectedIds(new Set())}
+                disabled={bulkAssigning}
+                className="cursor-pointer"
+              >
+                <X className="h-3.5 w-3.5" />
+                Clear
+              </Button>
+            </div>
+          )}
         </div>
 
         {/* Status tabs */}
@@ -333,6 +424,27 @@ export default function WithdrawalsPage() {
           <table className="w-full text-sm">
             <thead className="bg-muted/50 text-muted-foreground">
               <tr>
+                {!isViewer && (
+                  <th className="w-9 px-3 py-2.5">
+                    <input
+                      type="checkbox"
+                      aria-label="Select all actionable withdrawals"
+                      checked={
+                        selectableIds.length > 0 &&
+                        selected.length === selectableIds.length
+                      }
+                      ref={(el) => {
+                        if (el)
+                          el.indeterminate =
+                            selected.length > 0 &&
+                            selected.length < selectableIds.length;
+                      }}
+                      onChange={toggleAll}
+                      disabled={selectableIds.length === 0 || bulkAssigning}
+                      className="h-4 w-4 cursor-pointer accent-primary disabled:cursor-not-allowed"
+                    />
+                  </th>
+                )}
                 <th className="px-3 py-2.5 text-left font-medium whitespace-nowrap">Requested</th>
                 <th className="px-3 py-2.5 text-left font-medium">Player</th>
                 <th className="px-3 py-2.5 text-right font-medium whitespace-nowrap">Requested Amt</th>
@@ -350,7 +462,7 @@ export default function WithdrawalsPage() {
               {sorted.length === 0 && (
                 <tr className="border-t">
                   <td
-                    colSpan={9}
+                    colSpan={10}
                     className="px-3 py-10 text-center text-sm text-muted-foreground"
                   >
                     {!hydrated ? (
@@ -368,8 +480,31 @@ export default function WithdrawalsPage() {
                 const bal = getBalance(w.player_id, w.game_name);
                 const canPull = !isViewer && w.status === "requested";
                 const canPay = !isViewer && w.status === "credits_pulled";
+                const selectable =
+                  !isViewer &&
+                  (w.status === "requested" || w.status === "credits_pulled");
                 return (
-                  <tr key={w.withdrawal_id} className="border-t hover:bg-muted/30">
+                  <tr
+                    key={w.withdrawal_id}
+                    className={cn(
+                      "border-t",
+                      selectedIds.has(w.withdrawal_id) && selectable
+                        ? "bg-primary/5 hover:bg-primary/10"
+                        : "hover:bg-muted/30",
+                    )}
+                  >
+                    {!isViewer && (
+                      <td className="px-3 py-2">
+                        <input
+                          type="checkbox"
+                          aria-label={`Select withdrawal ${w.withdrawal_id}`}
+                          checked={selectable && selectedIds.has(w.withdrawal_id)}
+                          onChange={() => toggleRow(w.withdrawal_id)}
+                          disabled={!selectable || bulkAssigning}
+                          className="h-4 w-4 cursor-pointer accent-primary disabled:cursor-not-allowed disabled:opacity-30"
+                        />
+                      </td>
+                    )}
                     <td className="px-3 py-2 whitespace-nowrap">
                       <div className="text-[12px]">{formatDateTime(w.created_at)}</div>
                       <div className="text-[10px] text-muted-foreground">

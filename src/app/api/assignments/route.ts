@@ -1,8 +1,8 @@
-import { eq } from "drizzle-orm";
+import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { deposits, gameTransfers, withdrawals } from "@/db/schema";
-import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
+import { authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 
 /**
@@ -28,51 +28,72 @@ const KINDS = {
   },
 } as const;
 
-const bodySchema = z.object({
-  kind: z.enum(["deposit", "withdrawal", "game_transfer"]),
-  id: z.number().int().positive(),
-  // Omitted or true claims it for the caller; false releases it.
-  assign: z.boolean().optional(),
-});
+const bodySchema = z
+  .object({
+    kind: z.enum(["deposit", "withdrawal", "game_transfer"]),
+    id: z.number().int().positive().optional(),
+    ids: z.array(z.number().int().positive()).min(1).max(200).optional(),
+    // Omitted or true claims it for the caller; false releases it.
+    assign: z.boolean().optional(),
+  })
+  .refine((b) => b.id !== undefined || b.ids !== undefined, {
+    message: "Provide id or ids",
+  });
 
-/** POST /api/assignments — claim or release a transaction. */
+/**
+ * POST /api/assignments — claim or release one transaction (`id`) or a batch
+ * (`ids`, up to 200).
+ *
+ * Both directions refuse to touch someone else's claim. Silently reassigning
+ * twenty transactions out from under a colleague mid-queue is exactly the
+ * confusion this feature exists to prevent, so those are skipped and counted
+ * rather than taken.
+ */
 export async function POST(request: Request) {
   try {
     const user = await requireWriteUser();
     const parsed = bodySchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
-      return jsonError("Provide kind (deposit | withdrawal | game_transfer) and id");
+      return jsonError(
+        "Provide kind (deposit | withdrawal | game_transfer) and id or ids",
+      );
     }
-    const { kind, id, assign = true } = parsed.data;
+    const { kind, assign = true } = parsed.data;
+    const ids = parsed.data.ids ?? [parsed.data.id!];
     const target = KINDS[kind];
 
     const nowIso = new Date().toISOString();
-    const [row] = await db
-      .select()
-      .from(target.table)
-      .where(eq(target.id, id));
-    if (!row) throw new AuthError(404, "Transaction not found");
 
-    // Releasing someone else's claim would let agents silently steal work.
-    if (
-      !assign &&
-      row.assigned_to_user_id !== null &&
-      row.assigned_to_user_id !== user.user_id
-    ) {
-      throw new AuthError(403, "This is assigned to someone else");
-    }
+    // Only rows that are unclaimed or already ours. Anything held by someone
+    // else falls out here and is reported as skipped.
+    const claimable = or(
+      isNull(target.assignee),
+      eq(target.assignee, user.user_id),
+    )!;
 
-    const [updated] = await db
+    const updated = await db
       .update(target.table)
       .set(
         assign
           ? { assigned_to_user_id: user.user_id, assigned_at: nowIso }
           : { assigned_to_user_id: null, assigned_at: null },
       )
-      .where(eq(target.id, id))
-      .returning();
+      .where(and(inArray(target.id, ids), claimable))
+      .returning({ id: target.id });
 
-    return Response.json({ ok: true, assignment: updated });
+    const changed = updated.length;
+    const skipped = ids.length - changed;
+
+    if (changed === 0) {
+      return jsonError(
+        ids.length === 1
+          ? "That transaction is assigned to someone else"
+          : "All selected transactions are assigned to someone else",
+        409,
+      );
+    }
+
+    return Response.json({ ok: true, changed, skipped });
   } catch (e) {
     return (
       authErrorResponse(e) ?? (console.error(e), jsonError("Server error", 500))
