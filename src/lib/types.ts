@@ -249,6 +249,8 @@ export type BankAccount = {
   login_id?: string | null;
   login_password?: string | null;
   login_pin?: string | null;
+  /** The device this account's banking app is bound to, reported by the bot. */
+  device_id?: string | null;
   last_heartbeat_at?: string | null;
   current_balance: number;
   status: "active" | "inactive";

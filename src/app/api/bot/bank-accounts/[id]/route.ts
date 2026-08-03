@@ -29,9 +29,17 @@ const patchSchema = z.object({
   label: z.string().nullable().optional(),
   current_balance: z.number().min(0).optional(),
   status: z.enum(["active", "inactive"]).optional(),
+  // The device this account's banking app is bound to. Send null to clear it
+  // when the account is moved off a device.
+  device_id: z.string().max(120).nullable().optional(),
 });
 
-/** PATCH /api/bot/bank-accounts/:id */
+/**
+ * PATCH /api/bot/bank-accounts/:id
+ *
+ * An empty body is rejected rather than treated as a no-op update — it almost
+ * always means a typo'd field name, and silently returning 200 hides that.
+ */
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -41,6 +49,11 @@ export async function PATCH(
   const { id } = await params;
   const parsed = patchSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return jsonError("Invalid payload");
+  if (Object.keys(parsed.data).length === 0) {
+    return jsonError(
+      "Nothing to update — send at least one of: role, bank_name, account_number, account_holder, label, current_balance, status, device_id",
+    );
+  }
 
   const [updated] = await db
     .update(bankAccounts)

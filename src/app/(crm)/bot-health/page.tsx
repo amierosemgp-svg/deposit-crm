@@ -1,7 +1,14 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Banknote, Bot, Gamepad2, RefreshCw, Search } from "lucide-react";
+import {
+  Banknote,
+  Bot,
+  Gamepad2,
+  RefreshCw,
+  Search,
+  Smartphone,
+} from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -166,7 +173,9 @@ export default function BotHealthPage() {
           a.bank_name.toLowerCase().includes(q) ||
           (a.label ?? "").toLowerCase().includes(q) ||
           a.account_number.toLowerCase().includes(q) ||
-          (a.login_id ?? "").toLowerCase().includes(q),
+          (a.login_id ?? "").toLowerCase().includes(q) ||
+          // Searchable so "which account is on device X" is one query.
+          (a.device_id ?? "").toLowerCase().includes(q),
       )
       .sort((a, b) => {
         // Offline first — the whole point of this page is spotting what's down.
@@ -379,6 +388,12 @@ export default function BotHealthPage() {
                 <div className="truncate font-mono text-[11px] text-muted-foreground">
                   {a.account_number}
                 </div>
+                {a.device_id && (
+                  <div className="mt-0.5 flex items-center gap-1 text-[10px] text-muted-foreground">
+                    <Smartphone className="h-2.5 w-2.5 shrink-0" />
+                    <span className="truncate font-mono">{a.device_id}</span>
+                  </div>
+                )}
               </div>
               <div className="shrink-0 text-right">
                 <OnlinePip online={isOnline(a.last_heartbeat_at)} />

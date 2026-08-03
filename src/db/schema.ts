@@ -221,6 +221,10 @@ export const bankAccounts = pgTable("bank_accounts", {
   login_id: varchar("login_id", { length: 80 }),
   login_password: varchar("login_password", { length: 120 }),
   login_pin: varchar("login_pin", { length: 20 }),
+  // The device this account's banking app is bound to. Banks tie a login to
+  // one registered device, so when a balance stops updating the question is
+  // which device was on it — the bot reports this as it picks the account up.
+  device_id: varchar("device_id", { length: 120 }),
   // Last time the AI bot pinged us for this account (heartbeat/online status).
   last_heartbeat_at: timestamp("last_heartbeat_at", {
     withTimezone: true,

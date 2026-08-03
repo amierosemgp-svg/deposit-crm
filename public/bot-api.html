@@ -886,7 +886,8 @@
       <section id="bank-accounts">
         <h2>Resource</h2>
         <div class="block-title">Bank accounts</div>
-        <div class="prose"><p>Collection and payout accounts owned by an entity. <code>role: "deposit"</code> = player collection (the accounts the bot watches); <code>role: "withdrawal"</code> = payouts. <code>GET</code> responses include the account's <strong>online-banking login</strong> — <code>username</code>, <code>password</code>, <code>pin</code> (also exposed as <code>login_id</code> / <code>login_password</code> / <code>login_pin</code>); these are <code>null</code> until an admin fills them in. A company-scoped key returns only its own company's accounts.</p></div>
+        <div class="prose"><p>Collection and payout accounts owned by an entity. <code>role: "deposit"</code> = player collection (the accounts the bot watches); <code>role: "withdrawal"</code> = payouts. <code>GET</code> responses include the account's <strong>online-banking login</strong> — <code>username</code>, <code>password</code>, <code>pin</code> (also exposed as <code>login_id</code> / <code>login_password</code> / <code>login_pin</code>); these are <code>null</code> until an admin fills them in. A company-scoped key returns only its own company's accounts.</p>
+        <p><b><code>device_id</code></b> — the device this account's banking app is bound to. Banks tie a login to one registered device, so when a balance stops updating the first question is which device was on it. <b>Report it as you pick the account up</b>; send <code>null</code> to clear it when the account moves off a device. It shows against the account on the CRM's Bot Health page and is searchable there, so "which account is on device X" is one query.</p></div>
 
         <div class="ep">
           <div class="ep-head"><span class="m get">Get</span><span class="ep-path">/api/bot/bank-accounts</span><span class="use-tag">List</span></div>
@@ -896,7 +897,7 @@
         <div class="ep">
           <div class="ep-head"><span class="m post">Post</span><span class="ep-path">/api/bot/bank-accounts</span><span class="use-tag">Create</span></div>
           <div class="ep-body">
-            <div class="prose"><p>Body: <code>entity_id</code>, <code>role</code>, <code>bank_name</code>, <code>account_number</code>, <code>account_holder</code>, optional <code>label</code>, <code>current_balance</code>, <code>status</code>. The entity must be a leader, company, or the main company.</p></div>
+            <div class="prose"><p>Body: <code>entity_id</code>, <code>role</code>, <code>bank_name</code>, <code>account_number</code>, <code>account_holder</code>, optional <code>label</code>, <code>device_id</code>, <code>current_balance</code>, <code>status</code>. The entity must be a leader, company, or the main company.</p></div>
             <div class="code" data-copy>
               <button class="copy">Copy</button>
               <pre><code><span class="k">curl</span> -X POST <span class="s">"$BASE/api/bot/bank-accounts"</span> -H <span class="s">"X-API-Key: $KEY"</span> \
@@ -914,7 +915,21 @@
 
         <div class="ep">
           <div class="ep-head"><span class="m patch">Patch</span><span class="ep-path">/api/bot/bank-accounts/:id</span><span class="use-tag">Update</span></div>
-          <div class="ep-body"><div class="prose"><p>Any of <code>role</code>, <code>bank_name</code>, <code>account_number</code>, <code>account_holder</code>, <code>label</code>, <code>current_balance</code>, <code>status</code>.</p></div></div>
+          <div class="ep-body">
+            <div class="prose"><p>Any of <code>role</code>, <code>bank_name</code>, <code>account_number</code>, <code>account_holder</code>, <code>label</code>, <code>current_balance</code>, <code>status</code>, <code>device_id</code>. An empty body is a <span class="sc warn">400</span> rather than a silent no-op — it nearly always means a mistyped field name.</p></div>
+            <div class="code" data-copy>
+              <button class="copy">Copy</button>
+              <pre><code><span class="cmt"># report the device this account is bound to</span>
+<span class="k">curl</span> -X PATCH <span class="s">"$BASE/api/bot/bank-accounts/3"</span> -H <span class="s">"X-API-Key: $KEY"</span> \
+  -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{ "device_id": "pixel-7a-kl-03" }'</span>
+
+<span class="cmt"># clear it when the account moves off a device</span>
+<span class="k">curl</span> -X PATCH <span class="s">"$BASE/api/bot/bank-accounts/3"</span> -H <span class="s">"X-API-Key: $KEY"</span> \
+  -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{ "device_id": null }'</span></code></pre>
+            </div>
+          </div>
         </div>
 
         <div class="ep">

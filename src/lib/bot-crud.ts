@@ -98,6 +98,8 @@ export function bankAccountJson(a: typeof bankAccounts.$inferSelect) {
     login_id: a.login_id,
     login_password: a.login_password,
     login_pin: a.login_pin,
+    // The device this account's banking app is bound to.
+    device_id: a.device_id,
     last_heartbeat_at: a.last_heartbeat_at,
     current_balance: a.current_balance,
     status: a.status,
