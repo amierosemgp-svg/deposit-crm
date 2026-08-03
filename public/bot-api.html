@@ -339,7 +339,11 @@
         <div class="sub">Base URL</div>
         <div class="code" data-copy>
           <button class="copy">Copy</button>
-          <pre><code>https://deposit-crm.vercel.app</code></pre>
+          <pre><code>https://seven11bo.online</code></pre>
+          <div class="note warn">
+            <span class="ic">!</span>
+            <div>The apex <code>308</code>-redirects to <code>www.seven11bo.online</code>. curl follows that automatically, but <b>many HTTP clients do not follow redirects on POST by default</b> — and a dropped <code>308</code> looks like success while the request never arrives. Either enable redirect-following, or point <code>$BASE</code> straight at <code>https://www.seven11bo.online</code>.</div>
+          </div>
         </div>
       </section>
 
@@ -1436,7 +1440,7 @@
         <div class="note" style="margin-top:22px">
           <span class="ic">i</span>
           <div>Set two shell variables and every example on this page runs as-is:<br>
-          <code>BASE=https://deposit-crm.vercel.app</code> · <code>KEY=&lt;your bot key&gt;</code></div>
+          <code>BASE=https://seven11bo.online</code> · <code>KEY=&lt;your bot key&gt;</code></div>
         </div>
       </section>
     </main>
@@ -1447,7 +1451,7 @@
   <div class="wrap">
     <b>Deposit CRM Bot API</b>
     <span>·</span>
-    <span>Base: deposit-crm.vercel.app</span>
+    <span>Base: seven11bo.online</span>
     <span>·</span>
     <span>Questions on integration → the CRM team</span>
   </div>

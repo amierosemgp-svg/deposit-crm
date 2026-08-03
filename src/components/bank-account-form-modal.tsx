@@ -36,6 +36,7 @@ type FormState = {
   login_id: string;
   login_password: string;
   login_pin: string;
+  device_id: string;
   current_balance: string;
   status: "active" | "inactive";
 };
@@ -51,6 +52,7 @@ const EMPTY: FormState = {
   login_id: "",
   login_password: "",
   login_pin: "",
+  device_id: "",
   current_balance: "0",
   status: "active",
 };
@@ -103,6 +105,7 @@ export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
           login_id: account.login_id ?? "",
           login_password: account.login_password ?? "",
           login_pin: account.login_pin ?? "",
+          device_id: account.device_id ?? "",
           current_balance: String(account.current_balance),
           status: account.status,
         });
@@ -149,6 +152,7 @@ export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
         login_id: form.login_id.trim() || null,
         login_password: form.login_password.trim() || null,
         login_pin: form.login_pin.trim() || null,
+        device_id: form.device_id.trim() || null,
         status: form.status,
       });
     } else {
@@ -162,6 +166,7 @@ export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
         login_id: form.login_id.trim() || undefined,
         login_password: form.login_password.trim() || undefined,
         login_pin: form.login_pin.trim() || undefined,
+        device_id: form.device_id.trim() || undefined,
         current_balance: Number(form.current_balance),
         status: form.status,
       });
@@ -399,6 +404,23 @@ export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
                   inputMode="numeric"
                   className="h-8 font-mono"
                 />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="ba-device-id" className="text-[11px]">
+                  Device ID
+                </Label>
+                <Input
+                  id="ba-device-id"
+                  value={form.device_id}
+                  onChange={(e) => update("device_id", e.target.value)}
+                  placeholder="e.g. pixel-7a-kl-03"
+                  autoComplete="off"
+                  className="h-8 font-mono"
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  The device this account&apos;s banking app is bound to. The bot
+                  also sets this itself as it picks the account up.
+                </p>
               </div>
             </div>
 

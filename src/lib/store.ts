@@ -223,6 +223,7 @@ type Store = {
     login_id?: string;
     login_password?: string;
     login_pin?: string;
+    device_id?: string;
     current_balance?: number;
     status?: "active" | "inactive";
   }) => Promise<MutationResult>;

@@ -15,6 +15,7 @@ const createSchema = z.object({
   login_id: z.string().optional(),
   login_password: z.string().optional(),
   login_pin: z.string().optional(),
+  device_id: z.string().max(120).optional(),
   current_balance: z.number().min(0).default(0),
   status: z.enum(["active", "inactive"]).default("active"),
 });
