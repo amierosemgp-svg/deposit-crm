@@ -9,6 +9,7 @@ import {
 } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
+import { maybeCreateReferralBonus } from "@/lib/referral";
 
 /**
  * POST /api/deposits/:id/complete — manual completion of a skip-bot deposit.
@@ -120,6 +121,9 @@ export async function POST(
         user_id: user.user_id,
         details: { source: "manual", action: "manual_complete" },
       });
+
+      // Inside the same transaction, so a bonus can't survive a rollback.
+      await maybeCreateReferralBonus(txn, row.deposit_id);
 
       return updated;
     });

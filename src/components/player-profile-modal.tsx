@@ -26,6 +26,8 @@ import { StatusBadge } from "./status-badge";
 import { GameAccountHistory } from "./game-account-history";
 import { AutoAssignGameButton } from "./auto-assign-game-button";
 import { PlayerTransactionsTab } from "./player-transactions-tab";
+import { ReferralTab } from "./referral-tab";
+import { ReferralBonusTab } from "./referral-bonus-tab";
 import { Separator } from "@/components/ui/separator";
 import {
   Send,
@@ -43,6 +45,8 @@ import {
   Wallet,
   Receipt,
   StickyNote,
+  Network,
+  Gift,
 } from "lucide-react";
 
 type Props = {
@@ -60,6 +64,8 @@ const SECTIONS = [
   { id: "transactions", label: "Transactions", icon: Receipt },
   { id: "banks", label: "Bank Accounts", icon: Landmark },
   { id: "games", label: "Game Accounts", icon: Gamepad2 },
+  { id: "referrals", label: "Referrals", icon: Network },
+  { id: "recommend-bonus", label: "Recommend Bonus", icon: Gift },
   { id: "notes", label: "Notes", icon: StickyNote },
 ] as const;
 
@@ -780,6 +786,14 @@ export function PlayerProfileModal({ playerId, open, onOpenChange }: Props) {
                                     refreshKey={gameAuditVersion}
                                   />
                                 </section>
+                )}
+
+                {section === "referrals" && (
+                  <ReferralTab playerId={player.player_id} />
+                )}
+
+                {section === "recommend-bonus" && (
+                  <ReferralBonusTab playerId={player.player_id} />
                 )}
 
                 {section === "notes" && (

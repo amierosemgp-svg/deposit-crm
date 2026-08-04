@@ -11,6 +11,7 @@ import {
 import { requireBotKey } from "@/lib/bot-auth";
 import { depositToBotJson, playerGameInfoMap } from "@/lib/bot-transactions";
 import { BotError, botErrorResponse, jsonError } from "@/lib/bot-crud";
+import { maybeCreateReferralBonus } from "@/lib/referral";
 
 /** Allowed forward transitions the bot may drive. */
 const ALLOWED: Record<string, string[]> = {
@@ -171,6 +172,9 @@ export async function PATCH(
             topup_reference: body.game_topup_reference ?? locked.game_topup_reference ?? null,
           },
         });
+
+        // Inside the same transaction, so a bonus can't survive a rollback.
+        await maybeCreateReferralBonus(txn, locked.deposit_id);
       }
 
       const [saved] = await txn

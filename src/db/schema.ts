@@ -80,6 +80,15 @@ export const withdrawalStatusEnum = pgEnum("withdrawal_status", [
   "failed",
 ]);
 
+export const referralBonusStatusEnum = pgEnum("referral_bonus_status", [
+  // Earned and waiting for CS to hand it out.
+  "pending",
+  // Credited to one of the upline's games.
+  "assigned",
+  // Written off — a mistaken referral, a reversed deposit, a duplicate account.
+  "cancelled",
+]);
+
 export const gameAccountActionEnum = pgEnum("game_account_action", [
   "added",
   "updated",
@@ -181,6 +190,14 @@ export const players = pgTable("players", {
   game_accounts: jsonb("game_accounts").$type<
     Array<{ game_name: string; game_username: string }>
   >(),
+  // Who referred this player. One upline per player, set by CS — the referral
+  // tree is an adjacency list, not a separate join table, because a player can
+  // only ever have been referred once.
+  upline_player_id: integer("upline_player_id"),
+  upline_assigned_at: timestamp("upline_assigned_at", {
+    withTimezone: true,
+    mode: "string",
+  }),
   registration_date: timestamp("registration_date", {
     withTimezone: true,
     mode: "string",
@@ -453,6 +470,73 @@ export const gameAccountPool = pgTable(
       t.game_name,
       t.game_username,
     ),
+  ],
+);
+
+/**
+ * A referral bonus the upline earned from a downline's FIRST deposit.
+ *
+ * Created automatically when a downline's first deposit completes, then handed
+ * out by CS: they pick which of the upline's games the credit goes to and
+ * whether the bot moves it or they did it by hand.
+ *
+ * The bonus is a snapshot — deposit_amount and percentage are copied in, so
+ * changing the rate later never rewrites what someone already earned.
+ */
+export const referralBonuses = pgTable(
+  "referral_bonuses",
+  {
+    bonus_id: serial("bonus_id").primaryKey(),
+    // Who earns it.
+    upline_player_id: integer("upline_player_id")
+      .notNull()
+      .references(() => players.player_id),
+    // Whose first deposit triggered it.
+    downline_player_id: integer("downline_player_id")
+      .notNull()
+      .references(() => players.player_id),
+    deposit_id: integer("deposit_id").references(() => deposits.deposit_id),
+    deposit_amount: numeric("deposit_amount", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    }).notNull(),
+    bonus_percentage: numeric("bonus_percentage", {
+      precision: 5,
+      scale: 2,
+      mode: "number",
+    })
+      .notNull()
+      .default(20),
+    bonus_amount: numeric("bonus_amount", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    }).notNull(),
+    status: referralBonusStatusEnum("status").notNull().default("pending"),
+    // Chosen at assign time — which of the upline's games the credit went to.
+    game_name: varchar("game_name", { length: 60 }),
+    // True when CS moved the credit in the back-office themselves; false means
+    // the bot was asked to do it via a game transfer.
+    skip_bot: boolean("skip_bot").notNull().default(false),
+    // The bot-driven transfer that carries the credit, when one was created.
+    game_transfer_id: integer("game_transfer_id"),
+    assigned_by_user_id: integer("assigned_by_user_id").references(
+      () => users.user_id,
+    ),
+    assigned_at: timestamp("assigned_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    note: text("note"),
+    created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    // One first-deposit bonus per downline, ever. This is the guard that stops
+    // a re-completed or duplicated deposit minting a second payout.
+    unique("referral_bonuses_downline_key").on(t.downline_player_id),
   ],
 );
 

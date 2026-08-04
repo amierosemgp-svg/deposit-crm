@@ -183,6 +183,16 @@ type Store = {
     playerId: number,
     gameName: string,
   ) => Promise<MutationResult>;
+  /** Set (or clear, with null) who referred this player. */
+  setUpline: (
+    playerId: number,
+    uplinePlayerId: number | null,
+  ) => Promise<MutationResult>;
+  /** Hand a pending referral bonus to the upline as game credit. */
+  assignReferralBonus: (
+    bonusId: number,
+    input: { game_name: string; skip_bot?: boolean; note?: string },
+  ) => Promise<MutationResult>;
   createPlayer: (input: {
     username: string;
     full_name: string;
@@ -639,6 +649,18 @@ export const useStore = create<Store>((set, get) => {
       mutate(`/api/players/${playerId}/auto-assign-game`, {
         method: "POST",
         body: JSON.stringify({ game_name: gameName }),
+      }),
+
+    setUpline: (playerId, uplinePlayerId) =>
+      mutate(`/api/players/${playerId}/upline`, {
+        method: "PUT",
+        body: JSON.stringify({ upline_player_id: uplinePlayerId }),
+      }),
+
+    assignReferralBonus: (bonusId, input) =>
+      mutate(`/api/referral-bonuses/${bonusId}/assign`, {
+        method: "POST",
+        body: JSON.stringify(input),
       }),
 
     createPlayer: (input) =>

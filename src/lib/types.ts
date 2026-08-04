@@ -75,6 +75,9 @@ export type Player = {
   company_entity_id: number;
   bank_accounts?: PlayerBankAccount[] | null;
   game_accounts?: PlayerGameAccount[] | null;
+  /** Who referred this player. Null when they came in on their own. */
+  upline_player_id?: number | null;
+  upline_assigned_at?: string | null;
   registration_date: string;
   status: "active" | "suspended";
   total_deposits: number;
