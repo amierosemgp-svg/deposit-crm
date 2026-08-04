@@ -14,11 +14,6 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { StatusBadge, SourceBadge } from "@/components/status-badge";
 import { SearchableSelect } from "@/components/searchable-select";
 import { AssigneeCell } from "@/components/assignee-cell";
@@ -678,16 +673,13 @@ export default function DepositsPage() {
                         ) : (
                           <div className="space-y-1.5">
                             {d.bank_description ? (
-                              <Tooltip>
-                                <TooltipTrigger
-                                  render={
-                                    <span className="block max-w-[170px] cursor-default truncate text-[12px] italic text-muted-foreground" />
-                                  }
-                                >
-                                  {d.bank_description}
-                                </TooltipTrigger>
-                                <TooltipContent>{d.bank_description}</TooltipContent>
-                              </Tooltip>
+                              // Shown in full and wrapped rather than clipped:
+                              // this is the only clue to who sent an unmatched
+                              // deposit, and the tail is often the useful part.
+                              // The max-width keeps the column from stretching.
+                              <span className="block max-w-[240px] text-[12px] italic leading-snug break-words text-muted-foreground">
+                                {d.bank_description}
+                              </span>
                             ) : (
                               <span className="block text-[12px] italic text-muted-foreground">
                                 Unmatched deposit

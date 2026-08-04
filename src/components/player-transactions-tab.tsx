@@ -6,7 +6,7 @@ import { formatRM, formatDateTime } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { ListLoading } from "@/components/list-loading";
 import { cn } from "@/lib/utils";
-import { Loader2, Receipt } from "lucide-react";
+import { Loader2, Receipt, X } from "lucide-react";
 
 type Entry = {
   transaction_id: number;
@@ -51,12 +51,14 @@ const PAGE = 25;
  */
 export function PlayerTransactionsTab({ playerId }: { playerId: number }) {
   const [type, setType] = useState("all");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
   const [loadingMore, setLoadingMore] = useState(false);
   const userName = useStore((s) => s.userName);
 
   // The result is stamped with the request it answered, so "still loading" is
   // derived from a key mismatch rather than a synchronous reset in the effect.
-  const requestKey = `${playerId}:${type}`;
+  const requestKey = `${playerId}:${type}:${from}:${to}`;
   const [result, setResult] = useState<{
     key: string;
     entries: Entry[];
@@ -65,13 +67,17 @@ export function PlayerTransactionsTab({ playerId }: { playerId: number }) {
   }>({ key: "", entries: [], total: 0, error: null });
 
   const load = useCallback(
-    async (offset: number, filter: string) => {
+    async (offset: number, filter: string, fromDate: string, toDate: string) => {
       const params = new URLSearchParams({
         player_id: String(playerId),
         limit: String(PAGE),
         offset: String(offset),
       });
       if (filter !== "all") params.set("type", filter);
+      // Filtered server-side — the range has to apply to the whole history,
+      // not just the page already fetched.
+      if (fromDate) params.set("from", fromDate);
+      if (toDate) params.set("to", toDate);
       const res = await fetch(`/api/history?${params}`);
       const data = await res.json();
       if (data.error) throw new Error(data.error);
@@ -83,7 +89,7 @@ export function PlayerTransactionsTab({ playerId }: { playerId: number }) {
   // Refetch from the top whenever the player or the type filter changes.
   useEffect(() => {
     let cancelled = false;
-    load(0, type)
+    load(0, type, from, to)
       .then((d) => {
         if (cancelled) return;
         setResult({
@@ -105,7 +111,7 @@ export function PlayerTransactionsTab({ playerId }: { playerId: number }) {
     return () => {
       cancelled = true;
     };
-  }, [load, type, requestKey]);
+  }, [load, type, from, to, requestKey]);
 
   const loading = result.key !== requestKey;
   const entries = loading ? [] : result.entries;
@@ -116,7 +122,7 @@ export function PlayerTransactionsTab({ playerId }: { playerId: number }) {
     if (loadingMore) return;
     setLoadingMore(true);
     try {
-      const d = await load(entries.length, type);
+      const d = await load(entries.length, type, from, to);
       setResult((prev) => ({
         ...prev,
         entries: [...prev.entries, ...d.entries],
@@ -156,6 +162,44 @@ export function PlayerTransactionsTab({ playerId }: { playerId: number }) {
         )}
       </div>
 
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[11px] text-muted-foreground">From</span>
+        <input
+          type="date"
+          value={from}
+          // An open-ended range is normal here, so neither end is required —
+          // but "from" after "to" returns nothing and looks like a bug, so the
+          // inputs bound each other.
+          max={to || undefined}
+          onChange={(e) => setFrom(e.target.value)}
+          aria-label="From date"
+          className="h-8 rounded-md border border-input bg-background px-2 text-[12px] outline-none focus:border-ring focus:ring-2 focus:ring-ring/30"
+        />
+        <span className="text-[11px] text-muted-foreground">to</span>
+        <input
+          type="date"
+          value={to}
+          min={from || undefined}
+          onChange={(e) => setTo(e.target.value)}
+          aria-label="To date"
+          className="h-8 rounded-md border border-input bg-background px-2 text-[12px] outline-none focus:border-ring focus:ring-2 focus:ring-ring/30"
+        />
+        {(from || to) && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setFrom("");
+              setTo("");
+            }}
+            className="h-8 cursor-pointer text-[11px]"
+          >
+            <X className="h-3 w-3" />
+            Clear
+          </Button>
+        )}
+      </div>
+
       {error ? (
         <p className="py-6 text-center text-sm text-rose-600">{error}</p>
       ) : loading ? (
@@ -164,9 +208,11 @@ export function PlayerTransactionsTab({ playerId }: { playerId: number }) {
         <div className="py-12 text-center">
           <Receipt className="mx-auto mb-2 h-5 w-5 text-muted-foreground/50" />
           <p className="text-sm text-muted-foreground">
-            {type === "all"
-              ? "No activity recorded for this player yet."
-              : "Nothing of this type for this player."}
+            {from || to
+              ? "Nothing in that date range."
+              : type === "all"
+                ? "No activity recorded for this player yet."
+                : "Nothing of this type for this player."}
           </p>
         </div>
       ) : (
