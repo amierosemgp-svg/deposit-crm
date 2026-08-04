@@ -21,6 +21,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { initialsOf, formatRelative, formatRM } from "@/lib/format";
 import { useStore } from "@/lib/store";
+import { PlayerSearch } from "./player-search";
 import type { UserRole } from "@/lib/types";
 
 const ROLE_LABELS: Record<UserRole, string> = {
@@ -103,6 +104,8 @@ export function TopNav() {
             </span>
           </div>
         </div>
+
+        <PlayerSearch />
 
         {(companies.length > 1 || selectedLeaderId !== null) && (
           <div className="w-52">
