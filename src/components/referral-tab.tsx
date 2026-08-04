@@ -6,7 +6,7 @@ import { formatRM, formatDateTime } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { PlayerNameLink } from "@/components/player-name-link";
 import { cn } from "@/lib/utils";
-import { ArrowUp, ArrowDown, Loader2, Search, X } from "lucide-react";
+import { ArrowUp, ArrowDown, Loader2, Plus, Search, X } from "lucide-react";
 import { toast } from "sonner";
 
 /**
@@ -24,6 +24,9 @@ export function ReferralTab({ playerId }: { playerId: number }) {
   const [linkingId, setLinkingId] = useState<number | null>(null);
   const [removing, setRemoving] = useState(false);
   const [picking, setPicking] = useState(false);
+  // Adding a downline is the same link written from the other end.
+  const [addingDownline, setAddingDownline] = useState(false);
+  const [downlineQuery, setDownlineQuery] = useState("");
   const busy = linkingId !== null || removing;
 
   const players = useStore((s) => s.players);
@@ -56,6 +59,53 @@ export function ReferralTab({ playerId }: { playerId: number }) {
       .slice(0, 6);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, players, playerId]);
+
+  const downlineMatches = useMemo(() => {
+    const q = downlineQuery.trim().toLowerCase();
+    if (!q) return [];
+    return players
+      .filter(
+        (p) =>
+          p.player_id !== playerId &&
+          // Already this player's downline — nothing to do.
+          p.upline_player_id !== playerId &&
+          companyInScope(p.company_entity_id) &&
+          (p.full_name.toLowerCase().includes(q) ||
+            p.username.toLowerCase().includes(q)),
+      )
+      .slice(0, 6);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [downlineQuery, players, playerId]);
+
+  /**
+   * Point another player's upline at this one. Same endpoint as setting an
+   * upline — the roles are just reversed — so the cycle and scope guards on
+   * the server apply unchanged.
+   */
+  async function addDownline(downlinePlayerId: number) {
+    if (busy) return;
+    const candidate = playerById(downlinePlayerId);
+    // Reassigning someone who already has an upline silently moves the bonus
+    // off whoever referred them; make that a decision, not a side effect.
+    if (candidate?.upline_player_id) {
+      const current = playerById(candidate.upline_player_id);
+      const ok = confirm(
+        `${candidate.full_name} is already referred by ${current?.full_name ?? `player ${candidate.upline_player_id}`}.\n\n` +
+          `Move them under ${player?.full_name}? Any unassigned bonus moves too.`,
+      );
+      if (!ok) return;
+    }
+    setLinkingId(downlinePlayerId);
+    const res = await setUpline(downlinePlayerId, playerId);
+    setLinkingId(null);
+    if (!res.ok) {
+      toast.error(res.error ?? "Could not add the downline");
+      return;
+    }
+    toast.success(`${candidate?.full_name ?? "Player"} added as a downline`);
+    setAddingDownline(false);
+    setDownlineQuery("");
+  }
 
   async function assignUpline(uplineId: number | null) {
     if (busy) return;
@@ -205,12 +255,95 @@ export function ReferralTab({ playerId }: { playerId: number }) {
               {downlines.length}
             </span>
           )}
+          {!isViewer && !addingDownline && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setAddingDownline(true)}
+              className="ml-auto h-6 cursor-pointer text-[11px] font-normal normal-case tracking-normal"
+            >
+              <Plus className="h-3 w-3" />
+              Add downline
+            </Button>
+          )}
         </h3>
+
+        {addingDownline && !isViewer && (
+          <div className="mb-2 rounded-md border bg-muted/20 p-3">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <input
+                autoFocus
+                value={downlineQuery}
+                onChange={(e) => setDownlineQuery(e.target.value)}
+                placeholder="Search the player they referred…"
+                className="h-8 w-full rounded-md border border-input bg-background pl-8 pr-3 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/30"
+              />
+            </div>
+            {downlineMatches.length > 0 && (
+              <div className="mt-1 divide-y rounded-md border bg-popover">
+                {downlineMatches.map((p) => {
+                  const linking = linkingId === p.player_id;
+                  const taken = p.upline_player_id != null;
+                  return (
+                    <button
+                      key={p.player_id}
+                      onClick={() => void addDownline(p.player_id)}
+                      disabled={busy}
+                      className={cn(
+                        "flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-muted disabled:cursor-not-allowed",
+                        linking && "bg-muted",
+                        busy && !linking && "opacity-50",
+                      )}
+                    >
+                      <span className="min-w-0 truncate">
+                        <span className="font-medium">{p.full_name}</span>
+                        <span className="ml-1.5 text-[11px] text-muted-foreground">
+                          @{p.username}
+                        </span>
+                        {taken && (
+                          <span className="ml-1.5 text-[10px] text-amber-600">
+                            already referred
+                          </span>
+                        )}
+                      </span>
+                      {linking && (
+                        <span className="inline-flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          Adding…
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {downlineQuery.trim() && downlineMatches.length === 0 && (
+              <p className="mt-1.5 text-[11px] text-muted-foreground">
+                No player matches that.
+              </p>
+            )}
+            <div className="mt-2 flex justify-end">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setAddingDownline(false);
+                  setDownlineQuery("");
+                }}
+                className="cursor-pointer"
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        )}
 
         {downlines.length === 0 ? (
           <p className="text-[12px] text-muted-foreground">
-            Nobody has been assigned to this player yet. Set this player as
-            someone else&apos;s upline from that player&apos;s Referrals tab.
+            Nobody has been referred by this player yet. Use{" "}
+            <b>Add downline</b> above — their first deposit then earns a bonus
+            you can hand out from the Recommend Bonus tab.
           </p>
         ) : (
           <ul className="divide-y rounded-md border">
