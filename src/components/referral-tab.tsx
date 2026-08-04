@@ -18,8 +18,13 @@ import { toast } from "sonner";
  */
 export function ReferralTab({ playerId }: { playerId: number }) {
   const [query, setQuery] = useState("");
-  const [busy, setBusy] = useState(false);
+  // Which candidate is being linked — drives the per-row spinner. A bare
+  // boolean can't say *which* name was clicked, which is what made the click
+  // feel like nothing had happened.
+  const [linkingId, setLinkingId] = useState<number | null>(null);
+  const [removing, setRemoving] = useState(false);
   const [picking, setPicking] = useState(false);
+  const busy = linkingId !== null || removing;
 
   const players = useStore((s) => s.players);
   const playerById = useStore((s) => s.playerById);
@@ -54,9 +59,11 @@ export function ReferralTab({ playerId }: { playerId: number }) {
 
   async function assignUpline(uplineId: number | null) {
     if (busy) return;
-    setBusy(true);
+    if (uplineId === null) setRemoving(true);
+    else setLinkingId(uplineId);
     const res = await setUpline(playerId, uplineId);
-    setBusy(false);
+    setLinkingId(null);
+    setRemoving(false);
     if (!res.ok) {
       toast.error(res.error ?? "Could not update the upline");
       return;
@@ -96,7 +103,7 @@ export function ReferralTab({ playerId }: { playerId: number }) {
                 disabled={busy}
                 className="cursor-pointer"
               >
-                {busy ? (
+                {removing ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 ) : (
                   <X className="h-3.5 w-3.5" />
@@ -137,21 +144,34 @@ export function ReferralTab({ playerId }: { playerId: number }) {
             </div>
             {matches.length > 0 && (
               <div className="mt-1 divide-y rounded-md border bg-popover">
-                {matches.map((p) => (
-                  <button
-                    key={p.player_id}
-                    onClick={() => void assignUpline(p.player_id)}
-                    disabled={busy}
-                    className="flex w-full cursor-pointer items-center justify-between px-3 py-2 text-left text-sm hover:bg-muted disabled:cursor-not-allowed"
-                  >
-                    <span>
-                      <span className="font-medium">{p.full_name}</span>
-                      <span className="ml-1.5 text-[11px] text-muted-foreground">
-                        @{p.username}
+                {matches.map((p) => {
+                  const linking = linkingId === p.player_id;
+                  return (
+                    <button
+                      key={p.player_id}
+                      onClick={() => void assignUpline(p.player_id)}
+                      disabled={busy}
+                      className={cn(
+                        "flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-muted disabled:cursor-not-allowed",
+                        linking && "bg-muted",
+                        busy && !linking && "opacity-50",
+                      )}
+                    >
+                      <span className="min-w-0 truncate">
+                        <span className="font-medium">{p.full_name}</span>
+                        <span className="ml-1.5 text-[11px] text-muted-foreground">
+                          @{p.username}
+                        </span>
                       </span>
-                    </span>
-                  </button>
-                ))}
+                      {linking && (
+                        <span className="inline-flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          Linking…
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             )}
             {query.trim() && matches.length === 0 && (

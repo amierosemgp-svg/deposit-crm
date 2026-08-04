@@ -651,11 +651,33 @@ export const useStore = create<Store>((set, get) => {
         body: JSON.stringify({ game_name: gameName }),
       }),
 
-    setUpline: (playerId, uplinePlayerId) =>
-      mutate(`/api/players/${playerId}/upline`, {
-        method: "PUT",
-        body: JSON.stringify({ upline_player_id: uplinePlayerId }),
-      }),
+    setUpline: async (playerId, uplinePlayerId) => {
+      const res = await api<{ player: Player }>(
+        `/api/players/${playerId}/upline`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ upline_player_id: uplinePlayerId }),
+        },
+      );
+      if (!res.ok) return { ok: false, error: res.error };
+
+      // Patch the one row from the response instead of awaiting a full
+      // /api/state refetch. On production a round trip is ~1s and /api/state
+      // makes about fifteen of them plus two sweeps, so awaiting it made a
+      // one-field change take several seconds of nothing.
+      const updated = res.data?.player;
+      if (updated) {
+        set((s) => ({
+          players: s.players.map((p) =>
+            p.player_id === updated.player_id ? { ...p, ...updated } : p,
+          ),
+        }));
+      }
+      // Reconcile the rest in the background — a referral bonus may have been
+      // created by this change. Deliberately not awaited.
+      void get().refresh();
+      return { ok: true };
+    },
 
     assignReferralBonus: (bonusId, input) =>
       mutate(`/api/referral-bonuses/${bonusId}/assign`, {
