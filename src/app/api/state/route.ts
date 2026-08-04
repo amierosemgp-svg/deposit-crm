@@ -1,4 +1,4 @@
-import { desc, inArray } from "drizzle-orm";
+import { asc, desc, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import {
   bankAccounts,
@@ -54,6 +54,11 @@ export async function GET() {
               ? undefined
               : inArray(players.company_entity_id, companyIds),
           )
+          // Without an explicit order Postgres returns heap order, and an
+          // UPDATE writes a new tuple at the end of the heap — so editing a
+          // player made them jump position in the list. player_id breaks ties
+          // because a bulk import gives every row the same registration_date.
+          .orderBy(desc(players.registration_date), desc(players.player_id))
       : Promise.resolve([]));
     const playerIds = scopedPlayers.map((p) => p.player_id);
 
@@ -151,7 +156,8 @@ export async function GET() {
                 users.entity_id,
                 entityTree.map((e) => e.entity_id),
               ),
-        ),
+        )
+        .orderBy(asc(users.user_id)),
       db.select().from(settings),
     ]);
 
