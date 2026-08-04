@@ -23,12 +23,19 @@ const STATE_STYLES: Record<BotState, string> = {
   stopped: "bg-zinc-500/10 text-zinc-600 border-zinc-500/30",
 };
 
-function StateBadge({ state }: { state: BotState }) {
+/**
+ * `stale` = the bot stopped pinging, so this state is only the last thing it
+ * managed to report. Rendering a days-old "Working" in full colour next to
+ * "Offline" reads as a contradiction, and looks like the page is broken.
+ */
+function StateBadge({ state, stale }: { state: BotState; stale?: boolean }) {
   return (
     <span
       className={cn(
         "inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium capitalize whitespace-nowrap",
-        STATE_STYLES[state],
+        stale
+          ? "border-zinc-300 bg-zinc-100 text-zinc-500"
+          : STATE_STYLES[state],
       )}
     >
       {state}
@@ -75,7 +82,10 @@ function BotRow({ bot }: { bot: BotHealth }) {
       </div>
 
       <div className="mt-1 flex flex-wrap items-center gap-1.5">
-        <StateBadge state={bot.state} />
+        {!online && (
+          <span className="text-[10px] text-muted-foreground">last known</span>
+        )}
+        <StateBadge state={bot.state} stale={!online} />
         <span className="text-[11px] text-muted-foreground">
           {bot.step ?? "—"}
         </span>
@@ -83,8 +93,12 @@ function BotRow({ bot }: { bot: BotHealth }) {
 
       <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted-foreground">
         {bot.cycle != null && <span>cycle {bot.cycle}</span>}
-        <span title={formatDateTime(bot.last_heartbeat_at)}>
-          ping {formatRelative(bot.last_heartbeat_at)}
+        <span
+          title={formatDateTime(bot.last_heartbeat_at)}
+          className={cn(!online && "font-medium text-red-600")}
+        >
+          {online ? "ping" : "last seen"}{" "}
+          {formatRelative(bot.last_heartbeat_at)}
         </span>
         <span>
           txn{" "}
@@ -229,8 +243,9 @@ export default function BotHealthPage() {
         <div>
           <h1 className="text-2xl font-semibold">Bot Health</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Live status reported by each bot process · online = pinged in the
-            last 90s
+            Online = pinged within 90s. A bot that stopped pinging shows its{" "}
+            <span className="font-medium">last known</span> state — that state
+            is however old the last ping is, not current.
           </p>
         </div>
         <Button
