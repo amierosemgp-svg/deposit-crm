@@ -4,7 +4,7 @@ import { db } from "@/db";
 import { players, transactions } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
-import { wouldCycle } from "@/lib/referral";
+import { syncReferralBonus, wouldCycle } from "@/lib/referral";
 
 const bodySchema = z.object({
   // The referrer. null detaches this player from their upline.
@@ -68,14 +68,22 @@ export async function PUT(
     }
 
     const nowIso = new Date().toISOString();
-    const [updated] = await db
-      .update(players)
-      .set({
-        upline_player_id: uplineId,
-        upline_assigned_at: uplineId === null ? null : nowIso,
-      })
-      .where(eq(players.player_id, playerId))
-      .returning();
+    const updated = await db.transaction(async (txn) => {
+      const [row] = await txn
+        .update(players)
+        .set({
+          upline_player_id: uplineId,
+          upline_assigned_at: uplineId === null ? null : nowIso,
+        })
+        .where(eq(players.player_id, playerId))
+        .returning();
+
+      // The downline may already have deposited — CS often learns about a
+      // referral after the fact. Reconcile in the same transaction so the
+      // bonus and the link can never disagree.
+      await syncReferralBonus(txn, playerId);
+      return row;
+    });
 
     await db.insert(transactions).values({
       player_id: playerId,
