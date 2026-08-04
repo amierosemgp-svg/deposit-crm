@@ -31,7 +31,8 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
  * GET /api/history — server-paginated, filtered audit trail. Unlike the store's
  * capped auditLog (500 rows), this pages through the entire transactions table.
  * Query params: limit, offset, type, user (all|system|<id>), from, to (YYYY-MM-DD),
- * q (player name/username/reference), company_id, leader_id (top-nav scope).
+ * q (player name/username/reference), player_id, company_id, leader_id (top-nav
+ * scope).
  * Rows are always constrained to what the requesting user is allowed to see.
  */
 export async function GET(request: Request) {
@@ -47,6 +48,7 @@ export async function GET(request: Request) {
     const from = sp.get("from");
     const to = sp.get("to");
     const q = sp.get("q")?.trim();
+    const playerId = sp.get("player_id");
     const companyId = sp.get("company_id");
     const leaderId = sp.get("leader_id");
 
@@ -91,6 +93,15 @@ export async function GET(request: Request) {
         return jsonError("Invalid type");
       }
       conds.push(eq(transactions.type, type as (typeof AUDIT_TYPES)[number]));
+    }
+
+    // One player's whole trail — what the player profile's Transactions tab
+    // reads. Still subject to the company scope above, so it can't be used to
+    // reach a player outside the caller's companies.
+    if (playerId) {
+      const id = Number(playerId);
+      if (!Number.isInteger(id) || id <= 0) return jsonError("Invalid player_id");
+      conds.push(eq(transactions.player_id, id));
     }
 
     if (userFilter && userFilter !== "all") {
