@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, createContext, useContext, useCallback } from "react";
-import { PlayerProfileSheet } from "./player-profile-sheet";
+import { PlayerProfileModal } from "./player-profile-modal";
 
 type Ctx = { openPlayer: (id: number) => void };
 const PlayerProfileCtx = createContext<Ctx | null>(null);
@@ -20,7 +20,7 @@ export function PlayerProfileProvider({
   return (
     <PlayerProfileCtx.Provider value={{ openPlayer }}>
       {children}
-      <PlayerProfileSheet
+      <PlayerProfileModal
         playerId={playerId}
         open={open}
         onOpenChange={setOpen}
