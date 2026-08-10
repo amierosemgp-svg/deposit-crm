@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 import { useStore } from "@/lib/store";
 import type { Entity, User, UserRole } from "@/lib/types";
@@ -17,6 +18,7 @@ import {
   Crown,
   Headset,
   Landmark,
+  Pencil,
   Plus,
   UserPlus,
   Users,
@@ -350,6 +352,31 @@ function NodeActionButton({
       <Icon className="h-3.5 w-3.5" />
       {label}
     </Button>
+  );
+}
+
+/** Opens the entity edit page (rename / activate / deactivate). */
+function EditEntityLink({ entity }: { entity: Entity }) {
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      className="h-7 cursor-pointer gap-1 px-2 text-xs"
+      render={<Link href={`/hierarchy/${entity.entity_id}`} />}
+    >
+      <Pencil className="h-3.5 w-3.5" />
+      Edit
+    </Button>
+  );
+}
+
+/** Only drawn for retired nodes — "active" is the unremarkable default. */
+function InactiveTag({ entity }: { entity: Entity }) {
+  if (entity.status === "active") return null;
+  return (
+    <span className="inline-flex shrink-0 items-center rounded-full bg-zinc-500/10 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600">
+      Inactive
+    </span>
   );
 }
 

@@ -288,6 +288,10 @@ type Store = {
     entity_type: "leader" | "company" | "cs";
     name: string;
   }) => Promise<MutationResult>;
+  updateEntity: (
+    entityId: number,
+    patch: { name?: string; status?: "active" | "inactive" },
+  ) => Promise<MutationResult>;
   addUser: (input: {
     username: string;
     email: string;
@@ -782,6 +786,12 @@ export const useStore = create<Store>((set, get) => {
 
     addEntity: (input) =>
       mutate("/api/entities", { method: "POST", body: JSON.stringify(input) }),
+
+    updateEntity: (entityId, patch) =>
+      mutate(`/api/entities/${entityId}`, {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+      }),
 
     addUser: (input) =>
       mutate("/api/users", { method: "POST", body: JSON.stringify(input) }),
