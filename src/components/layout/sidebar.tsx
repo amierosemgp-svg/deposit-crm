@@ -17,6 +17,7 @@ import {
   ChevronRight,
   Receipt,
   Bot,
+  Network,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useStore } from "@/lib/store";
@@ -26,6 +27,7 @@ const NAV = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/deposits", label: "Deposits", icon: Wallet, badge: "pending_deposits" as const },
   { href: "/players", label: "Players", icon: Users },
+  { href: "/hierarchy", label: "Organization Hierarchy", icon: Network },
   { href: "/withdrawals", label: "Withdrawals", icon: Banknote, badge: "pending_withdrawals" as const },
   { href: "/bank-accounts", label: "Bank Accounts", icon: Landmark },
   { href: "/provider-accounts", label: "Provider BO Accounts", icon: KeyRound },
