@@ -42,9 +42,12 @@ const NAV = [
 export function Sidebar() {
   const pathname = usePathname();
   const me = useStore((s) => s.me);
+  const collapsed = useStore((s) => s.sidebarCollapsed);
   // null = follow the route (open while inside /reports); true/false = user override.
   const [reportsToggled, setReportsToggled] = useState<boolean | null>(null);
-  const reportsOpen = reportsToggled ?? pathname.startsWith("/reports");
+  // Collapsed there is no room for the sub-list — Reports is just an icon.
+  const reportsOpen =
+    !collapsed && (reportsToggled ?? pathname.startsWith("/reports"));
   const pendingDeposits = useStore((s) =>
     s.deposits.filter((d) => d.status === "pending").length,
   );
@@ -61,8 +64,15 @@ export function Sidebar() {
   );
 
   return (
-    <aside className="hidden lg:flex w-60 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
-      <div className="flex-1 overflow-y-auto py-3">
+    <aside
+      className={cn(
+        "hidden h-full shrink-0 flex-col overflow-hidden border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-200 lg:flex",
+        collapsed ? "w-16" : "w-60",
+      )}
+    >
+      {/* Own scroll container: a long nav scrolls inside the sidebar, leaving
+          the footer pinned and the page's own scroll untouched. */}
+      <div className="min-h-0 flex-1 overflow-y-auto py-3">
         <nav className="flex flex-col gap-0.5 px-2">
           {items.map((item) => {
             const active =
@@ -74,7 +84,8 @@ export function Sidebar() {
                 : item.badge === "pending_withdrawals"
                   ? pendingWithdrawals
                   : 0;
-            if (item.href === "/reports") {
+            // Collapsed, Reports falls through to the plain icon row below.
+            if (item.href === "/reports" && !collapsed) {
               return (
                 <div key={item.href}>
                   <div
@@ -134,6 +145,29 @@ export function Sidebar() {
                 </div>
               );
             }
+            if (collapsed) {
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  title={item.label}
+                  aria-label={item.label}
+                  className={cn(
+                    "group relative flex items-center justify-center rounded-md py-2 transition-colors",
+                    active
+                      ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                      : "text-sidebar-foreground/75 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                  )}
+                >
+                  <Icon className="h-4 w-4 shrink-0" />
+                  {count > 0 && (
+                    <span className="absolute top-0.5 right-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[9px] font-semibold text-primary-foreground">
+                      {count > 98 ? "99+" : count}
+                    </span>
+                  )}
+                </Link>
+              );
+            }
             return (
               <Link
                 key={item.href}
@@ -157,9 +191,20 @@ export function Sidebar() {
           })}
         </nav>
       </div>
-      <div className="border-t border-sidebar-border p-3 text-[11px] text-muted-foreground">
-        <div>Player Deposit CRM</div>
-        <div className="mt-0.5">v1.0 · Option 3 Prototype</div>
+      <div
+        className={cn(
+          "shrink-0 border-t border-sidebar-border p-3 text-[11px] text-muted-foreground",
+          collapsed && "text-center text-[10px]",
+        )}
+      >
+        {collapsed ? (
+          <div title="Players Console v1.0 · Option 3 Prototype">v1.0</div>
+        ) : (
+          <>
+            <div>Players Console</div>
+            <div className="mt-0.5">v1.0 · Option 3 Prototype</div>
+          </>
+        )}
       </div>
     </aside>
   );

@@ -142,7 +142,7 @@ export function BotLiveFeed() {
       <button
         onClick={expand}
         aria-label="Open bot live feed"
-        className="fixed bottom-4 left-4 z-40 inline-flex cursor-pointer items-center gap-2 rounded-full border bg-popover/95 py-2 pl-3 pr-3.5 text-[12px] font-medium shadow-lg backdrop-blur transition-shadow hover:shadow-xl"
+        className="fixed bottom-20 left-4 z-40 inline-flex cursor-pointer items-center gap-2 rounded-full border bg-popover/95 py-2 pl-3 pr-3.5 text-[12px] font-medium shadow-lg backdrop-blur transition-shadow hover:shadow-xl"
       >
         <span className="relative flex h-2 w-2">
           {!paused && (
@@ -172,7 +172,7 @@ export function BotLiveFeed() {
 
   // ---- Expanded: the panel ----
   return (
-    <div className="fixed bottom-4 left-4 z-40 flex max-h-[min(70vh,520px)] w-[min(420px,calc(100vw-2rem))] flex-col overflow-hidden rounded-xl border bg-popover shadow-2xl">
+    <div className="fixed bottom-20 left-4 z-40 flex max-h-[min(70vh,520px)] w-[min(420px,calc(100vw-2rem))] flex-col overflow-hidden rounded-xl border bg-popover shadow-2xl">
       <div className="flex items-center gap-2 border-b px-3 py-2">
         <Radio
           className={cn(

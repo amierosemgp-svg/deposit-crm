@@ -98,6 +98,10 @@ type Store = {
   settings: ServerSettings;
   notifications: Notification[];
 
+  /** Sidebar collapsed to an icon rail (toggled from the top nav). */
+  sidebarCollapsed: boolean;
+  toggleSidebar: () => void;
+
   /** Company selector in the top nav — null = all visible companies. */
   selectedCompanyId: number | null;
   setSelectedCompanyId: (companyId: number | null) => void;
@@ -386,6 +390,10 @@ export const useStore = create<Store>((set, get) => {
     gameAccountStock: [],
     settings: {},
     notifications: [],
+    sidebarCollapsed: false,
+    toggleSidebar: () =>
+      set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+
     selectedCompanyId: null,
     setSelectedCompanyId: (companyId) => set({ selectedCompanyId: companyId }),
     selectedLeaderId: null,

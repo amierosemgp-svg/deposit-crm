@@ -13,11 +13,13 @@ export default function CrmLayout({
   return (
     <PlayerProfileProvider>
       <StoreHydrator />
-      <div className="flex min-h-screen flex-col">
+      {/* The shell is exactly one viewport tall and never scrolls itself — the
+          header and sidebar stay put while only <main> scrolls. */}
+      <div className="flex h-dvh flex-col overflow-hidden">
         <TopNav />
-        <div className="flex flex-1 overflow-hidden">
+        <div className="flex min-h-0 flex-1 overflow-hidden">
           <Sidebar />
-          <main className="flex-1 overflow-y-auto bg-muted/30">
+          <main className="min-w-0 flex-1 overflow-y-auto bg-muted/30">
             <div className="mx-auto max-w-[1400px] px-6 py-6">
               <ClientOnly
                 fallback={

@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeftRight, Bell, LogOut, Wallet } from "lucide-react";
+import { ArrowLeftRight, Bell, LogOut, Menu } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -20,6 +20,7 @@ import {
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { initialsOf, formatRelative, formatRM } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { useStore } from "@/lib/store";
 import { PlayerSearch } from "./player-search";
 import type { UserRole } from "@/lib/types";
@@ -42,6 +43,8 @@ export function TopNav() {
   const setSelectedCompanyId = useStore((s) => s.setSelectedCompanyId);
   const selectedLeaderId = useStore((s) => s.selectedLeaderId);
   const setSelectedLeaderId = useStore((s) => s.setSelectedLeaderId);
+  const sidebarCollapsed = useStore((s) => s.sidebarCollapsed);
+  const toggleSidebar = useStore((s) => s.toggleSidebar);
   const notifications = useStore((s) => s.notifications);
   const clearNotifications = useStore((s) => s.clearNotifications);
   const logout = useStore((s) => s.logout);
@@ -92,215 +95,244 @@ export function TopNav() {
 
   return (
     <header className="h-14 shrink-0 border-b border-border bg-card/60 backdrop-blur-sm">
-      <div className="flex h-full items-center gap-3 px-4">
-        <div className="flex items-center gap-2 pr-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-            <Wallet className="h-4 w-4" />
-          </div>
-          <div className="flex flex-col leading-tight">
-            <span className="text-sm font-semibold">Player Deposit CRM</span>
-            <span className="text-[10px] text-muted-foreground">
+      <div className="flex h-full items-center">
+        {/* Brand cell — same column as the sidebar (and shrinks with it), so
+            everything after it lines up with the content area. */}
+        <div
+          className={cn(
+            "flex h-full shrink-0 items-center gap-2 transition-[width] duration-200 lg:border-r lg:border-sidebar-border",
+            sidebarCollapsed
+              ? "px-2 lg:w-16 lg:justify-center lg:px-0"
+              : "pl-4 pr-2 lg:w-60",
+          )}
+        >
+          {/* Hidden only on lg+, where the collapse actually applies — below
+              that there is no sidebar and no toggle to bring the brand back. */}
+          <div
+            className={cn(
+              "flex min-w-0 flex-1 flex-col leading-tight",
+              sidebarCollapsed && "lg:hidden",
+            )}
+          >
+            <span className="truncate text-sm font-semibold">
+              Players Console
+            </span>
+            <span className="truncate text-[10px] text-muted-foreground">
               {mainEntity?.name ?? "—"}
             </span>
           </div>
+          <button
+            type="button"
+            onClick={toggleSidebar}
+            aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            aria-expanded={!sidebarCollapsed}
+            title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            className="hidden h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground lg:inline-flex"
+          >
+            <Menu className="h-4 w-4" />
+          </button>
         </div>
 
-        <PlayerSearch />
+        {/* px-6 matches <main>'s inner padding, so the search box lines up
+            with the page heading below it. */}
+        <div className="flex h-full min-w-0 flex-1 items-center gap-3 px-6">
+          <PlayerSearch />
 
-        {(companies.length > 1 || selectedLeaderId !== null) && (
-          <div className="w-52">
-            <Select
-              value={companyValue}
-              onValueChange={(v) =>
-                setSelectedCompanyId(!v || v === "all" ? null : Number(v))
-              }
-            >
-              <SelectTrigger className="h-9 w-full cursor-pointer">
-                <SelectValue placeholder="All Companies">
-                  {companyLabel}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">
-                  {selectedLeaderId === null ? "All Companies" : "All (this leader)"}
-                </SelectItem>
-                {visibleCompanies.map((c) => (
-                  <SelectItem key={c.company_id} value={String(c.company_id)}>
-                    {c.company_name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        )}
-
-        <div className="ml-auto flex items-center gap-2">
-          {showLeaderSelect && (
-            <div className="w-44">
+          {(companies.length > 1 || selectedLeaderId !== null) && (
+            <div className="w-52">
               <Select
-                value={
-                  selectedLeaderId === null ? "all" : String(selectedLeaderId)
-                }
+                value={companyValue}
                 onValueChange={(v) =>
-                  setSelectedLeaderId(!v || v === "all" ? null : Number(v))
+                  setSelectedCompanyId(!v || v === "all" ? null : Number(v))
                 }
-                items={[
-                  { value: "all", label: "All Leaders" },
-                  ...leaders.map((l) => ({
-                    value: String(l.entity_id),
-                    label: l.name,
-                  })),
-                ]}
               >
                 <SelectTrigger className="h-9 w-full cursor-pointer">
-                  <SelectValue placeholder="All Leaders" />
+                  <SelectValue placeholder="All Companies">
+                    {companyLabel}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All Leaders</SelectItem>
-                  {leaders.map((l) => (
-                    <SelectItem key={l.entity_id} value={String(l.entity_id)}>
-                      {l.name}
+                  <SelectItem value="all">
+                    {selectedLeaderId === null ? "All Companies" : "All (this leader)"}
+                  </SelectItem>
+                  {visibleCompanies.map((c) => (
+                    <SelectItem key={c.company_id} value={String(c.company_id)}>
+                      {c.company_name}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
           )}
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={(props) => (
-                <button
-                  {...props}
-                  className="relative inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-                  aria-label="Notifications"
-                >
-                  <Bell className="h-4 w-4" />
-                  {badgeCount > 0 ? (
-                    <span className="absolute -top-0.5 -right-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[9px] font-semibold text-white ring-2 ring-card">
-                      {badgeCount}
-                    </span>
-                  ) : (
-                    notifications.length > 0 && (
-                      <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-primary ring-2 ring-card" />
-                    )
-                  )}
-                </button>
-              )}
-            />
-            <DropdownMenuContent align="end" className="w-80">
-              <div className="flex items-center justify-between px-1.5 py-1 text-xs font-medium text-muted-foreground">
-                <span>Notifications</span>
-                {notifications.length > 0 && (
-                  <button
-                    onClick={clearNotifications}
-                    className="cursor-pointer text-[11px] font-normal text-muted-foreground hover:text-foreground"
-                  >
-                    Clear all
-                  </button>
-                )}
-              </div>
-              <DropdownMenuSeparator />
-              {pendingIncoming.length > 0 && (
-                <>
-                  <div className="px-1.5 py-1 text-[11px] font-medium text-amber-600">
-                    Transfers awaiting confirmation
-                  </div>
-                  {pendingIncoming.map((t) => (
-                    <DropdownMenuItem
-                      key={t.transfer_id}
-                      onClick={() => router.push("/bank-accounts")}
-                      className="cursor-pointer"
-                    >
-                      <ArrowLeftRight className="h-4 w-4 text-amber-600" />
-                      <div className="flex min-w-0 flex-1 flex-col">
-                        <span className="text-xs leading-snug">
-                          Incoming transfer of {formatRM(t.amount)} — confirm to
-                          credit funds
-                        </span>
-                        <span className="mt-0.5 text-[10px] text-muted-foreground">
-                          {formatRelative(t.created_at)}
-                        </span>
-                      </div>
-                    </DropdownMenuItem>
-                  ))}
-                  <DropdownMenuSeparator />
-                </>
-              )}
-              {notifications.length === 0 && pendingIncoming.length === 0 ? (
-                <div className="px-3 py-4 text-center text-xs text-muted-foreground">
-                  No new notifications
-                </div>
-              ) : (
-                notifications.length > 0 && (
-                  <div className="max-h-80 overflow-y-auto">
-                    {notifications.slice(0, 8).map((n) => (
-                      <div
-                        key={n.id}
-                        className="flex items-start gap-2 px-3 py-2 hover:bg-muted/50"
-                      >
-                        <div className="h-1.5 w-1.5 mt-1.5 rounded-full bg-primary shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs leading-snug">{n.message}</p>
-                          <p className="text-[10px] text-muted-foreground mt-0.5">
-                            {formatRelative(new Date(n.createdAt).toISOString())}
-                          </p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
 
-          {me === null ? (
-            <div className="flex items-center gap-2 px-1.5 py-1">
-              <Skeleton className="h-7 w-7 rounded-full" />
-              <div className="flex flex-col gap-1">
-                <Skeleton className="h-3 w-20" />
-                <Skeleton className="h-2.5 w-12" />
+          <div className="ml-auto flex items-center gap-2">
+            {showLeaderSelect && (
+              <div className="w-44">
+                <Select
+                  value={
+                    selectedLeaderId === null ? "all" : String(selectedLeaderId)
+                  }
+                  onValueChange={(v) =>
+                    setSelectedLeaderId(!v || v === "all" ? null : Number(v))
+                  }
+                  items={[
+                    { value: "all", label: "All Leaders" },
+                    ...leaders.map((l) => ({
+                      value: String(l.entity_id),
+                      label: l.name,
+                    })),
+                  ]}
+                >
+                  <SelectTrigger className="h-9 w-full cursor-pointer">
+                    <SelectValue placeholder="All Leaders" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Leaders</SelectItem>
+                    {leaders.map((l) => (
+                      <SelectItem key={l.entity_id} value={String(l.entity_id)}>
+                        {l.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
-            </div>
-          ) : (
+            )}
             <DropdownMenu>
               <DropdownMenuTrigger
                 render={(props) => (
                   <button
                     {...props}
-                    className="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 hover:bg-muted"
+                    className="relative inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                    aria-label="Notifications"
                   >
-                    <Avatar className="h-7 w-7">
-                      <AvatarFallback className="text-[11px]">
-                        {initialsOf(me.full_name)}
-                      </AvatarFallback>
-                    </Avatar>
-                    <div className="flex flex-col items-start leading-tight">
-                      <span className="text-xs font-medium">{me.full_name}</span>
-                      <span className="text-[10px] text-muted-foreground">
-                        {ROLE_LABELS[me.role]}
+                    <Bell className="h-4 w-4" />
+                    {badgeCount > 0 ? (
+                      <span className="absolute -top-0.5 -right-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[9px] font-semibold text-white ring-2 ring-card">
+                        {badgeCount}
                       </span>
-                    </div>
+                    ) : (
+                      notifications.length > 0 && (
+                        <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-primary ring-2 ring-card" />
+                      )
+                    )}
                   </button>
                 )}
               />
-              <DropdownMenuContent align="end" className="w-52">
-                <div className="px-1.5 py-1.5">
-                  <div className="text-sm font-medium">{me.full_name}</div>
-                  <div className="text-[11px] text-muted-foreground">
-                    {me.email ?? `@${me.username}`}
-                  </div>
+              <DropdownMenuContent align="end" className="w-80">
+                <div className="flex items-center justify-between px-1.5 py-1 text-xs font-medium text-muted-foreground">
+                  <span>Notifications</span>
+                  {notifications.length > 0 && (
+                    <button
+                      onClick={clearNotifications}
+                      className="cursor-pointer text-[11px] font-normal text-muted-foreground hover:text-foreground"
+                    >
+                      Clear all
+                    </button>
+                  )}
                 </div>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onClick={() => void logout()}
-                  className="cursor-pointer"
-                >
-                  <LogOut className="h-4 w-4" />
-                  Logout
-                </DropdownMenuItem>
+                {pendingIncoming.length > 0 && (
+                  <>
+                    <div className="px-1.5 py-1 text-[11px] font-medium text-amber-600">
+                      Transfers awaiting confirmation
+                    </div>
+                    {pendingIncoming.map((t) => (
+                      <DropdownMenuItem
+                        key={t.transfer_id}
+                        onClick={() => router.push("/bank-accounts")}
+                        className="cursor-pointer"
+                      >
+                        <ArrowLeftRight className="h-4 w-4 text-amber-600" />
+                        <div className="flex min-w-0 flex-1 flex-col">
+                          <span className="text-xs leading-snug">
+                            Incoming transfer of {formatRM(t.amount)} — confirm to
+                            credit funds
+                          </span>
+                          <span className="mt-0.5 text-[10px] text-muted-foreground">
+                            {formatRelative(t.created_at)}
+                          </span>
+                        </div>
+                      </DropdownMenuItem>
+                    ))}
+                    <DropdownMenuSeparator />
+                  </>
+                )}
+                {notifications.length === 0 && pendingIncoming.length === 0 ? (
+                  <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+                    No new notifications
+                  </div>
+                ) : (
+                  notifications.length > 0 && (
+                    <div className="max-h-80 overflow-y-auto">
+                      {notifications.slice(0, 8).map((n) => (
+                        <div
+                          key={n.id}
+                          className="flex items-start gap-2 px-3 py-2 hover:bg-muted/50"
+                        >
+                          <div className="h-1.5 w-1.5 mt-1.5 rounded-full bg-primary shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs leading-snug">{n.message}</p>
+                            <p className="text-[10px] text-muted-foreground mt-0.5">
+                              {formatRelative(new Date(n.createdAt).toISOString())}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
-          )}
+
+            {me === null ? (
+              <div className="flex items-center gap-2 px-1.5 py-1">
+                <Skeleton className="h-7 w-7 rounded-full" />
+                <div className="flex flex-col gap-1">
+                  <Skeleton className="h-3 w-20" />
+                  <Skeleton className="h-2.5 w-12" />
+                </div>
+              </div>
+            ) : (
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={(props) => (
+                    <button
+                      {...props}
+                      className="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 hover:bg-muted"
+                    >
+                      <Avatar className="h-7 w-7">
+                        <AvatarFallback className="text-[11px]">
+                          {initialsOf(me.full_name)}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="flex flex-col items-start leading-tight">
+                        <span className="text-xs font-medium">{me.full_name}</span>
+                        <span className="text-[10px] text-muted-foreground">
+                          {ROLE_LABELS[me.role]}
+                        </span>
+                      </div>
+                    </button>
+                  )}
+                />
+                <DropdownMenuContent align="end" className="w-52">
+                  <div className="px-1.5 py-1.5">
+                    <div className="text-sm font-medium">{me.full_name}</div>
+                    <div className="text-[11px] text-muted-foreground">
+                      {me.email ?? `@${me.username}`}
+                    </div>
+                  </div>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onClick={() => void logout()}
+                    className="cursor-pointer"
+                  >
+                    <LogOut className="h-4 w-4" />
+                    Logout
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+            </div>
         </div>
       </div>
     </header>

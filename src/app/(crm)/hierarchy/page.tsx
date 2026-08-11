@@ -362,6 +362,9 @@ function EditEntityLink({ entity }: { entity: Entity }) {
       variant="outline"
       size="sm"
       className="h-7 cursor-pointer gap-1 px-2 text-xs"
+      // It renders an <a>, not a <button> — without this Base UI keeps the
+      // native-button semantics and warns.
+      nativeButton={false}
       render={<Link href={`/hierarchy/${entity.entity_id}`} />}
     >
       <Pencil className="h-3.5 w-3.5" />
