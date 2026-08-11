@@ -108,7 +108,7 @@ export function PlayerSearch() {
 
   return (
     <div ref={rootRef} className="relative w-[260px]">
-      <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+      <Search className="absolute left-0 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
       <input
         ref={inputRef}
         value={query}
@@ -121,7 +121,9 @@ export function PlayerSearch() {
         onKeyDown={onKeyDown}
         placeholder="Search players…"
         aria-label="Search players"
-        className="h-9 w-full rounded-md border border-input bg-background pl-8 pr-14 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/30"
+        // Borderless to match the scope pickers beside it — the caret is the
+        // focus cue, and the header's divider lines do the separating.
+        className="h-9 w-full border-none bg-transparent pl-6 pr-14 text-sm outline-none"
       />
       {query ? (
         <button
@@ -130,7 +132,9 @@ export function PlayerSearch() {
             inputRef.current?.focus();
           }}
           aria-label="Clear search"
-          className="absolute right-2 top-1/2 -translate-y-1/2 cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
+          // Same chip treatment as the ⌘K badge it replaces, so the right end
+          // of the borderless field doesn't change shape as you type.
+          className="absolute right-2 top-1/2 inline-flex -translate-y-1/2 cursor-pointer items-center rounded border bg-muted p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
         >
           <X className="h-3.5 w-3.5" />
         </button>

@@ -25,6 +25,32 @@ import { useStore } from "@/lib/store";
 import { PlayerSearch } from "./player-search";
 import type { UserRole } from "@/lib/types";
 
+/**
+ * The leader/company scope pickers read as a breadcrumb, not as controls —
+ * bare text plus the chevron, no border or fill. Width hugs the label so a
+ * short name doesn't leave a gap before the search box.
+ */
+const SCOPE_TRIGGER =
+  "h-9 w-fit max-w-44 shrink-0 cursor-pointer border-transparent bg-transparent px-0 hover:bg-transparent dark:bg-transparent dark:hover:bg-transparent";
+
+/**
+ * Hang the popup off the trigger's left edge instead of centring the selected
+ * item over it, and pull it back by the item's own pl-1.5 so the option text
+ * lands on the same pixel as the label above it. `w-auto` because the trigger
+ * is only as wide as its label — anchor-width would clip longer names.
+ */
+const SCOPE_CONTENT_PROPS = {
+  align: "start",
+  alignOffset: -6,
+  alignItemWithTrigger: false,
+  className: "w-auto",
+} as const;
+
+/** Hairline between the borderless header controls. */
+function ScopeDivider() {
+  return <span aria-hidden className="h-5 w-px shrink-0 bg-border" />;
+}
+
 const ROLE_LABELS: Record<UserRole, string> = {
   super_admin: "Super Admin",
   company_leader: "Leader",
@@ -136,22 +162,53 @@ export function TopNav() {
         {/* px-6 matches <main>'s inner padding, so the search box lines up
             with the page heading below it. */}
         <div className="flex h-full min-w-0 flex-1 items-center gap-3 px-6">
-          <PlayerSearch />
+          {showLeaderSelect && (
+            <>
+              <Select
+                value={
+                  selectedLeaderId === null ? "all" : String(selectedLeaderId)
+                }
+                onValueChange={(v) =>
+                  setSelectedLeaderId(!v || v === "all" ? null : Number(v))
+                }
+                items={[
+                  { value: "all", label: "All Leaders" },
+                  ...leaders.map((l) => ({
+                    value: String(l.entity_id),
+                    label: l.name,
+                  })),
+                ]}
+              >
+                <SelectTrigger className={cn(SCOPE_TRIGGER, "font-semibold")}>
+                  <SelectValue placeholder="All Leaders" />
+                </SelectTrigger>
+                <SelectContent {...SCOPE_CONTENT_PROPS}>
+                  <SelectItem value="all">All Leaders</SelectItem>
+                  {leaders.map((l) => (
+                    <SelectItem key={l.entity_id} value={String(l.entity_id)}>
+                      {l.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <ScopeDivider />
+            </>
+          )}
 
           {(companies.length > 1 || selectedLeaderId !== null) && (
-            <div className="w-52">
+            <>
               <Select
                 value={companyValue}
                 onValueChange={(v) =>
                   setSelectedCompanyId(!v || v === "all" ? null : Number(v))
                 }
               >
-                <SelectTrigger className="h-9 w-full cursor-pointer">
+                <SelectTrigger className={SCOPE_TRIGGER}>
                   <SelectValue placeholder="All Companies">
                     {companyLabel}
                   </SelectValue>
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent {...SCOPE_CONTENT_PROPS}>
                   <SelectItem value="all">
                     {selectedLeaderId === null ? "All Companies" : "All (this leader)"}
                   </SelectItem>
@@ -162,41 +219,13 @@ export function TopNav() {
                   ))}
                 </SelectContent>
               </Select>
-            </div>
+              <ScopeDivider />
+            </>
           )}
 
+          <PlayerSearch />
+
           <div className="ml-auto flex items-center gap-2">
-            {showLeaderSelect && (
-              <div className="w-44">
-                <Select
-                  value={
-                    selectedLeaderId === null ? "all" : String(selectedLeaderId)
-                  }
-                  onValueChange={(v) =>
-                    setSelectedLeaderId(!v || v === "all" ? null : Number(v))
-                  }
-                  items={[
-                    { value: "all", label: "All Leaders" },
-                    ...leaders.map((l) => ({
-                      value: String(l.entity_id),
-                      label: l.name,
-                    })),
-                  ]}
-                >
-                  <SelectTrigger className="h-9 w-full cursor-pointer">
-                    <SelectValue placeholder="All Leaders" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Leaders</SelectItem>
-                    {leaders.map((l) => (
-                      <SelectItem key={l.entity_id} value={String(l.entity_id)}>
-                        {l.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
             <DropdownMenu>
               <DropdownMenuTrigger
                 render={(props) => (

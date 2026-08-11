@@ -1,4 +1,4 @@
-# Player Deposit CRM
+# Players Console
 
 Unified deposit / withdrawal CRM for the MPG group. Next.js 16 (App Router) +
 Drizzle + Postgres. The OpenClaw bank bot feeds deposits in through a secured

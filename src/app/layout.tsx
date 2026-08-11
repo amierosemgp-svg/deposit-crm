@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Player Deposit CRM",
+  title: "Players Console",
   description: "Unified deposit, top-up, and withdrawal management",
 };
 

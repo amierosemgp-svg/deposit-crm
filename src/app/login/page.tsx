@@ -47,7 +47,7 @@ export default function LoginPage() {
           <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-xl bg-primary text-primary-foreground">
             <Wallet className="h-6 w-6" />
           </div>
-          <CardTitle className="text-xl">Player Deposit CRM</CardTitle>
+          <CardTitle className="text-xl">Players Console</CardTitle>
           <CardDescription>MPG Unified Deposit & Withdrawal Platform</CardDescription>
         </CardHeader>
         <CardContent>
