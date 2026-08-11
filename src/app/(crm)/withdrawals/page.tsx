@@ -321,7 +321,7 @@ export default function WithdrawalsPage() {
         </div>
         <div className="flex items-center gap-2">
           {pending > 0 && (
-            <div className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-700">
+            <div className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-700 dark:text-amber-300">
               {pending} awaiting action
             </div>
           )}
@@ -541,7 +541,7 @@ export default function WithdrawalsPage() {
                         <div className="flex items-center gap-1">
                           <SourceBadge source={w.source} />
                           {w.skip_bot && (
-                            <span className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
+                            <span className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 dark:bg-amber-950/40 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
                               No bot
                             </span>
                           )}
@@ -575,7 +575,7 @@ export default function WithdrawalsPage() {
                               if (!r.ok) toast.error(r.error ?? "Reject failed");
                               else toast.success("Withdrawal rejected");
                             }}
-                            className="cursor-pointer gap-1 border-red-300 text-red-700 hover:bg-red-50 hover:text-red-800"
+                            className="cursor-pointer gap-1 border-red-300 text-red-700 dark:text-red-300 hover:bg-red-50 hover:text-red-800"
                           >
                             <X className="h-3.5 w-3.5" />
                             Reject
@@ -597,7 +597,7 @@ export default function WithdrawalsPage() {
                         </Button>
                       )}
                       {w.status === "paid" && (
-                        <span className="inline-flex items-center gap-1 text-[11px] text-emerald-700">
+                        <span className="inline-flex items-center gap-1 text-[11px] text-emerald-700 dark:text-emerald-300">
                           <CheckCircle2 className="h-3.5 w-3.5" />
                           Sent
                           {w.proof_url && (
@@ -614,7 +614,7 @@ export default function WithdrawalsPage() {
                         </span>
                       )}
                       {w.status === "failed" && (
-                        <span className="text-[11px] text-red-600">Failed</span>
+                        <span className="text-[11px] text-red-600 dark:text-red-400">Failed</span>
                       )}
                     </td>
                   </tr>
@@ -715,7 +715,7 @@ export default function WithdrawalsPage() {
                 max={newBalance}
               />
               {newPlayer && newGame && newAmt > newBalance && (
-                <p className="text-[11px] text-red-600">
+                <p className="text-[11px] text-red-600 dark:text-red-400">
                   Exceeds current {newGame} balance
                 </p>
               )}
@@ -743,7 +743,7 @@ export default function WithdrawalsPage() {
               </div>
             </div>
 
-            <label className="flex cursor-pointer items-start gap-2.5 rounded-md border border-amber-300 bg-amber-50/60 p-3 select-none">
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/40 p-3 select-none">
               <input
                 type="checkbox"
                 checked={newSkipBot}

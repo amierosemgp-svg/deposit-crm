@@ -17,9 +17,9 @@ type AuditRow = {
 };
 
 const ACTION_STYLE: Record<AuditRow["action"], string> = {
-  added: "border-emerald-300 bg-emerald-50 text-emerald-700",
-  updated: "border-amber-300 bg-amber-50 text-amber-700",
-  removed: "border-rose-300 bg-rose-50 text-rose-700",
+  added: "border-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300",
+  updated: "border-amber-300 bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300",
+  removed: "border-rose-300 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300",
 };
 
 /**
@@ -82,7 +82,7 @@ export function GameAccountHistory({
       </h3>
 
       {error ? (
-        <p className="text-xs text-rose-600">{error}</p>
+        <p className="text-xs text-rose-600 dark:text-rose-400">{error}</p>
       ) : rows === null ? (
         <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <Loader2 className="h-3 w-3 animate-spin" />

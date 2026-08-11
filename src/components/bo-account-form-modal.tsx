@@ -184,7 +184,7 @@ export function BoAccountFormModal({ open, onOpenChange, account }: Props) {
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label>
-                  Company <span className="text-rose-600">*</span>
+                  Company <span className="text-rose-600 dark:text-rose-400">*</span>
                 </Label>
                 <Select
                   value={form.company_entity_id}
@@ -220,7 +220,7 @@ export function BoAccountFormModal({ open, onOpenChange, account }: Props) {
               </div>
               <div className="space-y-1.5">
                 <Label>
-                  Game <span className="text-rose-600">*</span>
+                  Game <span className="text-rose-600 dark:text-rose-400">*</span>
                 </Label>
                 <Select
                   value={form.game_name}
@@ -246,7 +246,7 @@ export function BoAccountFormModal({ open, onOpenChange, account }: Props) {
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label htmlFor="bo-username">
-                  BO username <span className="text-rose-600">*</span>
+                  BO username <span className="text-rose-600 dark:text-rose-400">*</span>
                 </Label>
                 <Input
                   id="bo-username"
@@ -286,7 +286,7 @@ export function BoAccountFormModal({ open, onOpenChange, account }: Props) {
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label htmlFor="bo-password">
-                  BO password <span className="text-rose-600">*</span>
+                  BO password <span className="text-rose-600 dark:text-rose-400">*</span>
                 </Label>
                 <Input
                   id="bo-password"

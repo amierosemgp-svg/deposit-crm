@@ -140,7 +140,7 @@ export function ManualDepositDialog({ open, onOpenChange }: Props) {
           <form onSubmit={handleSubmit} className="space-y-4 p-5">
             <div className="space-y-1.5">
               <Label>
-                Player <span className="text-rose-600">*</span>
+                Player <span className="text-rose-600 dark:text-rose-400">*</span>
               </Label>
               <button
                 type="button"
@@ -164,7 +164,7 @@ export function ManualDepositDialog({ open, onOpenChange }: Props) {
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label htmlFor="md-amount">
-                  Amount (RM) <span className="text-rose-600">*</span>
+                  Amount (RM) <span className="text-rose-600 dark:text-rose-400">*</span>
                 </Label>
                 <Input
                   id="md-amount"
@@ -179,7 +179,7 @@ export function ManualDepositDialog({ open, onOpenChange }: Props) {
               </div>
               <div className="space-y-1.5">
                 <Label>
-                  Bank <span className="text-rose-600">*</span>
+                  Bank <span className="text-rose-600 dark:text-rose-400">*</span>
                 </Label>
                 <Select value={bank || null} onValueChange={(v) => setBank(v ?? "")}>
                   <SelectTrigger className="h-8 w-full cursor-pointer">
@@ -268,7 +268,7 @@ export function ManualDepositDialog({ open, onOpenChange }: Props) {
               </span>
             </label>
 
-            <label className="flex cursor-pointer items-start gap-2.5 rounded-md border border-amber-300 bg-amber-50/60 p-3 select-none">
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/40 p-3 select-none">
               <input
                 type="checkbox"
                 checked={skipBot}

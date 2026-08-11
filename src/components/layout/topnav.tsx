@@ -23,6 +23,7 @@ import { initialsOf, formatRelative, formatRM } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useStore } from "@/lib/store";
 import { PlayerSearch } from "./player-search";
+import { ThemeToggle } from "./theme-toggle";
 import type { UserRole } from "@/lib/types";
 
 /**
@@ -226,6 +227,7 @@ export function TopNav() {
           <PlayerSearch />
 
           <div className="ml-auto flex items-center gap-2">
+            <ThemeToggle />
             <DropdownMenu>
               <DropdownMenuTrigger
                 render={(props) => (
@@ -262,7 +264,7 @@ export function TopNav() {
                 <DropdownMenuSeparator />
                 {pendingIncoming.length > 0 && (
                   <>
-                    <div className="px-1.5 py-1 text-[11px] font-medium text-amber-600">
+                    <div className="px-1.5 py-1 text-[11px] font-medium text-amber-600 dark:text-amber-400">
                       Transfers awaiting confirmation
                     </div>
                     {pendingIncoming.map((t) => (
@@ -271,7 +273,7 @@ export function TopNav() {
                         onClick={() => router.push("/bank-accounts")}
                         className="cursor-pointer"
                       >
-                        <ArrowLeftRight className="h-4 w-4 text-amber-600" />
+                        <ArrowLeftRight className="h-4 w-4 text-amber-600 dark:text-amber-400" />
                         <div className="flex min-w-0 flex-1 flex-col">
                           <span className="text-xs leading-snug">
                             Incoming transfer of {formatRM(t.amount)} — confirm to

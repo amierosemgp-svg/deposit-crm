@@ -206,7 +206,7 @@ export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
           <div className="min-h-0 flex-1 space-y-3.5 overflow-y-auto p-5">
             <div className="space-y-1.5">
               <Label>
-                Entity <span className="text-rose-600">*</span>
+                Entity <span className="text-rose-600 dark:text-rose-400">*</span>
               </Label>
               <Select
                 value={form.entity_id}
@@ -243,7 +243,7 @@ export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
 
             <div className="space-y-1.5">
               <Label>
-                Role <span className="text-rose-600">*</span>
+                Role <span className="text-rose-600 dark:text-rose-400">*</span>
               </Label>
               <Select
                 value={form.role}
@@ -273,7 +273,7 @@ export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label>
-                  Bank <span className="text-rose-600">*</span>
+                  Bank <span className="text-rose-600 dark:text-rose-400">*</span>
                 </Label>
                 <Select
                   value={form.bank_select}
@@ -315,7 +315,7 @@ export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
             {form.bank_select === OTHER_BANK && (
               <div className="space-y-1.5">
                 <Label htmlFor="ba-bank-custom">
-                  Bank name <span className="text-rose-600">*</span>
+                  Bank name <span className="text-rose-600 dark:text-rose-400">*</span>
                 </Label>
                 <Input
                   id="ba-bank-custom"
@@ -329,7 +329,7 @@ export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
 
             <div className="space-y-1.5">
               <Label htmlFor="ba-num">
-                Account number <span className="text-rose-600">*</span>
+                Account number <span className="text-rose-600 dark:text-rose-400">*</span>
               </Label>
               <Input
                 id="ba-num"
@@ -343,7 +343,7 @@ export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
 
             <div className="space-y-1.5">
               <Label htmlFor="ba-holder">
-                Account holder <span className="text-rose-600">*</span>
+                Account holder <span className="text-rose-600 dark:text-rose-400">*</span>
               </Label>
               <Input
                 id="ba-holder"

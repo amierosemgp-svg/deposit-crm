@@ -44,9 +44,9 @@ type HistoryEntry = {
 };
 
 const TYPE_META: Record<AuditType, { label: string; className: string }> = {
-  deposit: { label: "Deposit", className: "bg-emerald-500/10 text-emerald-700" },
-  withdrawal: { label: "Withdrawal", className: "bg-blue-500/10 text-blue-700" },
-  game_topup: { label: "Game Top-up", className: "bg-sky-500/10 text-sky-700" },
+  deposit: { label: "Deposit", className: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" },
+  withdrawal: { label: "Withdrawal", className: "bg-blue-500/10 text-blue-700 dark:text-blue-300" },
+  game_topup: { label: "Game Top-up", className: "bg-sky-500/10 text-sky-700 dark:text-sky-300" },
   game_transfer: {
     label: "Game Transfer",
     className: "bg-purple-500/10 text-purple-700",
@@ -57,15 +57,15 @@ const TYPE_META: Record<AuditType, { label: string; className: string }> = {
   },
   bank_transfer: {
     label: "Bank Transfer",
-    className: "bg-amber-500/10 text-amber-700",
+    className: "bg-amber-500/10 text-amber-700 dark:text-amber-300",
   },
   bo_adjustment: {
     label: "BO Adjustment",
-    className: "bg-rose-500/10 text-rose-700",
+    className: "bg-rose-500/10 text-rose-700 dark:text-rose-300",
   },
   player_import: {
     label: "Player Import",
-    className: "bg-zinc-500/10 text-zinc-700",
+    className: "bg-zinc-500/10 text-zinc-700 dark:text-zinc-300",
   },
 };
 
@@ -509,8 +509,8 @@ export default function HistoryPage() {
                         className={`px-3 py-2 text-right font-medium whitespace-nowrap ${
                           signed
                             ? e.amount >= 0
-                              ? "text-emerald-700"
-                              : "text-rose-700"
+                              ? "text-emerald-700 dark:text-emerald-300"
+                              : "text-rose-700 dark:text-rose-300"
                             : ""
                         }`}
                       >

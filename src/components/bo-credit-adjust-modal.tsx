@@ -148,7 +148,7 @@ export function BoCreditAdjustModal({
                 className={cn(
                   "rounded-md border px-3 py-2.5 text-sm font-medium flex items-center justify-center gap-2 cursor-pointer transition-colors",
                   direction === "topup"
-                    ? "border-emerald-500 bg-emerald-50 text-emerald-700"
+                    ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300"
                     : "border-input hover:bg-muted/50",
                 )}
               >
@@ -161,7 +161,7 @@ export function BoCreditAdjustModal({
                 className={cn(
                   "rounded-md border px-3 py-2.5 text-sm font-medium flex items-center justify-center gap-2 cursor-pointer transition-colors",
                   direction === "deduct"
-                    ? "border-rose-500 bg-rose-50 text-rose-700"
+                    ? "border-rose-500 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300"
                     : "border-input hover:bg-muted/50",
                 )}
               >
@@ -187,7 +187,7 @@ export function BoCreditAdjustModal({
                   <span
                     className={cn(
                       "font-medium tabular-nums",
-                      projected < 0 && "text-rose-600",
+                      projected < 0 && "text-rose-600 dark:text-rose-400",
                       projected >= 0 && "text-foreground",
                     )}
                   >
@@ -222,7 +222,7 @@ export function BoCreditAdjustModal({
             </div>
 
             {validation && amt > 0 && (
-              <p className="text-[11px] text-rose-600">{validation}</p>
+              <p className="text-[11px] text-rose-600 dark:text-rose-400">{validation}</p>
             )}
 
             <div className="flex items-center justify-end gap-2 border-t bg-muted/30 -mx-5 -mb-5 px-5 py-3 mt-2">
@@ -263,7 +263,7 @@ export function BoCreditAdjustModal({
               initial={{ scale: 0 }}
               animate={{ scale: 1 }}
               transition={{ type: "spring", damping: 12, stiffness: 220 }}
-              className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600"
+              className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
             >
               <CheckCircle2 className="h-8 w-8" />
             </motion.div>

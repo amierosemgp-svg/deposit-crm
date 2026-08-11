@@ -77,7 +77,7 @@ export function AutoAssignGameButton({ playerId }: { playerId: number }) {
       </div>
 
       {(low.length > 0 || dry.length > 0) && (
-        <p className="text-[11px] text-amber-600">
+        <p className="text-[11px] text-amber-600 dark:text-amber-400">
           {dry.length > 0 && (
             <>Out of stock: {dry.map((s) => s.game_name).join(", ")}. </>
           )}

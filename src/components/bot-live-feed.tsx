@@ -20,10 +20,10 @@ type BotEvent = {
 };
 
 const LEVEL_STYLE: Record<BotEvent["level"], string> = {
-  debug: "border-zinc-500/30 bg-zinc-500/10 text-zinc-600",
-  info: "border-sky-500/30 bg-sky-500/10 text-sky-700",
-  warn: "border-amber-500/30 bg-amber-500/10 text-amber-700",
-  error: "border-red-500/30 bg-red-500/10 text-red-700",
+  debug: "border-zinc-500/30 bg-zinc-500/10 text-zinc-600 dark:text-zinc-400",
+  info: "border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300",
+  warn: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+  error: "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300",
 };
 
 const MAX_ROWS = 300;
@@ -177,7 +177,7 @@ export function BotLiveFeed() {
         <Radio
           className={cn(
             "h-4 w-4",
-            paused ? "text-muted-foreground" : "text-emerald-600",
+            paused ? "text-muted-foreground" : "text-emerald-600 dark:text-emerald-400",
           )}
         />
         <span className="text-[13px] font-semibold">Bot Live Feed</span>
@@ -216,7 +216,7 @@ export function BotLiveFeed() {
 
       <div className="flex-1 overflow-y-auto">
         {error ? (
-          <p className="px-3 py-6 text-center text-[12px] text-rose-600">
+          <p className="px-3 py-6 text-center text-[12px] text-rose-600 dark:text-rose-400">
             {error}
           </p>
         ) : events.length === 0 ? (

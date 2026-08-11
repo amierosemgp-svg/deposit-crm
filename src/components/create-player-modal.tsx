@@ -280,7 +280,7 @@ export function CreatePlayerModal({
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
                     <Label htmlFor="cp-fullname">
-                      Full name <span className="text-rose-600">*</span>
+                      Full name <span className="text-rose-600 dark:text-rose-400">*</span>
                     </Label>
                     <Input
                       id="cp-fullname"
@@ -292,7 +292,7 @@ export function CreatePlayerModal({
                   </div>
                   <div className="space-y-1.5">
                     <Label htmlFor="cp-username">
-                      Username <span className="text-rose-600">*</span>
+                      Username <span className="text-rose-600 dark:text-rose-400">*</span>
                     </Label>
                     <Input
                       id="cp-username"
@@ -302,7 +302,7 @@ export function CreatePlayerModal({
                       aria-invalid={!!errors.username}
                     />
                     {errors.username === "Username already exists" && (
-                      <p className="text-[11px] text-rose-600">
+                      <p className="text-[11px] text-rose-600 dark:text-rose-400">
                         This username is already taken
                       </p>
                     )}
@@ -312,7 +312,7 @@ export function CreatePlayerModal({
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
                     <Label htmlFor="cp-tg">
-                      Telegram <span className="text-rose-600">*</span>
+                      Telegram <span className="text-rose-600 dark:text-rose-400">*</span>
                     </Label>
                     <Input
                       id="cp-tg"
@@ -347,7 +347,7 @@ export function CreatePlayerModal({
                   </div>
                   <div className="space-y-1.5">
                     <Label>
-                      Company <span className="text-rose-600">*</span>
+                      Company <span className="text-rose-600 dark:text-rose-400">*</span>
                     </Label>
                     <Select
                       value={form.company_entity_id}
@@ -468,7 +468,7 @@ export function CreatePlayerModal({
                         </div>
                       ))}
                       {errors.bank_accounts && (
-                        <p className="text-[11px] text-rose-600">
+                        <p className="text-[11px] text-rose-600 dark:text-rose-400">
                           {errors.bank_accounts}
                         </p>
                       )}
@@ -555,7 +555,7 @@ export function CreatePlayerModal({
                         </div>
                       ))}
                       {errors.game_accounts && (
-                        <p className="text-[11px] text-rose-600">
+                        <p className="text-[11px] text-rose-600 dark:text-rose-400">
                           {errors.game_accounts}
                         </p>
                       )}
@@ -610,7 +610,7 @@ export function CreatePlayerModal({
               initial={{ scale: 0 }}
               animate={{ scale: 1 }}
               transition={{ type: "spring", damping: 12, stiffness: 220 }}
-              className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600"
+              className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
             >
               <CheckCircle2 className="h-8 w-8" />
             </motion.div>

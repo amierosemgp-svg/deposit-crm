@@ -14,13 +14,13 @@ import { cn } from "@/lib/utils";
 import type { BotHealth, BotState } from "@/lib/types";
 
 const STATE_STYLES: Record<BotState, string> = {
-  working: "bg-emerald-500/10 text-emerald-700 border-emerald-500/30",
-  starting: "bg-sky-500/10 text-sky-700 border-sky-500/30",
-  idle: "bg-zinc-500/10 text-zinc-700 border-zinc-500/30",
-  stuck: "bg-amber-500/10 text-amber-700 border-amber-500/30",
-  error: "bg-red-500/10 text-red-700 border-red-500/30",
-  maintenance: "bg-violet-500/10 text-violet-700 border-violet-500/30",
-  stopped: "bg-zinc-500/10 text-zinc-600 border-zinc-500/30",
+  working: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30",
+  starting: "bg-sky-500/10 text-sky-700 dark:text-sky-300 border-sky-500/30",
+  idle: "bg-zinc-500/10 text-zinc-700 dark:text-zinc-300 border-zinc-500/30",
+  stuck: "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30",
+  error: "bg-red-500/10 text-red-700 dark:text-red-300 border-red-500/30",
+  maintenance: "bg-violet-500/10 text-violet-700 dark:text-violet-300 border-violet-500/30",
+  stopped: "bg-zinc-500/10 text-zinc-600 dark:text-zinc-400 border-zinc-500/30",
 };
 
 /**
@@ -34,7 +34,7 @@ function StateBadge({ state, stale }: { state: BotState; stale?: boolean }) {
       className={cn(
         "inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium capitalize whitespace-nowrap",
         stale
-          ? "border-zinc-300 bg-zinc-100 text-zinc-500"
+          ? "border-zinc-300 bg-zinc-100 dark:bg-zinc-950/40 text-zinc-500 dark:text-zinc-400"
           : STATE_STYLES[state],
       )}
     >
@@ -60,7 +60,7 @@ function OnlinePip({ online }: { online: boolean }) {
       <span
         className={cn(
           "text-[11px] font-medium",
-          online ? "text-emerald-700" : "text-red-600",
+          online ? "text-emerald-700 dark:text-emerald-300" : "text-red-600 dark:text-red-400",
         )}
       >
         {online ? "Online" : "Offline"}
@@ -95,7 +95,7 @@ function BotRow({ bot }: { bot: BotHealth }) {
         {bot.cycle != null && <span>cycle {bot.cycle}</span>}
         <span
           title={formatDateTime(bot.last_heartbeat_at)}
-          className={cn(!online && "font-medium text-red-600")}
+          className={cn(!online && "font-medium text-red-600 dark:text-red-400")}
         >
           {online ? "ping" : "last seen"}{" "}
           {formatRelative(bot.last_heartbeat_at)}
@@ -109,7 +109,7 @@ function BotRow({ bot }: { bot: BotHealth }) {
       </div>
 
       {bot.error && (
-        <p className="mt-1 text-[11px] leading-snug text-red-600">{bot.error}</p>
+        <p className="mt-1 text-[11px] leading-snug text-red-600 dark:text-red-400">{bot.error}</p>
       )}
     </li>
   );
@@ -142,10 +142,10 @@ function BotColumn({
               bots.length === 0
                 ? "text-muted-foreground"
                 : online === bots.length
-                  ? "text-emerald-600"
+                  ? "text-emerald-600 dark:text-emerald-400"
                   : online === 0
-                    ? "text-rose-600"
-                    : "text-amber-600",
+                    ? "text-rose-600 dark:text-rose-400"
+                    : "text-amber-600 dark:text-amber-400",
             )}
           >
             {online}
@@ -267,7 +267,7 @@ export default function BotHealthPage() {
           sub={`${botHealth.length} bot${botHealth.length === 1 ? "" : "s"} total`}
           icon={Bot}
           tone="success"
-          valueClassName={online > 0 ? "text-emerald-600" : undefined}
+          valueClassName={online > 0 ? "text-emerald-600 dark:text-emerald-400" : undefined}
         />
         <StatTile
           title="Offline"
@@ -275,7 +275,7 @@ export default function BotHealthPage() {
           sub="No ping in 90s"
           icon={Bot}
           tone={offline > 0 ? "danger" : "default"}
-          valueClassName={offline > 0 ? "text-rose-600" : undefined}
+          valueClassName={offline > 0 ? "text-rose-600 dark:text-rose-400" : undefined}
         />
         <StatTile
           title="Needs attention"
@@ -283,7 +283,7 @@ export default function BotHealthPage() {
           sub="Online but stuck / error"
           icon={Bot}
           tone={attention > 0 ? "warning" : "default"}
-          valueClassName={attention > 0 ? "text-amber-600" : undefined}
+          valueClassName={attention > 0 ? "text-amber-600 dark:text-amber-400" : undefined}
         />
       </div>
 

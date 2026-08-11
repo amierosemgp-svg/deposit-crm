@@ -231,7 +231,7 @@ export function ImportPlayersModal({ open, onOpenChange }: Props) {
             <div className="space-y-1.5">
               <Label className="flex items-center gap-1.5">
                 <Building2 className="h-3.5 w-3.5 text-muted-foreground" />
-                Target company <span className="text-rose-600">*</span>
+                Target company <span className="text-rose-600 dark:text-rose-400">*</span>
               </Label>
               <Select
                 value={companyId}
@@ -321,7 +321,7 @@ export function ImportPlayersModal({ open, onOpenChange }: Props) {
                   <span className="font-medium">
                     Preview · {validRows.length} valid
                     {errorRows.length > 0 && (
-                      <span className="text-rose-600">
+                      <span className="text-rose-600 dark:text-rose-400">
                         {" "}
                         · {errorRows.length} error
                         {errorRows.length === 1 ? "" : "s"}
@@ -366,7 +366,7 @@ export function ImportPlayersModal({ open, onOpenChange }: Props) {
                           className={cn(
                             "border-t",
                             row.error
-                              ? "bg-rose-50/60 text-rose-700"
+                              ? "bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300"
                               : "hover:bg-muted/20",
                           )}
                         >
@@ -378,7 +378,7 @@ export function ImportPlayersModal({ open, onOpenChange }: Props) {
                               <span className="inline-flex items-center gap-1">
                                 <AlertCircle className="h-3 w-3" />
                                 {row.error}
-                                <span className="text-rose-500/70">
+                                <span className="text-rose-500 dark:text-rose-400/70">
                                   · {Object.values(row.raw).join(", ")}
                                 </span>
                               </span>
@@ -456,7 +456,7 @@ export function ImportPlayersModal({ open, onOpenChange }: Props) {
               initial={{ scale: 0 }}
               animate={{ scale: 1 }}
               transition={{ type: "spring", damping: 12, stiffness: 220 }}
-              className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600"
+              className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
             >
               <CheckCircle2 className="h-8 w-8" />
             </motion.div>

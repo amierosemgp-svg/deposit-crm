@@ -166,7 +166,7 @@ export function BankTransferModal({
               className="space-y-4 p-5"
             >
               <div className="flex items-start gap-2 rounded-md border border-blue-500/30 bg-blue-500/5 px-3 py-2.5 text-[11px] text-blue-900 dark:text-blue-200">
-                <Info className="h-3.5 w-3.5 shrink-0 mt-0.5 text-blue-600" />
+                <Info className="h-3.5 w-3.5 shrink-0 mt-0.5 text-blue-600 dark:text-blue-400" />
                 <span>
                   Transfers require recipient confirmation and auto-confirm after the
                   configured window. Allowed: between companies under the same leader,
@@ -291,7 +291,7 @@ export function BankTransferModal({
                 />
               </div>
 
-              <label className="flex cursor-pointer items-start gap-2.5 rounded-md border border-amber-300 bg-amber-50/60 p-3 select-none">
+              <label className="flex cursor-pointer items-start gap-2.5 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/40 p-3 select-none">
                 <input
                   type="checkbox"
                   checked={skipBot}
@@ -310,7 +310,7 @@ export function BankTransferModal({
               </label>
 
               {validation && fromId && toId && (
-                <p className="text-[11px] text-rose-600">{validation}</p>
+                <p className="text-[11px] text-rose-600 dark:text-rose-400">{validation}</p>
               )}
 
               <div className="flex items-center justify-end gap-2 border-t bg-muted/30 -mx-5 -mb-5 px-5 py-3 mt-2">
@@ -352,7 +352,7 @@ export function BankTransferModal({
                 initial={{ scale: 0 }}
                 animate={{ scale: 1 }}
                 transition={{ type: "spring", damping: 12, stiffness: 220 }}
-                className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600"
+                className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
               >
                 <CheckCircle2 className="h-8 w-8" />
               </motion.div>

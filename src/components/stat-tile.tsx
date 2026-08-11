@@ -5,9 +5,9 @@ export type StatTone = "default" | "warning" | "success" | "danger";
 
 const TONE_CLASSES: Record<StatTone, string> = {
   default: "bg-primary/10 text-primary",
-  warning: "bg-amber-500/10 text-amber-600",
-  success: "bg-emerald-500/10 text-emerald-600",
-  danger: "bg-rose-500/10 text-rose-600",
+  warning: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  success: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+  danger: "bg-rose-500/10 text-rose-600 dark:text-rose-400",
 };
 
 /**

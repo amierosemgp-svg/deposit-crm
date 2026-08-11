@@ -32,14 +32,14 @@ import { cn } from "@/lib/utils";
 import { EXPENSE_CATEGORIES, type ExpenseCategory } from "@/lib/types";
 
 const CATEGORY_META: Record<ExpenseCategory, { label: string; cls: string }> = {
-  salary: { label: "Salary", cls: "bg-blue-500/10 text-blue-700" },
-  sim_card: { label: "SIM Card", cls: "bg-emerald-500/10 text-emerald-700" },
+  salary: { label: "Salary", cls: "bg-blue-500/10 text-blue-700 dark:text-blue-300" },
+  sim_card: { label: "SIM Card", cls: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" },
   subscription: { label: "Subscription", cls: "bg-purple-500/10 text-purple-700" },
-  rent: { label: "Rent", cls: "bg-amber-500/10 text-amber-700" },
+  rent: { label: "Rent", cls: "bg-amber-500/10 text-amber-700 dark:text-amber-300" },
   utilities: { label: "Utilities", cls: "bg-cyan-500/10 text-cyan-700" },
-  equipment: { label: "Equipment", cls: "bg-slate-500/10 text-slate-700" },
-  marketing: { label: "Marketing", cls: "bg-rose-500/10 text-rose-700" },
-  other: { label: "Other", cls: "bg-zinc-500/10 text-zinc-700" },
+  equipment: { label: "Equipment", cls: "bg-slate-500/10 text-slate-700 dark:text-slate-300" },
+  marketing: { label: "Marketing", cls: "bg-rose-500/10 text-rose-700 dark:text-rose-300" },
+  other: { label: "Other", cls: "bg-zinc-500/10 text-zinc-700 dark:text-zinc-300" },
 };
 
 function todayStr() {
@@ -481,7 +481,7 @@ function AddExpenseDialog({
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label htmlFor="ex-date">
-                Date <span className="text-rose-600">*</span>
+                Date <span className="text-rose-600 dark:text-rose-400">*</span>
               </Label>
               <Input
                 id="ex-date"
@@ -492,7 +492,7 @@ function AddExpenseDialog({
             </div>
             <div className="space-y-1.5">
               <Label>
-                Category <span className="text-rose-600">*</span>
+                Category <span className="text-rose-600 dark:text-rose-400">*</span>
               </Label>
               <Select value={category || null} onValueChange={(v) => setCategory(v ?? "")}>
                 <SelectTrigger className="h-8 w-full cursor-pointer">
@@ -511,7 +511,7 @@ function AddExpenseDialog({
 
           <div className="space-y-1.5">
             <Label htmlFor="ex-desc">
-              Description <span className="text-rose-600">*</span>
+              Description <span className="text-rose-600 dark:text-rose-400">*</span>
             </Label>
             <Input
               id="ex-desc"
@@ -525,7 +525,7 @@ function AddExpenseDialog({
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label htmlFor="ex-amount">
-                Amount (RM) <span className="text-rose-600">*</span>
+                Amount (RM) <span className="text-rose-600 dark:text-rose-400">*</span>
               </Label>
               <Input
                 id="ex-amount"

@@ -321,7 +321,7 @@ export function PlayerProfileModal({ playerId, open, onOpenChange }: Props) {
                                 <div
                                   className={cn(
                                     "text-lg font-semibold mt-0.5",
-                                    playerProfit >= 0 ? "text-emerald-600" : "text-rose-600",
+                                    playerProfit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400",
                                   )}
                                 >
                                   {formatRM(playerProfit)}
@@ -611,7 +611,7 @@ export function PlayerProfileModal({ playerId, open, onOpenChange }: Props) {
                                                 variant="ghost"
                                                 size="icon-sm"
                                                 onClick={() => void removeBankAccount(i)}
-                                                className="h-6 w-6 cursor-pointer text-rose-600 hover:text-rose-700"
+                                                className="h-6 w-6 cursor-pointer text-rose-600 dark:text-rose-400 hover:text-rose-700"
                                                 aria-label={`Remove ${b.bank_name} account`}
                                               >
                                                 <Trash2 className="h-3 w-3" />
@@ -765,7 +765,7 @@ export function PlayerProfileModal({ playerId, open, onOpenChange }: Props) {
                                                 variant="ghost"
                                                 size="icon-sm"
                                                 onClick={() => void removeGameAccount(i)}
-                                                className="h-6 w-6 cursor-pointer text-rose-600 hover:text-rose-700"
+                                                className="h-6 w-6 cursor-pointer text-rose-600 dark:text-rose-400 hover:text-rose-700"
                                                 aria-label={`Remove ${g.game_name} account`}
                                               >
                                                 <Trash2 className="h-3 w-3" />

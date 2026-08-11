@@ -49,11 +49,11 @@ function countdownTo(expiresAt: string, now: number) {
 
 function RoleBadge({ role }: { role: BankAccount["role"] }) {
   return role === "deposit" ? (
-    <span className="inline-flex items-center rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-700 whitespace-nowrap">
+    <span className="inline-flex items-center rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300 whitespace-nowrap">
       Deposit · Collection
     </span>
   ) : (
-    <span className="inline-flex items-center rounded-full border border-blue-500/30 bg-blue-500/10 px-2 py-0.5 text-[10px] font-medium text-blue-700 whitespace-nowrap">
+    <span className="inline-flex items-center rounded-full border border-blue-500/30 bg-blue-500/10 px-2 py-0.5 text-[10px] font-medium text-blue-700 dark:text-blue-300 whitespace-nowrap">
       Withdrawal · Payout
     </span>
   );
@@ -280,7 +280,7 @@ export default function BankAccountsPage() {
       {pendingTransfers.length > 0 && (
         <Card className="overflow-hidden p-0 gap-0 border-amber-500/40">
           <div className="flex items-center gap-2 border-b bg-amber-500/5 px-4 py-2.5">
-            <Hourglass className="h-3.5 w-3.5 text-amber-600" />
+            <Hourglass className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
             <h2 className="text-sm font-semibold">Pending Confirmations</h2>
             <span className="ml-auto text-[11px] text-muted-foreground">
               {pendingTransfers.length} awaiting action
@@ -294,7 +294,7 @@ export default function BankAccountsPage() {
                   key={t.transfer_id}
                   className="flex flex-wrap items-center gap-3 px-4 py-3"
                 >
-                  <div className="flex h-8 w-8 items-center justify-center rounded-md bg-emerald-500/10 text-emerald-600">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
                     <ArrowDownLeft className="h-4 w-4" />
                   </div>
                   <div className="min-w-0 flex-1">
@@ -320,7 +320,7 @@ export default function BankAccountsPage() {
                       <span>Initiated by {userName(t.initiated_by_user_id)}</span>
                       {t.reference && <span className="font-mono">{t.reference}</span>}
                       {t.expires_at && (
-                        <span className="font-medium text-amber-700">
+                        <span className="font-medium text-amber-700 dark:text-amber-300">
                           {countdownTo(t.expires_at, now)}
                         </span>
                       )}
@@ -344,7 +344,7 @@ export default function BankAccountsPage() {
                           variant="outline"
                           onClick={() => handleReject(t)}
                           disabled={actingTransferId === t.transfer_id}
-                          className="cursor-pointer h-7 text-rose-600 hover:text-rose-700"
+                          className="cursor-pointer h-7 text-rose-600 dark:text-rose-400 hover:text-rose-700"
                         >
                           <X className="h-3.5 w-3.5" />
                           Reject
@@ -362,7 +362,7 @@ export default function BankAccountsPage() {
                   key={t.transfer_id}
                   className="flex flex-wrap items-center gap-3 px-4 py-3"
                 >
-                  <div className="flex h-8 w-8 items-center justify-center rounded-md bg-blue-500/10 text-blue-600">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-md bg-blue-500/10 text-blue-600 dark:text-blue-400">
                     <ArrowUpRight className="h-4 w-4" />
                   </div>
                   <div className="min-w-0 flex-1">
@@ -387,7 +387,7 @@ export default function BankAccountsPage() {
                       </span>
                       <span className="italic">Waiting for recipient confirmation</span>
                       {t.expires_at && (
-                        <span className="font-medium text-amber-700">
+                        <span className="font-medium text-amber-700 dark:text-amber-300">
                           {countdownTo(t.expires_at, now)}
                         </span>
                       )}
@@ -548,7 +548,7 @@ export default function BankAccountsPage() {
                               className={cn(
                                 "text-[11px] font-medium",
                                 a.status === "active"
-                                  ? "text-emerald-700"
+                                  ? "text-emerald-700 dark:text-emerald-300"
                                   : "text-muted-foreground",
                               )}
                             >
@@ -589,7 +589,7 @@ export default function BankAccountsPage() {
                               size="sm"
                               variant="ghost"
                               onClick={() => handleDelete(a)}
-                              className="cursor-pointer h-7 px-2 text-rose-600 hover:text-rose-700 hover:bg-rose-50"
+                              className="cursor-pointer h-7 px-2 text-rose-600 dark:text-rose-400 hover:text-rose-700 hover:bg-rose-50"
                               title="Delete"
                             >
                               <Trash2 className="h-3.5 w-3.5" />

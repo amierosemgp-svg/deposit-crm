@@ -349,7 +349,7 @@ export default function ReportDetailPage() {
             <span
               className={cn(
                 "font-medium",
-                n >= 0 ? "text-emerald-600" : "text-red-600",
+                n >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400",
               )}
             >
               {formatRM(n)}
@@ -561,7 +561,7 @@ export default function ReportDetailPage() {
                   <span
                     className={cn(
                       "inline-flex items-center gap-1 text-[11px] font-medium",
-                      flag.ok ? "text-emerald-600" : "text-amber-600",
+                      flag.ok ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400",
                     )}
                   >
                     {flag.ok ? (

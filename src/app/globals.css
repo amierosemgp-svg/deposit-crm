@@ -111,22 +111,30 @@
   --accent: oklch(0.269 0 0);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
+  /* Status hues, lifted for a dark ground — the :root values are tuned to sit
+     on white and go muddy here. */
+  --success: oklch(0.72 0.16 150);
+  --success-foreground: oklch(0.2 0 0);
+  --warning: oklch(0.82 0.14 75);
+  --warning-foreground: oklch(0.2 0 0);
+  --info: oklch(0.7 0.14 230);
+  --info-foreground: oklch(0.2 0 0);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
+  --ring: oklch(0.6 0.18 255);
+  --chart-1: oklch(0.6 0.18 255);
+  --chart-2: oklch(0.72 0.16 150);
+  --chart-3: oklch(0.82 0.14 75);
+  --chart-4: oklch(0.7 0.14 230);
+  --chart-5: oklch(0.704 0.191 22.216);
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary: oklch(0.6 0.18 255);
   --sidebar-primary-foreground: oklch(0.985 0 0);
   --sidebar-accent: oklch(0.269 0 0);
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --sidebar-ring: oklch(0.6 0.18 255);
 }
 
 @layer base {

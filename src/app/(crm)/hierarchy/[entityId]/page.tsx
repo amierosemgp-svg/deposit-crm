@@ -35,9 +35,9 @@ const TYPE_ICON: Record<
   { icon: React.ComponentType<{ className?: string }>; cls: string }
 > = {
   main_company: { icon: Building2, cls: "bg-primary text-primary-foreground" },
-  leader: { icon: Crown, cls: "bg-amber-500/10 text-amber-600" },
-  company: { icon: Landmark, cls: "bg-blue-500/10 text-blue-600" },
-  cs: { icon: Headset, cls: "bg-emerald-500/10 text-emerald-600" },
+  leader: { icon: Crown, cls: "bg-amber-500/10 text-amber-600 dark:text-amber-400" },
+  company: { icon: Landmark, cls: "bg-blue-500/10 text-blue-600 dark:text-blue-400" },
+  cs: { icon: Headset, cls: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" },
 };
 
 /**
@@ -139,7 +139,7 @@ function EditForm({ entity, editable }: { entity: Entity; editable: boolean }) {
 
         <div className="space-y-1.5">
           <Label htmlFor="entity-name">
-            Name <span className="text-rose-600">*</span>
+            Name <span className="text-rose-600 dark:text-rose-400">*</span>
           </Label>
           <Input
             id="entity-name"

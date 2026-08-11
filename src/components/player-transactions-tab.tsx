@@ -21,13 +21,13 @@ type Entry = {
 };
 
 const TYPE_STYLE: Record<string, string> = {
-  deposit: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700",
-  withdrawal: "border-rose-500/30 bg-rose-500/10 text-rose-700",
-  game_topup: "border-sky-500/30 bg-sky-500/10 text-sky-700",
-  game_transfer: "border-violet-500/30 bg-violet-500/10 text-violet-700",
-  credit_pull: "border-amber-500/30 bg-amber-500/10 text-amber-700",
-  bank_transfer: "border-zinc-500/30 bg-zinc-500/10 text-zinc-700",
-  bo_adjustment: "border-zinc-500/30 bg-zinc-500/10 text-zinc-700",
+  deposit: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+  withdrawal: "border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-300",
+  game_topup: "border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300",
+  game_transfer: "border-violet-500/30 bg-violet-500/10 text-violet-700 dark:text-violet-300",
+  credit_pull: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+  bank_transfer: "border-zinc-500/30 bg-zinc-500/10 text-zinc-700 dark:text-zinc-300",
+  bo_adjustment: "border-zinc-500/30 bg-zinc-500/10 text-zinc-700 dark:text-zinc-300",
 };
 
 const FILTERS = [
@@ -201,7 +201,7 @@ export function PlayerTransactionsTab({ playerId }: { playerId: number }) {
       </div>
 
       {error ? (
-        <p className="py-6 text-center text-sm text-rose-600">{error}</p>
+        <p className="py-6 text-center text-sm text-rose-600 dark:text-rose-400">{error}</p>
       ) : loading ? (
         <ListLoading label="Loading history…" />
       ) : entries.length === 0 ? (
@@ -243,7 +243,7 @@ export function PlayerTransactionsTab({ playerId }: { playerId: number }) {
                         className={cn(
                           "inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium whitespace-nowrap",
                           TYPE_STYLE[e.type] ??
-                            "border-zinc-500/30 bg-zinc-500/10 text-zinc-700",
+                            "border-zinc-500/30 bg-zinc-500/10 text-zinc-700 dark:text-zinc-300",
                         )}
                       >
                         {e.type.replace(/_/g, " ")}

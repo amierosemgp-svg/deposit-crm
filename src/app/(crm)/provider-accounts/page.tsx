@@ -213,7 +213,7 @@ export default function ProviderAccountsPage() {
           <div
             className={cn(
               "mt-1 text-2xl font-semibold tabular-nums",
-              lowCreditCount > 0 ? "text-amber-600" : "text-foreground",
+              lowCreditCount > 0 ? "text-amber-600 dark:text-amber-400" : "text-foreground",
             )}
           >
             {lowCreditCount}
@@ -354,14 +354,14 @@ export default function ProviderAccountsPage() {
                           className={cn(
                             "font-semibold tabular-nums",
                             a.current_credit === 0 && "text-muted-foreground",
-                            isLow && "text-amber-700",
+                            isLow && "text-amber-700 dark:text-amber-300",
                           )}
                         >
                           {fmtCredit(a.current_credit)}
                         </span>
                       </div>
                       {isLow && (
-                        <div className="text-[10px] text-amber-600 mt-0.5">
+                        <div className="text-[10px] text-amber-600 dark:text-amber-400 mt-0.5">
                           Low credit
                         </div>
                       )}
@@ -378,7 +378,7 @@ export default function ProviderAccountsPage() {
                             className={cn(
                               "text-[11px] font-medium",
                               a.status === "active"
-                                ? "text-emerald-700"
+                                ? "text-emerald-700 dark:text-emerald-300"
                                 : "text-muted-foreground",
                             )}
                           >
@@ -397,7 +397,7 @@ export default function ProviderAccountsPage() {
                             variant="ghost"
                             onClick={() => openAdjust(a, "topup")}
                             disabled={a.status !== "active"}
-                            className="cursor-pointer h-7 px-2 text-emerald-700 hover:text-emerald-800 hover:bg-emerald-50"
+                            className="cursor-pointer h-7 px-2 text-emerald-700 dark:text-emerald-300 hover:text-emerald-800 hover:bg-emerald-50"
                             title="Top up credit"
                           >
                             <ArrowUpCircle className="h-3.5 w-3.5" />
@@ -407,7 +407,7 @@ export default function ProviderAccountsPage() {
                             variant="ghost"
                             onClick={() => openAdjust(a, "deduct")}
                             disabled={a.status !== "active" || a.current_credit <= 0}
-                            className="cursor-pointer h-7 px-2 text-rose-600 hover:text-rose-700 hover:bg-rose-50"
+                            className="cursor-pointer h-7 px-2 text-rose-600 dark:text-rose-400 hover:text-rose-700 hover:bg-rose-50"
                             title="Deduct credit"
                           >
                             <ArrowDownCircle className="h-3.5 w-3.5" />
@@ -425,7 +425,7 @@ export default function ProviderAccountsPage() {
                             size="sm"
                             variant="ghost"
                             onClick={() => handleDelete(a)}
-                            className="cursor-pointer h-7 px-2 text-rose-600 hover:text-rose-700 hover:bg-rose-50"
+                            className="cursor-pointer h-7 px-2 text-rose-600 dark:text-rose-400 hover:text-rose-700 hover:bg-rose-50"
                             title="Delete"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
@@ -506,7 +506,7 @@ export default function ProviderAccountsPage() {
                       <span
                         className={cn(
                           "inline-flex items-center gap-1 font-semibold tabular-nums",
-                          positive ? "text-emerald-700" : "text-rose-600",
+                          positive ? "text-emerald-700 dark:text-emerald-300" : "text-rose-600 dark:text-rose-400",
                         )}
                       >
                         {positive ? (

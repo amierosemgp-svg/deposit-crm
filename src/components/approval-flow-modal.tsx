@@ -113,7 +113,7 @@ export function ApprovalFlowModal({ depositId, open, onOpenChange }: Props) {
                     initial={{ scale: 0 }}
                     animate={{ scale: 1 }}
                     transition={{ type: "spring", damping: 10, stiffness: 220, delay: 0.1 }}
-                    className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600"
+                    className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
                   >
                     <CheckCircle2 className="h-9 w-9" />
                   </motion.div>
@@ -134,7 +134,7 @@ export function ApprovalFlowModal({ depositId, open, onOpenChange }: Props) {
                     </p>
                   </div>
 
-                  <div className="mx-auto inline-flex items-center gap-2 rounded-md border bg-blue-500/5 px-3 py-2 text-[12px] text-blue-700">
+                  <div className="mx-auto inline-flex items-center gap-2 rounded-md border bg-blue-500/5 px-3 py-2 text-[12px] text-blue-700 dark:text-blue-300">
                     <Bot className="h-4 w-4" />
                     Now <span className="font-medium">Processing</span> — this row flips to{" "}
                     <span className="font-medium">Completed</span> automatically once the bot confirms.
@@ -158,7 +158,7 @@ export function ApprovalFlowModal({ depositId, open, onOpenChange }: Props) {
                     initial={{ scale: 0 }}
                     animate={{ scale: 1 }}
                     transition={{ type: "spring", damping: 10, stiffness: 220, delay: 0.1 }}
-                    className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-red-500/10 text-red-600"
+                    className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-red-500/10 text-red-600 dark:text-red-400"
                   >
                     <XCircle className="h-9 w-9" />
                   </motion.div>

@@ -71,7 +71,7 @@ function RejectDepositButton({
         if (!r.ok) toast.error(r.error ?? "Reject failed");
         else toast.success("Deposit rejected");
       }}
-      className="cursor-pointer gap-1 border-red-300 text-red-700 hover:bg-red-50 hover:text-red-800"
+      className="cursor-pointer gap-1 border-red-300 text-red-700 dark:text-red-300 hover:bg-red-50 hover:text-red-800"
     >
       <X className="h-3.5 w-3.5" />
       Reject
@@ -386,7 +386,7 @@ export default function DepositsPage() {
         </div>
         <div className="flex items-center gap-2">
           {pendingCount > 0 && (
-            <div className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-700">
+            <div className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-700 dark:text-amber-300">
               <span className="relative flex h-2 w-2">
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75" />
                 <span className="relative inline-flex h-2 w-2 rounded-full bg-amber-500" />
@@ -630,7 +630,7 @@ export default function DepositsPage() {
                         selectedIds.has(d.deposit_id) && editable
                           ? "bg-primary/5 hover:bg-primary/10"
                           : editable
-                            ? "bg-amber-50/50 hover:bg-amber-50"
+                            ? "bg-amber-50 dark:bg-amber-950/40 hover:bg-amber-50"
                             : "hover:bg-muted/30",
                       )}
                     >
@@ -804,7 +804,7 @@ export default function DepositsPage() {
                           <div className="flex items-center gap-1">
                             <SourceBadge source={d.source} />
                             {d.skip_bot && (
-                              <span className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
+                              <span className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 dark:bg-amber-950/40 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
                                 No bot
                               </span>
                             )}
@@ -864,12 +864,12 @@ export default function DepositsPage() {
                             Approve
                           </Button>
                         ) : d.status === "completed" ? (
-                          <span className="inline-flex items-center gap-1 text-[11px] text-emerald-700">
+                          <span className="inline-flex items-center gap-1 text-[11px] text-emerald-700 dark:text-emerald-300">
                             <CheckCircle2 className="h-3.5 w-3.5" />
                             Credited
                           </span>
                         ) : d.status === "processing" || d.status === "approved" ? (
-                          <span className="inline-flex items-center gap-1 text-[11px] text-blue-700">
+                          <span className="inline-flex items-center gap-1 text-[11px] text-blue-700 dark:text-blue-300">
                             <Loader2 className="h-3.5 w-3.5 animate-spin" />
                             Bot topping up…
                           </span>
@@ -879,12 +879,12 @@ export default function DepositsPage() {
                           </span>
                         ) : d.status === "failed" ? (
                           isViewer ? (
-                            <span className="text-[11px] text-red-600">Top-up failed</span>
+                            <span className="text-[11px] text-red-600 dark:text-red-400">Top-up failed</span>
                           ) : (
                             <Button
                               size="sm"
                               variant="outline"
-                              className="cursor-pointer gap-1 border-red-300 text-red-700 hover:bg-red-50 hover:text-red-800"
+                              className="cursor-pointer gap-1 border-red-300 text-red-700 dark:text-red-300 hover:bg-red-50 hover:text-red-800"
                               onClick={async () => {
                                 const r = await reprocessDeposit(d.deposit_id);
                                 if (!r.ok) toast.error(r.error ?? "Reprocess failed");

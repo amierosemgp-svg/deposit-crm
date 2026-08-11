@@ -30,9 +30,9 @@ import {
 
 const ROLE_BADGE: Record<UserRole, { label: string; cls: string }> = {
   super_admin: { label: "Super Admin", cls: "bg-primary/10 text-primary" },
-  company_leader: { label: "Leader", cls: "bg-amber-500/10 text-amber-700" },
-  cs_agent: { label: "CS Agent", cls: "bg-blue-500/10 text-blue-700" },
-  viewer: { label: "Viewer", cls: "bg-zinc-500/10 text-zinc-600" },
+  company_leader: { label: "Leader", cls: "bg-amber-500/10 text-amber-700 dark:text-amber-300" },
+  cs_agent: { label: "CS Agent", cls: "bg-blue-500/10 text-blue-700 dark:text-blue-300" },
+  viewer: { label: "Viewer", cls: "bg-zinc-500/10 text-zinc-600 dark:text-zinc-400" },
 };
 
 function RoleBadge({ role }: { role: UserRole }) {
@@ -148,7 +148,7 @@ function AddEntityDialog({
         <form onSubmit={handleSubmit} className="space-y-3">
           <div className="space-y-1.5">
             <Label htmlFor="entity-name">
-              Name <span className="text-rose-600">*</span>
+              Name <span className="text-rose-600 dark:text-rose-400">*</span>
             </Label>
             <Input
               id="entity-name"
@@ -260,7 +260,7 @@ function AddUserDialog({
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label htmlFor="user-username">
-                Username <span className="text-rose-600">*</span>
+                Username <span className="text-rose-600 dark:text-rose-400">*</span>
               </Label>
               <Input
                 id="user-username"
@@ -272,7 +272,7 @@ function AddUserDialog({
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="user-fullname">
-                Full name <span className="text-rose-600">*</span>
+                Full name <span className="text-rose-600 dark:text-rose-400">*</span>
               </Label>
               <Input
                 id="user-fullname"
@@ -284,7 +284,7 @@ function AddUserDialog({
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="user-email">
-              Email <span className="text-rose-600">*</span>
+              Email <span className="text-rose-600 dark:text-rose-400">*</span>
             </Label>
             <Input
               id="user-email"
@@ -296,7 +296,7 @@ function AddUserDialog({
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="user-password">
-              Password <span className="text-rose-600">*</span>
+              Password <span className="text-rose-600 dark:text-rose-400">*</span>
             </Label>
             <Input
               id="user-password"
@@ -377,7 +377,7 @@ function EditEntityLink({ entity }: { entity: Entity }) {
 function InactiveTag({ entity }: { entity: Entity }) {
   if (entity.status === "active") return null;
   return (
-    <span className="inline-flex shrink-0 items-center rounded-full bg-zinc-500/10 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600">
+    <span className="inline-flex shrink-0 items-center rounded-full bg-zinc-500/10 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600 dark:text-zinc-400">
       Inactive
     </span>
   );
@@ -595,7 +595,7 @@ export default function HierarchyPage() {
                 <Card>
                   <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-3">
                     <div className="flex items-center gap-3">
-                      <div className="flex h-9 w-9 items-center justify-center rounded-md bg-amber-500/10 text-amber-600">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400">
                         <Crown className="h-4 w-4" />
                       </div>
                       <div>
@@ -660,7 +660,7 @@ export default function HierarchyPage() {
                               <div className="rounded-lg border bg-card">
                                 <div className="flex items-start justify-between gap-2 px-3.5 py-3">
                                   <div className="flex items-center gap-2.5">
-                                    <div className="flex h-8 w-8 items-center justify-center rounded-md bg-blue-500/10 text-blue-600">
+                                    <div className="flex h-8 w-8 items-center justify-center rounded-md bg-blue-500/10 text-blue-600 dark:text-blue-400">
                                       <Landmark className="h-4 w-4" />
                                     </div>
                                     <div>
@@ -724,7 +724,7 @@ export default function HierarchyPage() {
                                         >
                                           <div className="flex items-center justify-between gap-2 px-2.5 py-2">
                                             <div className="flex items-center gap-2">
-                                              <div className="flex h-6 w-6 items-center justify-center rounded bg-emerald-500/10 text-emerald-600">
+                                              <div className="flex h-6 w-6 items-center justify-center rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
                                                 <Headset className="h-3.5 w-3.5" />
                                               </div>
                                               <span className="text-xs font-medium">

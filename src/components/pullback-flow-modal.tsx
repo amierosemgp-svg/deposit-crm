@@ -184,7 +184,7 @@ export function PullbackFlowModal({ withdrawalId, open, onOpenChange }: Props) {
                     initial={{ scale: 0 }}
                     animate={{ scale: 1 }}
                     transition={{ type: "spring", damping: 10, stiffness: 220, delay: 0.1 }}
-                    className="mx-auto sm:mx-0 flex h-16 w-16 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600"
+                    className="mx-auto sm:mx-0 flex h-16 w-16 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
                   >
                     <CheckCircle2 className="h-9 w-9" />
                   </motion.div>
@@ -230,7 +230,7 @@ export function PullbackFlowModal({ withdrawalId, open, onOpenChange }: Props) {
                   initial={{ scale: 0 }}
                   animate={{ scale: 1 }}
                   transition={{ type: "spring", damping: 10, stiffness: 220, delay: 0.1 }}
-                  className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-red-500/10 text-red-600"
+                  className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-red-500/10 text-red-600 dark:text-red-400"
                 >
                   <XCircle className="h-9 w-9" />
                 </motion.div>
@@ -239,7 +239,7 @@ export function PullbackFlowModal({ withdrawalId, open, onOpenChange }: Props) {
                   <h2 className="text-xl font-semibold">
                     Could not pull credits from {withdrawal.game_name}
                   </h2>
-                  <p className="mt-1.5 text-sm text-red-600">
+                  <p className="mt-1.5 text-sm text-red-600 dark:text-red-400">
                     {error ?? "Something went wrong on the server."}
                   </p>
                   <p className="mt-1 text-sm text-muted-foreground">

@@ -302,7 +302,7 @@ export function ReferralTab({ playerId }: { playerId: number }) {
                           @{p.username}
                         </span>
                         {taken && (
-                          <span className="ml-1.5 text-[10px] text-amber-600">
+                          <span className="ml-1.5 text-[10px] text-amber-600 dark:text-amber-400">
                             already referred
                           </span>
                         )}

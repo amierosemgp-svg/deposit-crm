@@ -44,9 +44,9 @@ function inRange(iso: string | null | undefined, from: string, to: string) {
 // online/total → colour: neutral when nothing configured, green all-up, red all-down, amber partial.
 function statusColor(online: number, total: number) {
   if (total === 0) return "text-muted-foreground";
-  if (online === total) return "text-emerald-600";
-  if (online === 0) return "text-red-600";
-  return "text-amber-600";
+  if (online === total) return "text-emerald-600 dark:text-emerald-400";
+  if (online === 0) return "text-red-600 dark:text-red-400";
+  return "text-amber-600 dark:text-amber-400";
 }
 
 function EmptyRow({
@@ -312,7 +312,7 @@ export default function DashboardPage() {
           sub="Deposits − withdrawals − bonuses − expenses"
           icon={TrendingUp}
           tone={profit >= 0 ? "success" : "danger"}
-          valueClassName={profit >= 0 ? "text-emerald-600" : "text-rose-600"}
+          valueClassName={profit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}
         />
       </div>
 
@@ -439,7 +439,7 @@ export default function DashboardPage() {
                 <span
                   className={cn(
                     "font-medium tabular-nums",
-                    botsAttention > 0 ? "text-amber-600" : "text-muted-foreground",
+                    botsAttention > 0 ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground",
                   )}
                 >
                   {botsAttention}
@@ -504,7 +504,7 @@ export default function DashboardPage() {
         <Card>
           <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
             <CardTitle className="text-base flex items-center gap-2">
-              <ArrowDownRight className="h-4 w-4 text-emerald-600" />
+              <ArrowDownRight className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
               Recent Deposits
             </CardTitle>
             <span className="text-xs text-muted-foreground">Last 5</span>
@@ -571,7 +571,7 @@ export default function DashboardPage() {
         <Card>
           <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
             <CardTitle className="text-base flex items-center gap-2">
-              <ArrowUpRight className="h-4 w-4 text-blue-600" />
+              <ArrowUpRight className="h-4 w-4 text-blue-600 dark:text-blue-400" />
               Recent Withdrawals
             </CardTitle>
             <span className="text-xs text-muted-foreground">Last 5</span>

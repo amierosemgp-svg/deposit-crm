@@ -243,14 +243,14 @@ export function AssignPlayerSheet({
                       disabled={assigningId !== null || p.status === "suspended"}
                       className={cn(
                         "flex w-full cursor-pointer items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-muted/50 disabled:cursor-not-allowed disabled:opacity-50",
-                        suggested && "bg-emerald-50/60 hover:bg-emerald-50",
+                        suggested && "bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-50",
                       )}
                     >
                       <span
                         className={cn(
                           "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold",
                           suggested
-                            ? "bg-emerald-500/15 text-emerald-700"
+                            ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
                             : "bg-primary/10 text-primary",
                         )}
                       >
@@ -267,13 +267,13 @@ export function AssignPlayerSheet({
                             {p.full_name}
                           </span>
                           {suggested && (
-                            <span className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
+                            <span className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300">
                               <UserCheck className="h-3 w-3" />
                               Bank match
                             </span>
                           )}
                           {p.status === "suspended" && (
-                            <span className="inline-flex shrink-0 items-center rounded-full bg-red-500/10 px-1.5 py-0.5 text-[10px] font-medium text-red-700">
+                            <span className="inline-flex shrink-0 items-center rounded-full bg-red-500/10 px-1.5 py-0.5 text-[10px] font-medium text-red-700 dark:text-red-300">
                               Suspended
                             </span>
                           )}

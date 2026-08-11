@@ -262,7 +262,7 @@ export default function GameTransferPage() {
                   max={fromBal}
                 />
                 {player && amt > fromBal && (
-                  <p className="text-[11px] text-red-600">Exceeds current balance</p>
+                  <p className="text-[11px] text-red-600 dark:text-red-400">Exceeds current balance</p>
                 )}
               </div>
 
@@ -357,13 +357,13 @@ export default function GameTransferPage() {
                           label={t.status === "pending" ? "Initializing" : undefined}
                         />
                         {t.status === "solving" && (
-                          <p className="mt-1 text-[11px] text-violet-700">
+                          <p className="mt-1 text-[11px] text-violet-700 dark:text-violet-300">
                             recovering — attempt {t.attempt_count} of{" "}
                             {MAX_TRANSFER_ATTEMPTS}
                           </p>
                         )}
                         {t.status === "processing" && t.attempt_count > 1 && (
-                          <p className="mt-1 text-[11px] text-amber-600">
+                          <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
                             retry {t.attempt_count} of {MAX_TRANSFER_ATTEMPTS}
                           </p>
                         )}
@@ -371,7 +371,7 @@ export default function GameTransferPage() {
                           <p
                             className={`mt-1 max-w-[220px] text-[11px] leading-snug ${
                               t.status === "failed"
-                                ? "text-red-600"
+                                ? "text-red-600 dark:text-red-400"
                                 : "text-muted-foreground"
                             }`}
                             title={t.note}

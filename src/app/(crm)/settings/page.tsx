@@ -276,7 +276,7 @@ function TeamTab() {
                       </Button>
                       <Button
                         variant="outline" size="sm"
-                        className="cursor-pointer text-red-600 hover:text-red-700"
+                        className="cursor-pointer text-red-600 dark:text-red-400 hover:text-red-700"
                         onClick={() => remove(u)}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
@@ -496,7 +496,7 @@ function KeysTab() {
                     {k.allowed_ips?.length ? (
                       <span className="font-mono text-muted-foreground">{k.allowed_ips.join(", ")}</span>
                     ) : (
-                      <span className="text-amber-600">Any IP</span>
+                      <span className="text-amber-600 dark:text-amber-400">Any IP</span>
                     )}
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">
@@ -511,7 +511,7 @@ function KeysTab() {
                       <Button variant="outline" size="sm" className="cursor-pointer" onClick={() => revoke(k)}>
                         {k.status === "active" ? "Revoke" : "Reactivate"}
                       </Button>
-                      <Button variant="outline" size="sm" className="cursor-pointer text-red-600 hover:text-red-700" onClick={() => remove(k)}>
+                      <Button variant="outline" size="sm" className="cursor-pointer text-red-600 dark:text-red-400 hover:text-red-700" onClick={() => remove(k)}>
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
                     </div>

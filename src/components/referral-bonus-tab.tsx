@@ -30,9 +30,9 @@ type Bonus = {
 };
 
 const STATUS_STYLE: Record<Bonus["status"], string> = {
-  pending: "border-amber-500/30 bg-amber-500/10 text-amber-700",
-  assigned: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700",
-  cancelled: "border-zinc-500/30 bg-zinc-500/10 text-zinc-600",
+  pending: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+  assigned: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+  cancelled: "border-zinc-500/30 bg-zinc-500/10 text-zinc-600 dark:text-zinc-400",
 };
 
 /**
@@ -142,7 +142,7 @@ export function ReferralBonusTab({ playerId }: { playerId: number }) {
         {pendingTotal > 0 && (
           <span className="ml-auto text-[12px]">
             <span className="text-muted-foreground">Unassigned </span>
-            <span className="font-semibold text-amber-600">
+            <span className="font-semibold text-amber-600 dark:text-amber-400">
               {formatRM(pendingTotal)}
             </span>
           </span>
@@ -150,7 +150,7 @@ export function ReferralBonusTab({ playerId }: { playerId: number }) {
       </div>
 
       {error ? (
-        <p className="py-6 text-center text-sm text-rose-600">{error}</p>
+        <p className="py-6 text-center text-sm text-rose-600 dark:text-rose-400">{error}</p>
       ) : loading ? (
         <ListLoading label="Loading bonuses…" />
       ) : bonuses.length === 0 ? (
