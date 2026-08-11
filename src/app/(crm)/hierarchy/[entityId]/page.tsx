@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { toast } from "sonner";
@@ -60,6 +60,18 @@ function canEdit(me: Me | null, entity: Entity, entities: Entity[]): boolean {
   return false;
 }
 
+function BackLink() {
+  return (
+    <Link
+      href="/hierarchy"
+      className="inline-flex cursor-pointer items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+    >
+      <ArrowLeft className="h-4 w-4" />
+      Organization Hierarchy
+    </Link>
+  );
+}
+
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between gap-4 py-2 text-sm">
@@ -69,89 +81,24 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-export default function EntityEditPage() {
-  const { entityId } = useParams<{ entityId: string }>();
-  const id = Number(entityId);
-
-  const hydrated = useStore((s) => s.hydrated);
-  const me = useStore((s) => s.me);
-  const entities = useStore((s) => s.entities);
-  const users = useStore((s) => s.users);
-  const players = useStore((s) => s.players);
+/**
+ * Seeded from the entity on mount. The parent keys this on the saved values,
+ * so a successful save (or navigating to another node) remounts it with fresh
+ * defaults — no effect syncing server state into form state.
+ */
+function EditForm({ entity, editable }: { entity: Entity; editable: boolean }) {
   const updateEntity = useStore((s) => s.updateEntity);
-
-  const entity = entities.find((e) => e.entity_id === id);
-
-  const [name, setName] = useState("");
-  const [active, setActive] = useState(true);
+  const [name, setName] = useState(entity.name);
+  const [active, setActive] = useState(entity.status === "active");
   const [saving, setSaving] = useState(false);
 
-  // Seed the form once the entity lands (and re-seed after a save refresh).
-  useEffect(() => {
-    if (!entity) return;
-    setName(entity.name);
-    setActive(entity.status === "active");
-  }, [entity?.entity_id, entity?.name, entity?.status]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const parent = useMemo(
-    () =>
-      entity?.parent_entity_id != null
-        ? entities.find((e) => e.entity_id === entity.parent_entity_id)
-        : undefined,
-    [entities, entity?.parent_entity_id],
-  );
-  const children = useMemo(
-    () => entities.filter((e) => e.parent_entity_id === id),
-    [entities, id],
-  );
-  const entityUsers = useMemo(
-    () => users.filter((u) => u.entity_id === id),
-    [users, id],
-  );
-  const playerCount = useMemo(
-    () => players.filter((p) => p.company_entity_id === id).length,
-    [players, id],
-  );
-
-  if (!hydrated) {
-    return (
-      <div className="space-y-5">
-        <Skeleton className="h-5 w-40" />
-        <Skeleton className="h-20 w-full" />
-        <Skeleton className="h-64 w-full" />
-      </div>
-    );
-  }
-
-  if (!entity) {
-    return (
-      <div className="space-y-5">
-        <Link
-          href="/hierarchy"
-          className="inline-flex cursor-pointer items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Organization Hierarchy
-        </Link>
-        <Card>
-          <CardContent className="py-12 text-center text-sm text-muted-foreground">
-            No entity #{entityId} in your organization — it may have been
-            removed, or it sits outside what you can see.
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
-  const editable = canEdit(me, entity, entities);
   const isMain = entity.entity_type === "main_company";
-  const { icon: Icon, cls } = TYPE_ICON[entity.entity_type];
   const trimmedName = name.trim();
   const dirty =
     trimmedName !== entity.name || active !== (entity.status === "active");
 
   async function handleSave() {
-    if (!entity || !dirty || saving) return;
+    if (!dirty || saving) return;
     if (!trimmedName) {
       toast.error("Name cannot be empty");
       return;
@@ -173,20 +120,138 @@ export default function EntityEditPage() {
   }
 
   function handleReset() {
-    if (!entity) return;
     setName(entity.name);
     setActive(entity.status === "active");
   }
 
   return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base">Edit</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {!editable && (
+          <p className="rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+            You don&apos;t have permission to change this entity — it sits
+            outside the part of the hierarchy you manage.
+          </p>
+        )}
+
+        <div className="space-y-1.5">
+          <Label htmlFor="entity-name">
+            Name <span className="text-rose-600">*</span>
+          </Label>
+          <Input
+            id="entity-name"
+            value={name}
+            maxLength={120}
+            disabled={!editable || saving}
+            onChange={(e) => setName(e.target.value)}
+          />
+        </div>
+
+        <div className="flex items-start justify-between gap-4 rounded-md border px-3 py-2.5">
+          <div className="space-y-0.5">
+            <Label htmlFor="entity-active" className="text-sm">
+              Active
+            </Label>
+            <p className="text-xs text-muted-foreground">
+              {isMain
+                ? "The main company is always active."
+                : "Entities are never deleted — deactivate one to retire it while its players, accounts and history stay intact. Child entities keep their own status."}
+            </p>
+          </div>
+          <Switch
+            id="entity-active"
+            checked={active}
+            disabled={!editable || isMain || saving}
+            onCheckedChange={setActive}
+            aria-label={`Toggle ${entity.name} active`}
+          />
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Button
+            className="cursor-pointer"
+            disabled={!editable || !dirty || saving}
+            onClick={() => void handleSave()}
+          >
+            {saving ? "Saving…" : "Save changes"}
+          </Button>
+          <Button
+            variant="outline"
+            className="cursor-pointer"
+            disabled={!dirty || saving}
+            onClick={handleReset}
+          >
+            Reset
+          </Button>
+        </div>
+
+        <p className="text-xs text-muted-foreground">
+          Type and parent can&apos;t be changed — moving a node would re-scope
+          every player, bank account and transaction under it.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+export default function EntityEditPage() {
+  const { entityId } = useParams<{ entityId: string }>();
+  const id = Number(entityId);
+
+  const hydrated = useStore((s) => s.hydrated);
+  const me = useStore((s) => s.me);
+  const entities = useStore((s) => s.entities);
+  const users = useStore((s) => s.users);
+  const players = useStore((s) => s.players);
+
+  const entity = entities.find((e) => e.entity_id === id);
+  const parent = entities.find((e) => e.entity_id === entity?.parent_entity_id);
+
+  const children = useMemo(
+    () => entities.filter((e) => e.parent_entity_id === id),
+    [entities, id],
+  );
+  const userCount = useMemo(
+    () => users.filter((u) => u.entity_id === id).length,
+    [users, id],
+  );
+  const playerCount = useMemo(
+    () => players.filter((p) => p.company_entity_id === id).length,
+    [players, id],
+  );
+
+  if (!hydrated) {
+    return (
+      <div className="space-y-5">
+        <Skeleton className="h-5 w-40" />
+        <Skeleton className="h-20 w-full" />
+        <Skeleton className="h-64 w-full" />
+      </div>
+    );
+  }
+
+  if (!entity) {
+    return (
+      <div className="space-y-5">
+        <BackLink />
+        <Card>
+          <CardContent className="py-12 text-center text-sm text-muted-foreground">
+            No entity #{entityId} in your organization — it may sit outside what
+            you can see.
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  const { icon: Icon, cls } = TYPE_ICON[entity.entity_type];
+
+  return (
     <div className="space-y-5">
-      <Link
-        href="/hierarchy"
-        className="inline-flex cursor-pointer items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
-      >
-        <ArrowLeft className="h-4 w-4" />
-        Organization Hierarchy
-      </Link>
+      <BackLink />
 
       <div className="flex items-start gap-3">
         <div
@@ -196,8 +261,8 @@ export default function EntityEditPage() {
         </div>
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-2xl font-semibold">{entity.name}</h1>
-          <div className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
-            {TYPE_LABEL[entity.entity_type]}
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+            <span>{TYPE_LABEL[entity.entity_type]}</span>
             {parent && <span>· under {parent.name}</span>}
             <StatusBadge status={entity.status} />
           </div>
@@ -205,75 +270,11 @@ export default function EntityEditPage() {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Edit</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {!editable && (
-              <p className="rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-                You don&apos;t have permission to change this entity — it sits
-                outside the part of the hierarchy you manage.
-              </p>
-            )}
-
-            <div className="space-y-1.5">
-              <Label htmlFor="entity-name">
-                Name <span className="text-rose-600">*</span>
-              </Label>
-              <Input
-                id="entity-name"
-                value={name}
-                maxLength={120}
-                disabled={!editable || saving}
-                onChange={(e) => setName(e.target.value)}
-              />
-            </div>
-
-            <div className="flex items-start justify-between gap-4 rounded-md border px-3 py-2.5">
-              <div className="space-y-0.5">
-                <Label htmlFor="entity-active" className="text-sm">
-                  Active
-                </Label>
-                <p className="text-xs text-muted-foreground">
-                  {isMain
-                    ? "The main company is always active."
-                    : "Entities are never deleted — deactivate one to retire it while its players, accounts and history stay intact. Child entities keep their own status."}
-                </p>
-              </div>
-              <Switch
-                id="entity-active"
-                checked={active}
-                disabled={!editable || isMain || saving}
-                onCheckedChange={setActive}
-                aria-label={`Toggle ${entity.name} active`}
-              />
-            </div>
-
-            <div className="flex items-center gap-2">
-              <Button
-                className="cursor-pointer"
-                disabled={!editable || !dirty || saving}
-                onClick={() => void handleSave()}
-              >
-                {saving ? "Saving…" : "Save changes"}
-              </Button>
-              <Button
-                variant="outline"
-                className="cursor-pointer"
-                disabled={!dirty || saving}
-                onClick={handleReset}
-              >
-                Reset
-              </Button>
-            </div>
-
-            <p className="text-xs text-muted-foreground">
-              Type and parent can&apos;t be changed — moving a node would
-              re-scope every player, bank account and transaction under it.
-            </p>
-          </CardContent>
-        </Card>
+        <EditForm
+          key={`${entity.entity_id}:${entity.name}:${entity.status}`}
+          entity={entity}
+          editable={canEdit(me, entity, entities)}
+        />
 
         <Card>
           <CardHeader className="pb-3">
@@ -292,7 +293,7 @@ export default function EntityEditPage() {
               value={
                 <span className="inline-flex items-center gap-1.5">
                   <Users className="h-3.5 w-3.5 text-muted-foreground" />
-                  {entityUsers.length}
+                  {userCount}
                 </span>
               }
             />
@@ -302,14 +303,9 @@ export default function EntityEditPage() {
             <Row
               label="Child entities"
               value={
-                children.length === 0 ? (
-                  "—"
-                ) : (
-                  <span>
-                    {children.length} ·{" "}
-                    {children.filter((c) => c.status === "active").length} active
-                  </span>
-                )
+                children.length === 0
+                  ? "—"
+                  : `${children.length} · ${children.filter((c) => c.status === "active").length} active`
               }
             />
           </CardContent>

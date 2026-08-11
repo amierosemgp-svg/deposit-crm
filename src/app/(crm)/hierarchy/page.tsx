@@ -447,6 +447,22 @@ export default function HierarchyPage() {
     }
     return false;
   };
+  /** Mirror of assertCanEdit in /api/entities/[id]. */
+  const canEditEntity = (entity: Entity) => {
+    if (!me || me.role === "viewer" || me.role === "cs_agent") return false;
+    if (isSuper) return true;
+    if (entity.entity_id === me.entity_id) return true;
+    if (entity.entity_type === "company") {
+      return entity.parent_entity_id === me.entity_id;
+    }
+    if (entity.entity_type === "cs") {
+      const company = entities.find(
+        (e) => e.entity_id === entity.parent_entity_id,
+      );
+      return company?.parent_entity_id === me.entity_id;
+    }
+    return false;
+  };
   const derivedRole = (
     entity: Entity,
   ): "company_leader" | "cs_agent" | "viewer" =>
@@ -521,6 +537,7 @@ export default function HierarchyPage() {
             </p>
           </div>
           <div className="flex items-center gap-1.5">
+            {canEditEntity(main) && <EditEntityLink entity={main} />}
             {isSuper && (
               <>
                 <NodeActionButton
@@ -579,7 +596,10 @@ export default function HierarchyPage() {
                         <Crown className="h-4 w-4" />
                       </div>
                       <div>
-                        <CardTitle className="text-sm">{leader.name}</CardTitle>
+                        <div className="flex items-center gap-2">
+                          <CardTitle className="text-sm">{leader.name}</CardTitle>
+                          <InactiveTag entity={leader} />
+                        </div>
                         <p className="text-[11px] text-muted-foreground">
                           Leader · {leaderCompanies.length}{" "}
                           {leaderCompanies.length === 1 ? "company" : "companies"}
@@ -587,6 +607,7 @@ export default function HierarchyPage() {
                       </div>
                     </div>
                     <div className="flex items-center gap-1.5">
+                      {canEditEntity(leader) && <EditEntityLink entity={leader} />}
                       {canAddCompanyOn(leader.entity_id) && (
                         <NodeActionButton
                           label="Company"
@@ -640,8 +661,11 @@ export default function HierarchyPage() {
                                       <Landmark className="h-4 w-4" />
                                     </div>
                                     <div>
-                                      <div className="text-sm font-medium">
-                                        {company.name}
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-sm font-medium">
+                                          {company.name}
+                                        </span>
+                                        <InactiveTag entity={company} />
                                       </div>
                                       <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
                                         <Users className="h-3 w-3" />
@@ -655,6 +679,9 @@ export default function HierarchyPage() {
                                     </div>
                                   </div>
                                   <div className="flex items-center gap-1.5">
+                                    {canEditEntity(company) && (
+                                      <EditEntityLink entity={company} />
+                                    )}
                                     {canAddCsOn(company) && (
                                       <NodeActionButton
                                         label="CS Desk"
@@ -700,6 +727,7 @@ export default function HierarchyPage() {
                                               <span className="text-xs font-medium">
                                                 {cs.name}
                                               </span>
+                                              <InactiveTag entity={cs} />
                                               <span className="text-[10px] text-muted-foreground">
                                                 CS Desk · {csUsers.length}{" "}
                                                 {csUsers.length === 1
@@ -707,13 +735,18 @@ export default function HierarchyPage() {
                                                   : "agents"}
                                               </span>
                                             </div>
-                                            {canAddUserOn(cs) && (
-                                              <NodeActionButton
-                                                label="Add User"
-                                                icon={UserPlus}
-                                                onClick={() => openAddUser(cs)}
-                                              />
-                                            )}
+                                            <div className="flex items-center gap-1.5">
+                                              {canEditEntity(cs) && (
+                                                <EditEntityLink entity={cs} />
+                                              )}
+                                              {canAddUserOn(cs) && (
+                                                <NodeActionButton
+                                                  label="Add User"
+                                                  icon={UserPlus}
+                                                  onClick={() => openAddUser(cs)}
+                                                />
+                                              )}
+                                            </div>
                                           </div>
                                           {csUsers.length > 0 && (
                                             <div className="border-t px-2.5 py-2">
