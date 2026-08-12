@@ -97,7 +97,7 @@ export function ApprovalFlowModal({ depositId, open, onOpenChange }: Props) {
                   <div>
                     <h2 className="text-lg font-semibold">Approving deposit…</h2>
                     <p className="mt-1.5 text-sm text-muted-foreground">
-                      Handing off to the bot for top-up
+                      Handing off to the agent for top-up
                     </p>
                   </div>
                 </motion.div>
@@ -119,9 +119,9 @@ export function ApprovalFlowModal({ depositId, open, onOpenChange }: Props) {
                   </motion.div>
 
                   <div>
-                    <h2 className="text-lg font-semibold">Approved &amp; sent to the bot</h2>
+                    <h2 className="text-lg font-semibold">Approved &amp; sent to the agent</h2>
                     <p className="mt-1.5 text-sm text-muted-foreground">
-                      The bot is topping up{" "}
+                      The agent is topping up{" "}
                       <span className="font-semibold text-foreground">
                         {formatRM(deposit.total_amount)}
                       </span>{" "}
@@ -137,7 +137,7 @@ export function ApprovalFlowModal({ depositId, open, onOpenChange }: Props) {
                   <div className="mx-auto inline-flex items-center gap-2 rounded-md border bg-blue-500/5 px-3 py-2 text-[12px] text-blue-700 dark:text-blue-300">
                     <Bot className="h-4 w-4" />
                     Now <span className="font-medium">Processing</span> — this row flips to{" "}
-                    <span className="font-medium">Completed</span> automatically once the bot confirms.
+                    <span className="font-medium">Completed</span> automatically once the agent confirms.
                   </div>
 
                   <div className="flex justify-center pt-1">

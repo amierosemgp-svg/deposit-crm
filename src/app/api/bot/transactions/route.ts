@@ -82,7 +82,7 @@ const TYPE_ALIASES: Record<string, string> = {
  *   - type=withdrawal: withdrawal requests.
  *   - type=transfer: bank transfers between entity accounts.
  *   - type=game_transfer: CS-requested game credit moves.
- *     `status=pending,solving` is the bot's work queue — claim one with
+ *     `status=pending,solving` is the agent's work queue — claim one with
  *     PATCH /api/bot/game-transfers/:id/status {status:"processing"}, do the
  *     provider-side move, then PATCH it to completed/failed.
  *   - type=all: all four, merged and sorted newest-first.
@@ -150,7 +150,7 @@ export async function GET(request: Request) {
     // otherwise (type=all) return every status.
     const statuses = valid ?? (type === "deposit" ? ["pending_match"] : null);
     if (!(statusList && statuses && statuses.length === 0)) {
-      // Manual (skip-bot) deposits are never surfaced to the bot.
+      // Manual (skip-agent) deposits are never surfaced to the agent.
       const conds: SQL[] = [eq(deposits.skip_bot, false)];
       if (statuses) {
         conds.push(
@@ -183,7 +183,7 @@ export async function GET(request: Request) {
         )
       : null;
     if (!(statusList && valid && valid.length === 0)) {
-      // Manual (skip-bot) withdrawals are never surfaced to the bot.
+      // Manual (skip-agent) withdrawals are never surfaced to the agent.
       const conds: SQL[] = [eq(withdrawals.skip_bot, false)];
       if (valid) {
         conds.push(
@@ -218,7 +218,7 @@ export async function GET(request: Request) {
       );
     }
     if (!(statusList && valid && valid.length === 0)) {
-      // Manual (skip-bot) transfers are never surfaced to the bot.
+      // Manual (skip-agent) transfers are never surfaced to the agent.
       const conds: SQL[] = [eq(bankTransfers.skip_bot, false)];
       if (valid) {
         conds.push(
@@ -297,7 +297,7 @@ export async function GET(request: Request) {
 }
 
 const depositSchema = z.object({
-  // Accept both our field names and the bot's queue-item shape
+  // Accept both our field names and the agent's queue-item shape
   id: z.string().optional(),
   external_id: z.string().optional(),
   transaction: z
@@ -462,7 +462,7 @@ export async function POST(request: Request) {
       deposit_date: parseBotDate(input.date, input.extracted_at),
       player_id: player?.player_id ?? null,
       player_username: player?.username ?? null,
-      // Explicit bot-stated entity wins; then the matched player's company, the
+      // Explicit agent-stated entity wins; then the matched player's company, the
       // receiving account's entity, and finally the key's company scope.
       company_entity_id:
         input.company_entity_id ??

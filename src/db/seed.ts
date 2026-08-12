@@ -1,9 +1,9 @@
 /* Seed the deposit_crm database with the minimum production skeleton:
  *   - entity hierarchy: MPG → Leader One → Company One → CS desk
  *   - one login per role (super admin, leader, CS agent, viewer)
- *   - bot API key + system settings
+ *   - agent API key + system settings
  * No players, transactions, or balances — all real data enters through
- * the app UI or the bot API.
+ * the app UI or the agent API.
  *
  * Run: pnpm db:seed   (wipes all rows, keeps schema)
  */
@@ -98,7 +98,7 @@ async function main() {
   await db.insert(apiKeys).values({
     key_hash: createHash("sha256").update(botKey).digest("hex"),
     hint: `${botKey.slice(0, 8)}…${botKey.slice(-4)}`,
-    label: "OpenClaw deposit bot",
+    label: "OpenClaw deposit agent",
   });
 
   await db.insert(settings).values([

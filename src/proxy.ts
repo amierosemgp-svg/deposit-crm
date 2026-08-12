@@ -3,13 +3,13 @@ import type { NextRequest } from "next/server";
 import { verifySessionToken } from "@/lib/session";
 
 const PUBLIC_API = ["/api/auth/login", "/api/bot/", "/api/cron/"];
-// Public, no-login pages (e.g. the bot API reference for the integration team)
+// Public, no-login pages (e.g. the agent API reference for the integration team)
 const PUBLIC_PAGES = ["/bot-api.html"];
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Bot + cron routes authenticate themselves (API key / cron secret)
+  // Agent + cron routes authenticate themselves (API key / cron secret)
   if (PUBLIC_API.some((p) => pathname.startsWith(p))) {
     return NextResponse.next();
   }

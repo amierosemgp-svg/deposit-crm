@@ -1,5 +1,5 @@
 /* Shared helpers for the bot CRUD endpoints (/api/bot/*).
- * Bot requests authenticate with an API key and act system-wide — there is no
+ * Agent requests authenticate with an API key and act system-wide — there is no
  * per-request role scope, unlike the human/session API. */
 import type {
   bankAccounts,
@@ -16,7 +16,7 @@ export function jsonError(message: string, status = 400) {
   return Response.json({ error: message }, { status });
 }
 
-/** Thrown inside a bot handler to abort with a specific status (rolls back any open txn). */
+/** Thrown inside an agent handler to abort with a specific status (rolls back any open txn). */
 export class BotError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -90,7 +90,7 @@ export function bankAccountJson(a: typeof bankAccounts.$inferSelect) {
     account_number: a.account_number,
     account_holder: a.account_holder,
     label: a.label,
-    // Online-banking login the bot uses to query the account. Named to match
+    // Online-banking login the agent uses to query the account. Named to match
     // the kiosk endpoint (username/password/pin); login_* kept as aliases.
     username: a.login_id,
     password: a.login_password,

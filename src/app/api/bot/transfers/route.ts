@@ -25,7 +25,7 @@ export async function GET(request: Request) {
   const limit = Math.min(Number(url.searchParams.get("limit") ?? 50), 200);
   const offset = Number(url.searchParams.get("offset") ?? 0);
 
-  // Manual (skip-bot) transfers are never surfaced to the bot.
+  // Manual (skip-agent) transfers are never surfaced to the agent.
   const filters: SQL[] = [eq(bankTransfers.skip_bot, false)];
   if (statusParam) {
     const wanted = statusParam

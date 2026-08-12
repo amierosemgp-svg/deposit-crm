@@ -53,7 +53,7 @@ const STATUS_FILTERS: { value: string; tab: string }[] = [
   { value: "all", tab: "All" },
 ];
 
-/** Reject control for manual (skip-bot) deposits — confirms, then fails the row. */
+/** Reject control for manual (skip-agent) deposits — confirms, then fails the row. */
 function RejectDepositButton({
   depositId,
   onReject,
@@ -119,7 +119,7 @@ export default function DepositsPage() {
     () =>
       deposits.filter(
         (d) =>
-          // Unmatched bot deposits have no company yet — keep them visible so they can be assigned.
+          // Unmatched agent deposits have no company yet — keep them visible so they can be assigned.
           d.company_entity_id === null || companyInScope(d.company_entity_id),
       ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -292,7 +292,7 @@ export default function DepositsPage() {
     setBulkApproving(false);
     setSelectedIds(new Set());
     if (ok > 0)
-      toast.success(`${ok} deposit${ok === 1 ? "" : "s"} approved — bot topping up`);
+      toast.success(`${ok} deposit${ok === 1 ? "" : "s"} approved — agent topping up`);
     if (failed > 0)
       toast.error(`${failed} deposit${failed === 1 ? "" : "s"} failed to approve`);
   }
@@ -372,7 +372,7 @@ export default function DepositsPage() {
         <div>
           <h1 className="text-2xl font-semibold">Deposits</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Bot-detected bank transactions — approve, then the bot tops up the game
+            Agent-detected bank transactions — approve, then the agent tops up the game
             {activeCompany && (
               <>
                 {" "}
@@ -805,7 +805,7 @@ export default function DepositsPage() {
                             <SourceBadge source={d.source} />
                             {d.skip_bot && (
                               <span className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 dark:bg-amber-950/40 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
-                                No bot
+                                No agent
                               </span>
                             )}
                           </div>
@@ -871,11 +871,11 @@ export default function DepositsPage() {
                         ) : d.status === "processing" || d.status === "approved" ? (
                           <span className="inline-flex items-center gap-1 text-[11px] text-blue-700 dark:text-blue-300">
                             <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            Bot topping up…
+                            Agent topping up…
                           </span>
                         ) : d.status === "pending_match" ? (
                           <span className="text-[11px] text-muted-foreground">
-                            Waiting for bot
+                            Waiting for agent
                           </span>
                         ) : d.status === "failed" ? (
                           isViewer ? (
@@ -918,7 +918,7 @@ export default function DepositsPage() {
                   <Inbox className="h-8 w-8 text-muted-foreground/60" />
                   <p className="text-sm font-medium">No deposits yet</p>
                   <p className="max-w-sm text-xs text-muted-foreground">
-                    Bank transactions detected by the bot will appear here
+                    Bank transactions detected by the agent will appear here
                     automatically.
                   </p>
                 </>
@@ -944,7 +944,7 @@ export default function DepositsPage() {
               </span>
             )}
           </span>
-          <span>Connected: OpenClaw Bot · Auto-sync every 10s</span>
+          <span>Connected: OpenClaw Agent · Auto-sync every 10s</span>
         </div>
       </Card>
 

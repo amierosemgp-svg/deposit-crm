@@ -9,14 +9,14 @@ const createSchema = z.object({
   player_id: z.number().int().positive(),
   amount: z.number().positive(),
   bank_name: z.string().min(1),
-  // "pending_match" = intent, waiting for the bot to confirm the bank credit.
+  // "pending_match" = intent, waiting for the agent to confirm the bank credit.
   // "pending" = CS already sighted the receipt, straight to approval queue.
   status: z.enum(["pending_match", "pending"]).default("pending_match"),
   selected_game: z.string().optional(),
   bonus_percentage: z.number().min(0).max(200).optional(),
   receipt_url: z.string().url().optional(),
   notes: z.string().optional(),
-  // Fully manual: no bot bank-match or top-up — CS approves → completes it.
+  // Fully manual: no agent bank-match or top-up — CS approves → completes it.
   skip_bot: z.boolean().optional(),
 });
 
@@ -46,7 +46,7 @@ export async function POST(request: Request) {
 
     const bonusPct = body.bonus_percentage ?? 0;
     const bonusAmt = +((body.amount * bonusPct) / 100).toFixed(2);
-    // A skip-bot deposit has no bot bank-match step, so it always starts at
+    // A skip-agent deposit has no agent bank-match step, so it always starts at
     // "pending" (ready for manual approval), never "pending_match".
     const status = body.skip_bot ? "pending" : body.status;
     const nowIso = new Date().toISOString();

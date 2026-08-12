@@ -2,7 +2,7 @@ import { retryStuckGameTransfers, trimBotEvents } from "@/lib/api-helpers";
 
 /**
  * GET /api/cron/retry-stuck-transfers — Vercel Cron target (see vercel.json).
- * Restarts game transfers the bot never reported back on, and fails the ones
+ * Restarts game transfers the agent never reported back on, and fails the ones
  * that have exhausted their attempts.
  *
  * Also runs lazily on every /api/state read, so this is the safety net for when

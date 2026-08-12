@@ -59,7 +59,7 @@ const EMPTY: FormState = {
 
 const ROLE_HINTS: Record<FormState["role"], string> = {
   deposit:
-    "Collection account — receives player deposits and is watched by the bank bot.",
+    "Collection account — receives player deposits and is watched by the bank agent.",
   withdrawal: "Payout account — used to pay player withdrawals.",
 };
 
@@ -360,7 +360,7 @@ export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
                   Online banking credentials
                 </p>
                 <p className="text-[11px] text-muted-foreground mt-0.5">
-                  Used by the AI bot to log in and query this account.
+                  Used by the AI agent to log in and query this account.
                 </p>
               </div>
               <div className="grid grid-cols-2 gap-2">
@@ -418,7 +418,7 @@ export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
                   className="h-8 font-mono"
                 />
                 <p className="text-[10px] text-muted-foreground">
-                  The device this account&apos;s banking app is bound to. The bot
+                  The device this account&apos;s banking app is bound to. The agent
                   also sets this itself as it picks the account up.
                 </p>
               </div>

@@ -26,10 +26,10 @@ const schema = z.object({
  * POST /api/bot/heartbeat — a bot process reports its health (~every 30s).
  * Upsert by bot_id, newest heartbeat wins; first_seen is set once on insert.
  *
- * `last_heartbeat_at` is **when we received the ping**, not the `ts` the bot
- * reports. Liveness is about arrival, and a bot's own clock can't be trusted:
+ * `last_heartbeat_at` is **when we received the ping**, not the `ts` the agent
+ * reports. Liveness is about arrival, and an agent's own clock can't be trusted:
  * the kiosk fleet was sending local Malaysia time with no offset, so every
- * heartbeat landed 8 hours in the future and those bots would have shown
+ * heartbeat landed 8 hours in the future and those agents would have shown
  * "online" for 8 hours after dying — hiding exactly the outage this page
  * exists to reveal. `ts` is still accepted and echoed back as `reported_ts`
  * so a skewed clock is visible rather than silently trusted.
@@ -47,7 +47,7 @@ export async function POST(request: Request) {
   // Arrival time, always — see the note above.
   const lastHeartbeat = nowIso;
 
-  // Surface a badly skewed bot clock instead of letting it pass unnoticed.
+  // Surface a badly skewed agent clock instead of letting it pass unnoticed.
   const reportedMs = b.ts ? Date.parse(b.ts) : NaN;
   const skewSeconds = Number.isFinite(reportedMs)
     ? Math.round((reportedMs - Date.now()) / 1000)

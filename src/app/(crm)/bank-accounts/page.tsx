@@ -451,7 +451,7 @@ export default function BankAccountsPage() {
             <h3 className="mt-3 text-sm font-semibold">No bank accounts yet</h3>
             <p className="mt-1 max-w-sm text-[12px] text-muted-foreground">
               Bank accounts belong to leaders and companies. Deposit accounts collect
-              player payments (watched by the bot); withdrawal accounts pay out players.
+              player payments (watched by the agent); withdrawal accounts pay out players.
             </p>
             {canManage && (
               <Button onClick={openCreate} size="sm" className="mt-4 cursor-pointer">

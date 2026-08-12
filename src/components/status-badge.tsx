@@ -50,7 +50,7 @@ const LABELS: Record<string, string> = {
 export function StatusBadge({
   status,
   // Same status word can mean different things per record type — a "pending"
-  // game transfer is "Initializing" (waiting for the bot), not the same
+  // game transfer is "Initializing" (waiting for the agent), not the same
   // "Pending" as a deposit awaiting CS.
   label: labelOverride,
 }: {
@@ -74,7 +74,7 @@ export function StatusBadge({
   );
 }
 
-/** Marks whether a deposit/withdrawal was bot-detected ("Auto") or hand-entered ("Manual"). */
+/** Marks whether a deposit/withdrawal was agent-detected ("Auto") or hand-entered ("Manual"). */
 export function SourceBadge({
   source,
 }: {

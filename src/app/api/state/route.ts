@@ -35,7 +35,7 @@ export async function GET() {
     const user = await requireUser();
 
     // Lazy sweeps, on the 10s poll: settle any bank transfer whose confirmation
-    // window expired, and restart any game transfer the bot has gone quiet on.
+    // window expired, and restart any game transfer the agent has gone quiet on.
     await autoConfirmExpiredTransfers();
     await retryStuckGameTransfers();
 
@@ -174,7 +174,7 @@ export async function GET() {
       [...scopedBankTransfers, ...inboundIds].map((t) => [t.transfer_id, t]),
     );
 
-    // Bot process health — system-wide, shown to any authed user.
+    // Agent process health — system-wide, shown to any authed user.
     const bots = await db
       .select()
       .from(botHealth)

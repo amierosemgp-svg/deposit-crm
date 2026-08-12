@@ -131,7 +131,7 @@ export function GameAccountHistory({
               </div>
 
               <div className="mt-0.5 text-[11px] text-muted-foreground">
-                by {r.source === "bot" ? "bot" : userName(r.changed_by_user_id)}
+                by {r.source === "bot" ? "agent" : userName(r.changed_by_user_id)}
               </div>
             </li>
           ))}

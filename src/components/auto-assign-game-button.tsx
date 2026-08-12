@@ -9,12 +9,12 @@ import { Loader2, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 
 /**
- * Hand a player one of the accounts the bot registered ahead of time.
+ * Hand a player one of the accounts the agent registered ahead of time.
  *
  * Games the player already has are left out — a second account for the same
  * game would split their balance across two ids. Games with nothing left in the
  * pool are left out too, since picking one could only fail; the stock warning
- * below is what tells someone to have the bot register more.
+ * below is what tells someone to have the agent register more.
  */
 export function AutoAssignGameButton({ playerId }: { playerId: number }) {
   const [busy, setBusy] = useState(false);
@@ -87,7 +87,7 @@ export function AutoAssignGameButton({ playerId }: { playerId: number }) {
               {low.map((s) => `${s.game_name} (${s.available})`).join(", ")}.{" "}
             </>
           )}
-          The bot needs to register more accounts.
+          The agent needs to register more accounts.
         </p>
       )}
     </div>

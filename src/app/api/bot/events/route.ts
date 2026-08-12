@@ -20,7 +20,7 @@ const eventSchema = z.object({
   occurred_at: z.string().optional(),
 });
 
-// One event or a batch — a busy bot should be able to buffer and flush.
+// One event or a batch — a busy agent should be able to buffer and flush.
 const postSchema = z.union([
   eventSchema.extend({ bot_id: z.string().min(1).max(80) }),
   z.object({
@@ -52,7 +52,7 @@ function eventJson(row: typeof botEvents.$inferSelect) {
  * Post what you're doing as you do it: one event, or a batch when you'd rather
  * buffer and flush. This is a fire-and-forget operational log — it never
  * changes any transaction's state, so posting is always safe and a failure
- * here should never stop the bot from working.
+ * here should never stop the agent from working.
  *
  * `occurred_at` lets a batched flush keep the real timings; it defaults to now.
  */

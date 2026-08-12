@@ -7,7 +7,7 @@ import { requireBotKey } from "@/lib/bot-auth";
  * GET /api/bot/members?telegram_username=@ahmadtan88
  * GET /api/bot/members?player_id=1001
  * GET /api/bot/members?q=Ahmad          (name / username search)
- * Bot use-case #4: verify a member exists before creating a transaction.
+ * Agent use-case #4: verify a member exists before creating a transaction.
  */
 export async function GET(request: Request) {
   const auth = await requireBotKey(request);

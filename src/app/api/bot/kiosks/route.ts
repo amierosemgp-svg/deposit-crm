@@ -7,7 +7,7 @@ import { kioskJson } from "@/lib/bot-crud";
 /**
  * GET /api/bot/kiosks?company_entity_id=&game=&status=
  * Game-provider back-office (kiosk) accounts, including the login
- * credentials the bot needs to sign in and assign game credit.
+ * credentials the agent needs to sign in and assign game credit.
  */
 export async function GET(request: Request) {
   const auth = await requireBotKey(request);

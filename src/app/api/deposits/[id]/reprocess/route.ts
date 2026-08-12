@@ -8,7 +8,7 @@ import { jsonError } from "@/lib/api-helpers";
  * POST /api/deposits/:id/reprocess — recover a failed deposit.
  * Moves a "failed" deposit back to "pending" so CS can review (adjust game,
  * bonus, or the player's game account) and re-approve it. No money moves —
- * a failed deposit was never credited (crediting only happens when the bot
+ * a failed deposit was never credited (crediting only happens when the agent
  * confirms "completed"), so there is nothing to reverse.
  */
 export async function POST(

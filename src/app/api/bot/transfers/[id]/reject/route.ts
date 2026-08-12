@@ -6,7 +6,7 @@ import { BotError, botErrorResponse, bankTransferJson, jsonError } from "@/lib/b
 
 /**
  * POST /api/bot/transfers/:id/reject — declines the transfer and refunds the
- * sender. Bot acts system-wide, so no recipient-ownership check.
+ * sender. Agent acts system-wide, so no recipient-ownership check.
  */
 export async function POST(
   request: Request,

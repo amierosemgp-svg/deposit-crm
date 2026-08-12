@@ -11,7 +11,7 @@ const createSchema = z.object({
   game_name: z.string().min(1),
   bank_name: z.string().optional(),
   bank_account_number: z.string().optional(),
-  // Fully manual: the bot never auto-pulls/pays this — CS handles it.
+  // Fully manual: the agent never auto-pulls/pays this — CS handles it.
   skip_bot: z.boolean().optional(),
 });
 

@@ -278,7 +278,7 @@ export function BoAccountFormModal({ open, onOpenChange, account }: Props) {
                 autoComplete="off"
               />
               <p className="text-[10px] text-muted-foreground">
-                Back-office login page. The bot reads it from here — if the
+                Back-office login page. The agent reads it from here — if the
                 provider changes the URL, just update this field.
               </p>
             </div>
@@ -298,7 +298,7 @@ export function BoAccountFormModal({ open, onOpenChange, account }: Props) {
                   className="font-mono"
                 />
                 <p className="text-[10px] text-muted-foreground">
-                  The bot uses this to log in and assign game credit.
+                  The agent uses this to log in and assign game credit.
                 </p>
               </div>
               <div className="space-y-1.5">

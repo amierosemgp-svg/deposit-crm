@@ -542,7 +542,7 @@ export default function WithdrawalsPage() {
                           <SourceBadge source={w.source} />
                           {w.skip_bot && (
                             <span className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 dark:bg-amber-950/40 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
-                              No bot
+                              No agent
                             </span>
                           )}
                         </div>
@@ -752,10 +752,10 @@ export default function WithdrawalsPage() {
               />
               <span>
                 <span className="block text-sm font-medium">
-                  Handle manually (skip bot)
+                  Handle manually (skip agent)
                 </span>
                 <span className="block text-[11px] text-muted-foreground mt-0.5">
-                  The bot won&apos;t auto-process this — you pull credits and mark
+                  The agent won&apos;t auto-process this — you pull credits and mark
                   paid (or reject) yourself.
                 </span>
               </span>

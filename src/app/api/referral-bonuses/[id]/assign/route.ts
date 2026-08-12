@@ -14,7 +14,7 @@ import { jsonError } from "@/lib/api-helpers";
 const bodySchema = z.object({
   game_name: z.string().min(1),
   // true = CS already moved the credit in the back-office themselves.
-  // false = queue it for the bot.
+  // false = queue it for the agent.
   skip_bot: z.boolean().optional(),
   note: z.string().max(500).optional(),
 });
@@ -26,8 +26,8 @@ const bodySchema = z.object({
  * Two routes to the same end, mirroring how deposits work:
  *   - skip_bot: CS did it in the provider back-office, so the credit is booked
  *     here and now.
- *   - otherwise: a game transfer is queued for the bot, and the credit lands
- *     when the bot reports the move completed. Nothing is credited yet.
+ *   - otherwise: a game transfer is queued for the agent, and the credit lands
+ *     when the agent reports the move completed. Nothing is credited yet.
  *
  * The whole thing runs in one transaction with the bonus row locked, so two
  * agents clicking Assign at the same moment can't pay the bonus twice.
@@ -104,7 +104,7 @@ export async function POST(
             },
           });
       } else {
-        // Queue it for the bot. Same lifecycle as a CS-requested transfer, so
+        // Queue it for the agent. Same lifecycle as a CS-requested transfer, so
         // the stall sweep and the Game Credit Transfer page cover it for free.
         // from_game === to_game marks it as a credit-in rather than a move
         // between two of the player's games.

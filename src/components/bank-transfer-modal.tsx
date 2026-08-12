@@ -300,10 +300,10 @@ export function BankTransferModal({
                 />
                 <span>
                   <span className="block text-sm font-medium">
-                    Handle manually (skip bot)
+                    Handle manually (skip agent)
                   </span>
                   <span className="block text-[11px] text-muted-foreground mt-0.5">
-                    The bot won&apos;t act on this and it won&apos;t auto-confirm
+                    The agent won&apos;t act on this and it won&apos;t auto-confirm
                     after 24h — the recipient must Confirm or Reject it.
                   </span>
                 </span>

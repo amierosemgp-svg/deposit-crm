@@ -5,7 +5,7 @@ import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 
 /**
- * POST /api/deposits/:id/reject — reject a manual (skip-bot) deposit.
+ * POST /api/deposits/:id/reject — reject a manual (skip-agent) deposit.
  * Marks it failed. No money has been booked yet (crediting only happens on
  * completion), so there is nothing to reverse. A failed deposit can still be
  * reprocessed.
@@ -34,7 +34,7 @@ export async function POST(
         throw new AuthError(403, "Deposit is outside your company scope");
       }
       if (!row.skip_bot) {
-        throw new AuthError(422, "Only manual (skip-bot) deposits are rejected here");
+        throw new AuthError(422, "Only manual (skip-agent) deposits are rejected here");
       }
       if (!["pending", "matched", "processing"].includes(row.status)) {
         throw new AuthError(409, `Deposit is "${row.status}", cannot reject`);

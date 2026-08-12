@@ -6,8 +6,8 @@ import { depositToBotJson, playerGameInfoMap } from "@/lib/bot-transactions";
 
 /**
  * GET /api/bot/transactions/:id
- * Bot use-case #3: fetch one transaction for validation.
- * :id accepts either the numeric CRM id or the bot's external_id.
+ * Agent use-case #3: fetch one transaction for validation.
+ * :id accepts either the numeric CRM id or the agent's external_id.
  */
 export async function GET(
   request: Request,

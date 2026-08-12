@@ -33,7 +33,7 @@ export const activeStatusEnum = pgEnum("active_status", ["active", "inactive"]);
 
 export const playerStatusEnum = pgEnum("player_status", ["active", "suspended"]);
 
-/** Who created a transaction: the bot (auto-detected) or a person (manual). */
+/** Who created a transaction: the agent (auto-detected) or a person (manual). */
 export const transactionSourceEnum = pgEnum("transaction_source", [
   "bot",
   "manual",
@@ -114,13 +114,13 @@ export const poolAccountStatusEnum = pgEnum("pool_account_status", [
 /**
  * A CS-requested transfer's lifecycle:
  *
- *   pending ──bot claims──▶ processing ──▶ completed
+ *   pending ──agent claims──▶ processing ──▶ completed
  *      ▲                        │      └──▶ failed
  *      └──── solving ◀── stalled ┘
  *
- * "pending" is a transfer waiting for the bot to pick it up; "solving" is one
- * the recovery sweep re-queued after the bot went quiet on it. Both are work
- * the bot should claim; solving additionally means "you have seen this before".
+ * "pending" is a transfer waiting for the agent to pick it up; "solving" is one
+ * the recovery sweep re-queued after the agent went quiet on it. Both are work
+ * the agent should claim; solving additionally means "you have seen this before".
  */
 export const gameTransferStatusEnum = pgEnum("game_transfer_status", [
   "pending",
@@ -234,15 +234,15 @@ export const bankAccounts = pgTable("bank_accounts", {
   account_number: varchar("account_number", { length: 60 }).notNull(),
   account_holder: varchar("account_holder", { length: 120 }).notNull(),
   label: varchar("label", { length: 60 }),
-  // Online-banking credentials the AI bot uses to query the account.
+  // Online-banking credentials the AI agent uses to query the account.
   login_id: varchar("login_id", { length: 80 }),
   login_password: varchar("login_password", { length: 120 }),
   login_pin: varchar("login_pin", { length: 20 }),
   // The device this account's banking app is bound to. Banks tie a login to
   // one registered device, so when a balance stops updating the question is
-  // which device was on it — the bot reports this as it picks the account up.
+  // which device was on it — the agent reports this as it picks the account up.
   device_id: varchar("device_id", { length: 120 }),
-  // Last time the AI bot pinged us for this account (heartbeat/online status).
+  // Last time the AI agent pinged us for this account (heartbeat/online status).
   last_heartbeat_at: timestamp("last_heartbeat_at", {
     withTimezone: true,
     mode: "string",
@@ -272,10 +272,10 @@ export const bankTransfers = pgTable("bank_transfers", {
   reference: varchar("reference", { length: 80 }),
   notes: text("notes"),
   status: bankTransferStatusEnum("status").notNull().default("pending_confirmation"),
-  // When true the transfer is handled manually: the bot never acts on it and
+  // When true the transfer is handled manually: the agent never acts on it and
   // the confirmation window never auto-confirms — a human confirms/rejects.
   skip_bot: boolean("skip_bot").notNull().default(false),
-  // Nullable: bot/system-initiated transfers have no human user.
+  // Nullable: agent/system-initiated transfers have no human user.
   initiated_by_user_id: integer("initiated_by_user_id").references(
     () => users.user_id,
   ),
@@ -291,7 +291,7 @@ export const bankTransfers = pgTable("bank_transfers", {
 
 export const deposits = pgTable("deposits", {
   deposit_id: serial("deposit_id").primaryKey(),
-  // Bot idempotency key — the bot's own queue id, e.g.
+  // Agent idempotency key — the agent's own queue id, e.g.
   // "25_Jun_2026_Hello_TAN_KIEN_HUAT_*Fund_Transfer_2.0"
   external_id: varchar("external_id", { length: 200 }).unique(),
   transaction_ref: varchar("transaction_ref", { length: 80 }).notNull(),
@@ -330,9 +330,9 @@ export const deposits = pgTable("deposits", {
     .default(0),
   selected_game: varchar("selected_game", { length: 60 }),
   status: depositStatusEnum("status").notNull().default("pending"),
-  // Bot-detected bank credits default to "bot"; CRM-entered deposits set "manual".
+  // Agent-detected bank credits default to "agent"; CRM-entered deposits set "manual".
   source: transactionSourceEnum("source").notNull().default("bot"),
-  // When true the deposit is fully manual: the bot never matches or tops it up;
+  // When true the deposit is fully manual: the agent never matches or tops it up;
   // a human approves → processing → completes (or rejects) it.
   skip_bot: boolean("skip_bot").notNull().default(false),
   matched_at: timestamp("matched_at", { withTimezone: true, mode: "string" }),
@@ -371,10 +371,10 @@ export const withdrawals = pgTable("withdrawals", {
     .notNull()
     .default(0),
   status: withdrawalStatusEnum("status").notNull().default("requested"),
-  // When true the bot never auto-pulls/pays this withdrawal; CS handles it
+  // When true the agent never auto-pulls/pays this withdrawal; CS handles it
   // manually (pull → paid) and can reject it.
   skip_bot: boolean("skip_bot").notNull().default(false),
-  // CS-entered requests default to "manual"; bot-created requests set "bot".
+  // CS-entered requests default to "manual"; agent-created requests set "agent".
   source: transactionSourceEnum("source").notNull().default("manual"),
   handled_by_user_id: integer("handled_by_user_id").references(() => users.user_id),
   // The CS agent who claimed this withdrawal ("Assign to me").
@@ -414,7 +414,7 @@ export const gameAccountAudit = pgTable("game_account_audit", {
   old_game_username: varchar("old_game_username", { length: 120 }),
   // Null on "removed"; the game id as it is after the change otherwise.
   new_game_username: varchar("new_game_username", { length: 120 }),
-  // Null when the bot made the change rather than a person.
+  // Null when the agent made the change rather than a person.
   changed_by_user_id: integer("changed_by_user_id").references(
     () => users.user_id,
   ),
@@ -425,10 +425,10 @@ export const gameAccountAudit = pgTable("game_account_audit", {
 });
 
 /**
- * Game accounts the bot has registered at a provider ahead of demand.
+ * Game accounts the agent has registered at a provider ahead of demand.
  *
  * Registering an account takes a round-trip to the provider back-office, which
- * is far too slow to do while a player waits. The bot creates them in batches
+ * is far too slow to do while a player waits. The agent creates them in batches
  * and pushes them here; assigning one to a player is then just claiming a row.
  *
  * The pool is a staging area, not the source of truth — once assigned, the
@@ -456,7 +456,7 @@ export const gameAccountPool = pgTable(
       withTimezone: true,
       mode: "string",
     }),
-    // Why it was retired, or any note the bot attached on creation.
+    // Why it was retired, or any note the agent attached on creation.
     note: text("note"),
     source: transactionSourceEnum("source").notNull().default("bot"),
     created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
@@ -478,7 +478,7 @@ export const gameAccountPool = pgTable(
  *
  * Created automatically when a downline's first deposit completes, then handed
  * out by CS: they pick which of the upline's games the credit goes to and
- * whether the bot moves it or they did it by hand.
+ * whether the agent moves it or they did it by hand.
  *
  * The bonus is a snapshot — deposit_amount and percentage are copied in, so
  * changing the rate later never rewrites what someone already earned.
@@ -517,9 +517,9 @@ export const referralBonuses = pgTable(
     // Chosen at assign time — which of the upline's games the credit went to.
     game_name: varchar("game_name", { length: 60 }),
     // True when CS moved the credit in the back-office themselves; false means
-    // the bot was asked to do it via a game transfer.
+    // the agent was asked to do it via a game transfer.
     skip_bot: boolean("skip_bot").notNull().default(false),
-    // The bot-driven transfer that carries the credit, when one was created.
+    // The agent-driven transfer that carries the credit, when one was created.
     game_transfer_id: integer("game_transfer_id"),
     assigned_by_user_id: integer("assigned_by_user_id").references(
       () => users.user_id,
@@ -584,13 +584,13 @@ export const gameTransfers = pgTable("game_transfers", {
     mode: "number",
   }).notNull(),
   status: gameTransferStatusEnum("status").notNull().default("completed"),
-  // Why a transfer ended the way it did — the bot's `note` on
+  // Why a transfer ended the way it did — the agent's `note` on
   // PATCH /:id/status. Its reason for failing, most usefully.
   note: text("note"),
   // How many times the move has been attempted. 1 on the first try; the stuck-
   // transfer sweep bumps it each time it restarts a stalled transfer.
   attempt_count: integer("attempt_count").notNull().default(1),
-  // Nullable: bot/system-initiated transfers have no human user.
+  // Nullable: agent/system-initiated transfers have no human user.
   handled_by_user_id: integer("handled_by_user_id").references(
     () => users.user_id,
   ),
@@ -607,7 +607,7 @@ export const gameTransfers = pgTable("game_transfers", {
   created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
     .notNull()
     .defaultNow(),
-  // When the transfer entered "processing" — the clock the bot is racing.
+  // When the transfer entered "processing" — the clock the agent is racing.
   // Null only for a transfer still sitting in "pending".
   started_at: timestamp("started_at", { withTimezone: true, mode: "string" }),
   // When it reached a terminal state (completed or failed). Null while in
@@ -627,14 +627,14 @@ export const providerBoAccounts = pgTable("provider_bo_accounts", {
     .references(() => entities.entity_id),
   game_name: varchar("game_name", { length: 60 }).notNull(),
   bo_username: varchar("bo_username", { length: 80 }).notNull(),
-  // Back-office login URL — the bot fetches it from here, so a provider URL
-  // change only needs a CRM edit, not a bot redeploy.
+  // Back-office login URL — the agent fetches it from here, so a provider URL
+  // change only needs a CRM edit, not an agent redeploy.
   bo_url: varchar("bo_url", { length: 300 }),
-  // Back-office credentials the AI bot uses to log in and assign game credit.
+  // Back-office credentials the AI agent uses to log in and assign game credit.
   bo_password: varchar("bo_password", { length: 120 }),
   bo_pin: varchar("bo_pin", { length: 20 }),
   bo_label: varchar("bo_label", { length: 60 }),
-  // Last time the AI bot pinged us for this kiosk (heartbeat/online status).
+  // Last time the AI agent pinged us for this kiosk (heartbeat/online status).
   last_heartbeat_at: timestamp("last_heartbeat_at", {
     withTimezone: true,
     mode: "string",
@@ -720,7 +720,7 @@ export const expenses = pgTable("expenses", {
     .defaultNow(),
 });
 
-// ---------- Bot health ----------
+// ---------- Agent health ----------
 
 /**
  * Latest reported health per bot process. Bots POST /api/bot/heartbeat every
@@ -750,13 +750,13 @@ export const botHealth = pgTable("bot_health", {
 });
 
 /**
- * The bot's live feed — what it is doing, as it does it.
+ * The agent's live feed — what it is doing, as it does it.
  *
  * bot_health answers "is the bot up and what step is it on" as a single
  * overwritten row. This is the running narrative underneath it: one row per
  * event, kept so that when a transfer fails at 2am someone can read back what
- * the bot was doing at the time. Deliberately append-only and cheap to write —
- * the bot should be able to post freely without thinking about cost.
+ * the agent was doing at the time. Deliberately append-only and cheap to write —
+ * the agent should be able to post freely without thinking about cost.
  *
  * Trimmed by the retention sweep; this is an operational log, not a ledger.
  */
@@ -767,7 +767,7 @@ export const botEvents = pgTable("bot_events", {
   // Short machine-readable tag, e.g. "transfer.claimed", "login.failed".
   event: varchar("event", { length: 80 }).notNull(),
   message: text("message"),
-  // Whatever the bot wants to attach — screenshots, provider responses, timings.
+  // Whatever the agent wants to attach — screenshots, provider responses, timings.
   context: jsonb("context").$type<Record<string, unknown>>(),
   // Optional links back to the record this is about, so a feed can be filtered
   // down to one transfer/deposit/player.
@@ -775,7 +775,7 @@ export const botEvents = pgTable("bot_events", {
   game_transfer_id: integer("game_transfer_id"),
   deposit_id: integer("deposit_id"),
   withdrawal_id: integer("withdrawal_id"),
-  // When the bot says it happened; may lag created_at if it batched the post.
+  // When the agent says it happened; may lag created_at if it batched the post.
   occurred_at: timestamp("occurred_at", { withTimezone: true, mode: "string" })
     .notNull()
     .defaultNow(),
@@ -791,13 +791,13 @@ export const apiKeys = pgTable("api_keys", {
   key_hash: varchar("key_hash", { length: 64 }).notNull().unique(), // sha256 hex
   hint: varchar("hint", { length: 32 }), // display-only, e.g. "alpha_dbk…5ea0"
   label: varchar("label", { length: 80 }).notNull(),
-  // When set, the key is scoped to this company: bot reads (bank accounts,
+  // When set, the key is scoped to this company: agent reads (bank accounts,
   // kiosks) only return that company's data. null = unscoped (full access).
   company_entity_id: integer("company_entity_id").references(
     () => entities.entity_id,
   ),
   // Optional IP allowlist; when non-empty, requests from other IPs are
-  // rejected even with a valid key. Requires the bot to have a static egress IP.
+  // rejected even with a valid key. Requires the agent to have a static egress IP.
   allowed_ips: jsonb("allowed_ips").$type<string[]>(),
   status: activeStatusEnum("status").notNull().default("active"),
   last_used_at: timestamp("last_used_at", { withTimezone: true, mode: "string" }),

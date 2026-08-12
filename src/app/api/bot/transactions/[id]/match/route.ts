@@ -18,9 +18,9 @@ const matchSchema = z.object({
 
 /**
  * PATCH /api/bot/transactions/:id/match
- * Bot use-case #2: confirm a pending CRM transaction against a detected
+ * Agent use-case #2: confirm a pending CRM transaction against a detected
  * bank credit. Moves status pending_match → matched and stores the bank
- * details the bot extracted.
+ * details the agent extracted.
  */
 export async function PATCH(
   request: Request,

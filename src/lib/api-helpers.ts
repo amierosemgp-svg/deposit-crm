@@ -137,7 +137,7 @@ export async function autoConfirmExpiredTransfers(): Promise<number> {
       and(
         eq(bankTransfers.status, "pending_confirmation"),
         lt(bankTransfers.expires_at, nowIso),
-        // Manual (skip-bot) transfers never auto-confirm — a human decides.
+        // Manual (skip-agent) transfers never auto-confirm — a human decides.
         eq(bankTransfers.skip_bot, false),
       ),
     );
@@ -182,14 +182,14 @@ export async function autoConfirmExpiredTransfers(): Promise<number> {
 }
 
 /**
- * Re-queue game transfers the bot has gone quiet on.
+ * Re-queue game transfers the agent has gone quiet on.
  *
- * A transfer waits in "pending" for the bot to claim it, then sits in
- * "processing" until the bot reports back. When many land at once the bot can
+ * A transfer waits in "pending" for the agent to claim it, then sits in
+ * "processing" until the agent reports back. When many land at once the agent can
  * drop one — and nothing else ever moves it, so CS watches a transfer hang
  * forever. This sweep moves anything quiet for STUCK_TRANSFER_MS into
  * "solving", which is both the visible "we are recovering this" state and a
- * re-queue: the bot picks solving items up the same as pending ones. After
+ * re-queue: the agent picks solving items up the same as pending ones. After
  * MAX_TRANSFER_ATTEMPTS it is failed with a reason instead.
  *
  * No credits move here either way — a transfer that hasn't completed hasn't
@@ -228,7 +228,7 @@ export async function retryStuckGameTransfers(): Promise<{
 
   for (const t of stuck) {
     await db.transaction(async (txn) => {
-      // Re-read under a lock: the bot may have claimed or finished it in the
+      // Re-read under a lock: the agent may have claimed or finished it in the
       // meantime, in which case this transfer is no longer ours to touch.
       const [locked] = await txn
         .select()
@@ -253,7 +253,7 @@ export async function retryStuckGameTransfers(): Promise<{
           .set({
             status: "failed",
             completed_at: nowIso,
-            note: `Gave up after ${attempts} attempts — the bot never reported back. No credits were moved; retry the transfer or move it in the provider back-office by hand.`,
+            note: `Gave up after ${attempts} attempts — the agent never reported back. No credits were moved; retry the transfer or move it in the provider back-office by hand.`,
           })
           .where(eq(gameTransfers.transfer_id, t.transfer_id));
         await txn.insert(transactions).values({
@@ -265,7 +265,7 @@ export async function retryStuckGameTransfers(): Promise<{
           details: {
             source: "system",
             action: "failed",
-            reason: "no bot response",
+            reason: "no agent response",
             attempts,
           },
         });
@@ -278,7 +278,7 @@ export async function retryStuckGameTransfers(): Promise<{
         .set({
           status: "solving",
           attempt_count: attempts + 1,
-          // Restarting the clock is what re-queues it: the bot polls
+          // Restarting the clock is what re-queues it: the agent polls
           // ?status=pending,solving, and CS sees the running time reset.
           started_at: nowIso,
           note: `No response for ${minutes}m — re-queued (attempt ${attempts + 1} of ${MAX_TRANSFER_ATTEMPTS}).`,
@@ -303,13 +303,13 @@ export async function retryStuckGameTransfers(): Promise<{
   return { restarted, failed };
 }
 
-/** How long the bot's live feed is kept before being trimmed. */
+/** How long the agent's live feed is kept before being trimmed. */
 export const BOT_EVENT_RETENTION_DAYS = 14;
 
 /**
- * Trim the bot's live feed.
+ * Trim the agent's live feed.
  *
- * The feed is written freely — the bot shouldn't have to think about cost when
+ * The feed is written freely — the agent shouldn't have to think about cost when
  * deciding whether to post — so something has to bound it. This is an
  * operational log, not a ledger: a fortnight is long enough to investigate
  * anything anyone is still asking about.

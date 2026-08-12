@@ -8,7 +8,7 @@ import {
   withdrawals,
 } from "@/db/schema";
 
-/** The bot's native transaction shape (see sources/transaction_queue.json). */
+/** The agent's native transaction shape (see sources/transaction_queue.json). */
 export type BotTransactionInput = {
   external_id?: string;
   bank: string;
@@ -82,7 +82,7 @@ export async function resolveReceivingAccount(input: BotTransactionInput) {
     .select()
     .from(bankAccounts)
     .where(eq(bankAccounts.bank_name, input.bank));
-  // When the bot states the entity, only that entity's accounts qualify —
+  // When the agent states the entity, only that entity's accounts qualify —
   // falling back to another company's account would misattribute the deposit.
   const pool = input.company_entity_id
     ? byBank.filter((a) => a.entity_id === input.company_entity_id)
@@ -90,7 +90,7 @@ export async function resolveReceivingAccount(input: BotTransactionInput) {
   return pool.find((a) => a.role === "deposit") ?? pool[0] ?? null;
 }
 
-/** Minimal player fields the bot needs to perform the top-up in the provider. */
+/** Minimal player fields the agent needs to perform the top-up in the provider. */
 export type PlayerGameInfo = {
   player_id: number;
   telegram_username: string;
@@ -99,7 +99,7 @@ export type PlayerGameInfo = {
 
 /**
  * Fetch the game-account info for the players referenced by a set of deposits,
- * keyed by player_id. Used to enrich the bot's transaction responses with the
+ * keyed by player_id. Used to enrich the agent's transaction responses with the
  * player's in-game account id for the selected game.
  */
 export async function playerGameInfoMap(
@@ -122,7 +122,7 @@ export function depositToBotJson(
   d: typeof deposits.$inferSelect,
   player?: PlayerGameInfo | null,
 ) {
-  // Resolve the player's account id in the selected game, so the bot knows
+  // Resolve the player's account id in the selected game, so the agent knows
   // exactly which in-game account to top up (not just the CRM player id).
   const gameAccounts = player?.game_accounts ?? null;
   const match =
@@ -146,7 +146,7 @@ export function depositToBotJson(
     bonus_percentage: d.bonus_percentage,
     total_amount: d.total_amount,
     selected_game: d.selected_game,
-    // The player's login/ID in `selected_game` — what the bot tops up.
+    // The player's login/ID in `selected_game` — what the agent tops up.
     game_username: match?.game_username ?? null,
     // Full list of the player's game accounts, for reference.
     game_accounts: gameAccounts,
@@ -158,7 +158,7 @@ export function depositToBotJson(
   };
 }
 
-/** A withdrawal request created via the bot API. */
+/** A withdrawal request created via the agent API. */
 export type BotWithdrawalInput = {
   player_id: number;
   requested_amount: number;

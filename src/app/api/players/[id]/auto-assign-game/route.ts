@@ -10,7 +10,7 @@ const bodySchema = z.object({ game_name: z.string().min(1) });
 
 /**
  * POST /api/players/:id/auto-assign-game — give the player the next free
- * account for a game, out of the pool the bot pre-registered.
+ * account for a game, out of the pool the agent pre-registered.
  */
 export async function POST(
   request: Request,

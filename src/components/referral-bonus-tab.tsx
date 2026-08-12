@@ -38,7 +38,7 @@ const STATUS_STYLE: Record<Bonus["status"], string> = {
 /**
  * What this player has earned by referring others: 20% of each downline's
  * first deposit, paid once. CS picks which of the upline's games the credit
- * goes into, and whether the bot moves it or they already did it by hand.
+ * goes into, and whether the agent moves it or they already did it by hand.
  */
 export function ReferralBonusTab({ playerId }: { playerId: number }) {
   const [assigning, setAssigning] = useState<number | null>(null);
@@ -125,7 +125,7 @@ export function ReferralBonusTab({ playerId }: { playerId: number }) {
     toast.success(
       skipBot
         ? `${formatRM(bonus.bonus_amount)} credited to ${game}`
-        : `${formatRM(bonus.bonus_amount)} queued for the bot to credit in ${game}`,
+        : `${formatRM(bonus.bonus_amount)} queued for the agent to credit in ${game}`,
     );
     setAssigning(null);
     setVersion((v) => v + 1);
@@ -190,7 +190,7 @@ export function ReferralBonusTab({ playerId }: { playerId: number }) {
                   {b.status === "assigned" && (
                     <div className="mt-1 text-[11px] text-muted-foreground">
                       Credited to <b>{b.game_name}</b>{" "}
-                      {b.skip_bot ? "by hand" : "by the bot"}
+                      {b.skip_bot ? "by hand" : "by the agent"}
                       {b.game_transfer_id && ` · transfer #${b.game_transfer_id}`}
                       {b.assigned_by_user_id &&
                         ` · ${userName(b.assigned_by_user_id)}`}
@@ -249,7 +249,7 @@ export function ReferralBonusTab({ playerId }: { playerId: number }) {
                             : "hover:bg-muted",
                         )}
                       >
-                        Let the bot do it
+                        Let the agent do it
                         <span className="block text-[10px] font-normal text-muted-foreground">
                           Queued; credit lands when it reports back
                         </span>

@@ -20,7 +20,7 @@ const OPEN_STATUSES = ["pending", "solving", "processing"] as const;
 
 /**
  * PATCH /api/bot/game-transfers/:id/status
- * The bot drives a CS-requested game credit transfer through its lifecycle:
+ * The agent drives a CS-requested game credit transfer through its lifecycle:
  *
  *   pending ──claim──▶ processing ──▶ completed
  *      ▲                   │       └─▶ failed
@@ -33,7 +33,7 @@ const OPEN_STATUSES = ["pending", "solving", "processing"] as const;
  *     row lock — the balance may have changed since the request).
  *   - failed: no credits move, nothing to reverse. Send a `note` saying why.
  *
- * Claiming is optional: a bot that goes straight from pending to completed
+ * Claiming is optional: an agent that goes straight from pending to completed
  * still works. It only costs you the "is anyone actually on this" signal.
  * A transfer that already reached a terminal state is a 409.
  */
@@ -73,7 +73,7 @@ export async function PATCH(
 
       const nowIso = new Date().toISOString();
 
-      // Claiming: mark that the bot has started, and restart the stall clock so
+      // Claiming: mark that the agent has started, and restart the stall clock so
       // the 5-minute sweep measures from "work began", not "CS asked".
       if (body.status === "processing") {
         const [owner] = await txn

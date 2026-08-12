@@ -335,7 +335,7 @@ export default function HistoryPage() {
             onValueChange={(v) => setHandledBy(v ?? "all")}
             items={[
               { value: "all", label: "Anyone" },
-              { value: "system", label: "System / bot" },
+              { value: "system", label: "System / agent" },
               ...users.map((u) => ({
                 value: String(u.user_id),
                 label: u.full_name,
@@ -347,7 +347,7 @@ export default function HistoryPage() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">Anyone</SelectItem>
-              <SelectItem value="system">System / bot</SelectItem>
+              <SelectItem value="system">System / agent</SelectItem>
               {users.map((u) => (
                 <SelectItem key={u.user_id} value={String(u.user_id)}>
                   {u.full_name}

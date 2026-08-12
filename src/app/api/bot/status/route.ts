@@ -7,7 +7,7 @@ const ONLINE_MS = 90 * 1000;
 
 /**
  * GET /api/bot/status — latest health of every bot. `online` is derived:
- * a bot is online if its last heartbeat was within 90s. When offline it is
+ * an agent is online if its last heartbeat was within 90s. When offline it is
  * shown as offline regardless of its last reported state.
  */
 export async function GET(request: Request) {

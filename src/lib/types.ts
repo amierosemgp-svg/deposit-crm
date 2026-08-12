@@ -94,7 +94,7 @@ export type DepositStatus =
   | "completed"
   | "failed";
 
-/** Who created a transaction: the bot (auto) or a person (manual). */
+/** Who created a transaction: the agent (auto) or a person (manual). */
 export type TransactionSource = "bot" | "manual";
 
 /** A kiosk/account counts as online if pinged within this window. */
@@ -121,7 +121,7 @@ export type BotHealth = {
   updated_at: string;
 };
 
-/** A bot counts as online if it pinged within this window (spec: 90s). */
+/** An agent counts as online if it pinged within this window (spec: 90s). */
 export const BOT_ONLINE_MS = 90 * 1000;
 
 export type Deposit = {
@@ -188,14 +188,14 @@ export type GameTransferStatus =
   | "completed"
   | "failed";
 
-/** Statuses that still need the bot to do something. */
+/** Statuses that still need the agent to do something. */
 export const IN_FLIGHT_TRANSFER_STATUSES: GameTransferStatus[] = [
   "pending",
   "solving",
   "processing",
 ];
 
-/** A transfer the bot hasn't reported back on within this window is stuck. */
+/** A transfer the agent hasn't reported back on within this window is stuck. */
 export const STUCK_TRANSFER_MS = 5 * 60 * 1000;
 /** How many times a stalled transfer is restarted before we give up on it. */
 export const MAX_TRANSFER_ATTEMPTS = 3;
@@ -208,7 +208,7 @@ export type GameTransfer = {
   transfer_amount: number;
   from_game_balance_before: number;
   status: GameTransferStatus;
-  /** The bot's reason for the outcome — why it failed, when it failed. */
+  /** The agent's reason for the outcome — why it failed, when it failed. */
   note: string | null;
   /** 1 on the first try; bumped each time the stuck-transfer sweep restarts it. */
   attempt_count: number;
@@ -223,13 +223,13 @@ export type GameTransfer = {
   completed_at: string | null;
 };
 
-/** How many pre-registered accounts the bot has left, per game. */
+/** How many pre-registered accounts the agent has left, per game. */
 export type GameAccountStock = {
   game_name: string;
   available: number;
 };
 
-/** Below this, the pool is warned about in the UI so the bot can top it up. */
+/** Below this, the pool is warned about in the UI so the agent can top it up. */
 export const LOW_GAME_ACCOUNT_STOCK = 5;
 
 export type GameCredit = {
@@ -252,7 +252,7 @@ export type BankAccount = {
   login_id?: string | null;
   login_password?: string | null;
   login_pin?: string | null;
-  /** The device this account's banking app is bound to, reported by the bot. */
+  /** The device this account's banking app is bound to, reported by the agent. */
   device_id?: string | null;
   last_heartbeat_at?: string | null;
   current_balance: number;

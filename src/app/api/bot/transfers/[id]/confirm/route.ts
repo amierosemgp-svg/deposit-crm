@@ -6,7 +6,7 @@ import { BotError, botErrorResponse, bankTransferJson, jsonError } from "@/lib/b
 
 /**
  * POST /api/bot/transfers/:id/confirm — confirms receipt and credits the
- * recipient account. Bot acts system-wide, so no recipient-ownership check.
+ * recipient account. Agent acts system-wide, so no recipient-ownership check.
  */
 export async function POST(
   request: Request,

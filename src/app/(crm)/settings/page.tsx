@@ -436,7 +436,7 @@ function KeysTab() {
     else toast.success(k.status === "active" ? "Key revoked" : "Key reactivated");
   }
   async function remove(k: ApiKeyRow) {
-    if (!confirm(`Delete key "${k.label}"? Any bot using it stops working immediately.`)) return;
+    if (!confirm(`Delete key "${k.label}"? Any agent using it stops working immediately.`)) return;
     const r = await deleteApiKey(k.key_id);
     if (!r.ok) toast.error(r.error ?? "Failed");
     else toast.success("Key deleted");
@@ -446,7 +446,7 @@ function KeysTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground max-w-lg">
-          Keys authenticate the deposit bot. The full key is shown only once at creation — store it securely.
+          Keys authenticate the deposit agent. The full key is shown only once at creation — store it securely.
         </p>
         <Button onClick={() => setCreateOpen(true)} className="cursor-pointer gap-1.5">
           <Plus className="h-4 w-4" /> Create key
@@ -569,7 +569,7 @@ function EditIpsModal({ apiKey, onClose }: { apiKey: ApiKeyRow | null; onClose: 
               placeholder="comma-separated, e.g. 74.220.52.20, 74.220.52.21"
             />
             <p className="text-xs text-muted-foreground">
-              Leave blank to allow any IP. Only use this if the bot has a static egress IP — a rotating IP will get
+              Leave blank to allow any IP. Only use this if the agent has a static egress IP — a rotating IP will get
               locked out.
             </p>
           </div>
@@ -616,11 +616,11 @@ function CreateKeyModal({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
         <DialogTitle>Create API key</DialogTitle>
-        <DialogDescription>Issue a new key for a bot or integration.</DialogDescription>
+        <DialogDescription>Issue a new key for an agent or integration.</DialogDescription>
         <form onSubmit={submit} className="mt-2 space-y-3">
           <div className="space-y-1.5">
             <Label>Label</Label>
-            <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. OpenClaw bot — production" required />
+            <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. OpenClaw agent — production" required />
           </div>
           <div className="space-y-1.5">
             <Label>Scope</Label>
@@ -686,7 +686,7 @@ function RevealKeyModal({ keyValue, onClose }: { keyValue: string | null; onClos
           <KeyRound className="h-5 w-5 text-primary" /> Your new API key
         </DialogTitle>
         <DialogDescription>
-          Copy it now — for security it is never shown again. Give it to the bot team over a secure channel.
+          Copy it now — for security it is never shown again. Give it to the agent team over a secure channel.
         </DialogDescription>
         <div className="mt-3 flex items-center gap-2 rounded-lg border border-border bg-muted/50 p-3">
           <code className="flex-1 break-all font-mono text-xs">{keyValue}</code>

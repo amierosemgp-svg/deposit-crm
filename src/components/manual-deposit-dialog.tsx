@@ -109,7 +109,7 @@ export function ManualDepositDialog({ open, onOpenChange }: Props) {
     }
     toast.success(
       skipBot
-        ? "Manual deposit created — approve then complete it (bot skipped)"
+        ? "Manual deposit created — approve then complete it (agent skipped)"
         : verified
           ? "Manual deposit created — ready for approval"
           : "Manual deposit intent created — awaiting bank match",
@@ -263,7 +263,7 @@ export function ManualDepositDialog({ open, onOpenChange }: Props) {
                 <span className="block text-[11px] text-muted-foreground mt-0.5">
                   {verified || skipBot
                     ? "Created as Pending — ready to approve immediately."
-                    : "Created as Awaiting Bank Match — the bot will confirm the bank transaction."}
+                    : "Created as Awaiting Bank Match — the agent will confirm the bank transaction."}
                 </span>
               </span>
             </label>
@@ -277,12 +277,12 @@ export function ManualDepositDialog({ open, onOpenChange }: Props) {
               />
               <span>
                 <span className="block text-sm font-medium">
-                  Handle manually (skip bot)
+                  Handle manually (skip agent)
                 </span>
                 <span className="block text-[11px] text-muted-foreground mt-0.5">
                   {skipBot
-                    ? "The bot won't match or top up this deposit — you'll Approve then Complete it yourself."
-                    : "Leave off to let the bot verify the bank credit and do the game top-up."}
+                    ? "The agent won't match or top up this deposit — you'll Approve then Complete it yourself."
+                    : "Leave off to let the agent verify the bank credit and do the game top-up."}
                 </span>
               </span>
             </label>

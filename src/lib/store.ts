@@ -498,7 +498,7 @@ export const useStore = create<Store>((set, get) => {
     bonusOptions: () => get().settings.bonus_options ?? [0, 5, 10, 20, 30, 50, 100],
 
     // Games a company can actually be topped up with: those with an active
-    // provider back-office (kiosk) login the bot can sign in to. Pass null
+    // provider back-office (kiosk) login the agent can sign in to. Pass null
     // (company not yet known) to fall back to the full games catalog.
     kioskGames: (companyId) => {
       if (companyId == null) return get().games();

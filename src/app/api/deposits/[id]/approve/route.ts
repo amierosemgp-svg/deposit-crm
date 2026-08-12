@@ -5,10 +5,10 @@ import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 
 /**
- * POST /api/deposits/:id/approve — Approve & dispatch to the bot.
- * Sets the deposit to "processing" and hands it to the bot. No money moves
+ * POST /api/deposits/:id/approve — Approve & dispatch to the agent.
+ * Sets the deposit to "processing" and hands it to the agent. No money moves
  * here: the player's game balance, the company BO pool, and total_deposits are
- * only booked when the bot confirms the real top-up succeeded (its
+ * only booked when the agent confirms the real top-up succeeded (its
  * PATCH /api/bot/transactions/:id/status → "completed" call). That keeps a
  * failed top-up clean — nothing to reverse — and lets CS reprocess it.
  */

@@ -13,7 +13,7 @@ import { depositToBotJson, playerGameInfoMap } from "@/lib/bot-transactions";
 import { BotError, botErrorResponse, jsonError } from "@/lib/bot-crud";
 import { maybeCreateReferralBonus } from "@/lib/referral";
 
-/** Allowed forward transitions the bot may drive. */
+/** Allowed forward transitions the agent may drive. */
 const ALLOWED: Record<string, string[]> = {
   pending_match: ["failed"],
   matched: ["approved", "processing", "completed", "failed"],
@@ -32,8 +32,8 @@ const bodySchema = z.object({
 
 /**
  * PATCH /api/bot/transactions/:id/status
- * Update a deposit's status as the bot drives it through top-up.
- * `:id` is the numeric CRM id or the bot's external_id.
+ * Update a deposit's status as the agent drives it through top-up.
+ * `:id` is the numeric CRM id or the agent's external_id.
  *
  * The `completed` transition is where the CRM books the deposit — it credits
  * the player's game balance (+total), deducts the company BO pool (when one

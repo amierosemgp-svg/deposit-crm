@@ -34,7 +34,7 @@ import { toast } from "sonner";
  * When a transfer last moved. Finished ones show the completed/failed time and
  * how long the move took; one still in flight shows how long it has been
  * running, which is the number CS actually watches — a transfer sitting in
- * "processing" is the bot failing to report back.
+ * "processing" is the agent failing to report back.
  */
 function TransferTiming({ transfer }: { transfer: GameTransfer }) {
   // Stays null until mount, so SSR and the first client render agree.
@@ -151,7 +151,7 @@ export default function GameTransferPage() {
       return;
     }
     toast.success(
-      `Transfer queued — ${formatRM(amt)} from ${fromGame} to ${toGame}, waiting for the bot`,
+      `Transfer queued — ${formatRM(amt)} from ${fromGame} to ${toGame}, waiting for the agent`,
     );
     setAmount("");
   }
@@ -352,7 +352,7 @@ export default function GameTransferPage() {
                       <td className="px-3 py-2 align-top">
                         <StatusBadge
                           status={t.status}
-                          // "pending" here means queued for the bot, not
+                          // "pending" here means queued for the agent, not
                           // awaiting a person.
                           label={t.status === "pending" ? "Initializing" : undefined}
                         />

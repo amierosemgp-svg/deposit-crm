@@ -145,7 +145,7 @@ export async function POST(request: Request) {
           transfer_amount: body.amount,
           from_game_balance_before: fromBalance,
           status: "completed",
-          // The bot already did the move; it starts and ends here.
+          // The agent already did the move; it starts and ends here.
           started_at: nowIso,
           completed_at: nowIso,
         })

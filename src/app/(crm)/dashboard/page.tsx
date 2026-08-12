@@ -3,7 +3,8 @@
 import { useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
 import Link from "next/link";
-import { formatRM, formatDateTime, isBotOnline, isOnline } from "@/lib/format";
+import { formatRM, formatDateTime, isBotOnline } from "@/lib/format";
+import { botForName } from "@/lib/bot-category";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { StatTile } from "@/components/stat-tile";
@@ -183,16 +184,24 @@ export default function DashboardPage() {
     0,
   );
 
-  // Bank/kiosk connectivity: the bot pings each bank login and kiosk it
-  // watches; a row is "online" if it pinged within the 5-minute window.
+  // Bank/kiosk connectivity comes from the agent processes, not from the account
+  // rows: `bank_accounts.last_heartbeat_at` / `provider_bo_accounts.
+  // last_heartbeat_at` are read in a few places but nothing ever writes them,
+  // so reading those showed every row offline forever. Resolve each row to the
+  // agent driving its bank/game and use that agent's heartbeat.
+  const bankOnline = (bankName: string) =>
+    isBotOnline(botForName(botHealth, bankName)?.last_heartbeat_at);
+  const kioskOnline = (gameName: string) =>
+    isBotOnline(botForName(botHealth, gameName)?.last_heartbeat_at);
+
   const banksOnline = scopedBankAccounts.filter((a) =>
-    isOnline(a.last_heartbeat_at),
+    bankOnline(a.bank_name),
   ).length;
   const kiosksOnline = scopedBoAccounts.filter((k) =>
-    isOnline(k.last_heartbeat_at),
+    kioskOnline(k.game_name),
   ).length;
 
-  // Bot process health (system-wide, not company-scoped).
+  // Agent process health (system-wide, not company-scoped).
   const botsOnline = botHealth.filter((b) =>
     isBotOnline(b.last_heartbeat_at),
   ).length;
@@ -346,7 +355,7 @@ export default function DashboardPage() {
                       <span
                         className={cn(
                           "h-1.5 w-1.5 shrink-0 rounded-full",
-                          isOnline(k.last_heartbeat_at)
+                          kioskOnline(k.game_name)
                             ? "bg-emerald-500"
                             : "bg-red-500",
                         )}
@@ -397,7 +406,7 @@ export default function DashboardPage() {
                       <span
                         className={cn(
                           "h-1.5 w-1.5 shrink-0 rounded-full",
-                          isOnline(a.last_heartbeat_at)
+                          bankOnline(a.bank_name)
                             ? "bg-emerald-500"
                             : "bg-red-500",
                         )}
@@ -420,7 +429,7 @@ export default function DashboardPage() {
           <Card className="gap-2 py-4 h-full transition-colors hover:border-primary/40">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1 px-5">
               <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                Bot Health
+                Agent Health
               </CardTitle>
               <Bot className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
@@ -470,7 +479,7 @@ export default function DashboardPage() {
                 </span>
               </div>
               <p className="text-[10px] text-muted-foreground pt-0.5">
-                Bots online &lt; 90s · banks &amp; kiosks &lt; 5 min · click to view
+                Agents online &lt; 90s · banks &amp; kiosks &lt; 5 min · click to view
               </p>
             </CardContent>
           </Card>
@@ -489,7 +498,7 @@ export default function DashboardPage() {
         <StatTile
           title="Processing"
           value={String(processingDeposits.length)}
-          sub="Bot topping up now"
+          sub="Agent topping up now"
           icon={Loader2}
         />
         <StatTile
@@ -525,7 +534,7 @@ export default function DashboardPage() {
                   <EmptyRow
                     colSpan={5}
                     hydrated={hydrated}
-                    message="No deposits yet — they'll appear here as soon as the bot detects one."
+                    message="No deposits yet — they'll appear here as soon as the agent detects one."
                   />
                 ) : (
                   recentDeposits.map((d) => (

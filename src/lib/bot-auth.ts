@@ -14,7 +14,7 @@ export type BotAuthResult =
   | { ok: false; response: Response };
 
 /**
- * Authenticate a bot request via the X-API-Key header.
+ * Authenticate an agent request via the X-API-Key header.
  * Optionally enforces the key's IP allowlist (when configured).
  */
 export async function requireBotKey(request: Request): Promise<BotAuthResult> {

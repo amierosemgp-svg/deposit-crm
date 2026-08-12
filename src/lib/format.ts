@@ -75,7 +75,7 @@ export function isOnline(lastHeartbeatAt: string | null | undefined): boolean {
   return Number.isFinite(t) && Date.now() - t < HEARTBEAT_ONLINE_MS;
 }
 
-/** True if a bot pinged within the 90s online window. */
+/** True if an agent pinged within the 90s online window. */
 export function isBotOnline(lastHeartbeatAt: string | null | undefined): boolean {
   if (!lastHeartbeatAt) return false;
   const t = new Date(lastHeartbeatAt).getTime();

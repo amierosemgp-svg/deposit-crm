@@ -256,7 +256,7 @@ export function PlayerTransactionsTab({ playerId }: { playerId: number }) {
                       {formatRM(e.amount)}
                     </td>
                     <td className="px-3 py-2 text-[12px] text-muted-foreground">
-                      {/* No user_id means the bot or a sweep did it, not a person. */}
+                      {/* No user_id means the agent or a sweep did it, not a person. */}
                       {e.user_name ?? (e.user_id ? userName(e.user_id) : "System")}
                     </td>
                   </tr>

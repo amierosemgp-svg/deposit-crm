@@ -32,7 +32,7 @@ const POLL_OPEN_MS = 4000;
 const POLL_CLOSED_MS = 15000;
 
 /**
- * What the bot is doing, as it does it — docked bottom-left on every page.
+ * What the agent is doing, as it does it — docked bottom-left on every page.
  *
  * Lives in the CRM layout rather than on one page: the feed is what you want
  * open *while* working a queue, not something to navigate away to. Collapsed it
@@ -141,7 +141,7 @@ export function BotLiveFeed() {
     return (
       <button
         onClick={expand}
-        aria-label="Open bot live feed"
+        aria-label="Open agent live feed"
         className="fixed bottom-20 left-4 z-40 inline-flex cursor-pointer items-center gap-2 rounded-full border bg-popover/95 py-2 pl-3 pr-3.5 text-[12px] font-medium shadow-lg backdrop-blur transition-shadow hover:shadow-xl"
       >
         <span className="relative flex h-2 w-2">
@@ -155,7 +155,7 @@ export function BotLiveFeed() {
             )}
           />
         </span>
-        Bot Feed
+        Agent Feed
         {unread > 0 && (
           <span
             className={cn(
@@ -180,7 +180,7 @@ export function BotLiveFeed() {
             paused ? "text-muted-foreground" : "text-emerald-600 dark:text-emerald-400",
           )}
         />
-        <span className="text-[13px] font-semibold">Bot Live Feed</span>
+        <span className="text-[13px] font-semibold">Agent Live Feed</span>
         {!paused && (
           <span className="relative flex h-2 w-2">
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
@@ -206,7 +206,7 @@ export function BotLiveFeed() {
           </button>
           <button
             onClick={() => setOpen(false)}
-            aria-label="Collapse bot live feed"
+            aria-label="Collapse agent live feed"
             className="cursor-pointer rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             <ChevronDown className="h-4 w-4" />
@@ -223,7 +223,7 @@ export function BotLiveFeed() {
           <div className="px-4 py-8 text-center">
             <Activity className="mx-auto mb-2 h-5 w-5 text-muted-foreground/50" />
             <p className="text-[12px] text-muted-foreground">
-              Nothing yet. Events appear here as the bot posts them to{" "}
+              Nothing yet. Events appear here as the agent posts them to{" "}
               <code className="rounded bg-muted px-1 py-0.5 text-[11px]">
                 POST /api/bot/events
               </code>

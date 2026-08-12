@@ -24,7 +24,7 @@ const STATE_STYLES: Record<BotState, string> = {
 };
 
 /**
- * `stale` = the bot stopped pinging, so this state is only the last thing it
+ * `stale` = the agent stopped pinging, so this state is only the last thing it
  * managed to report. Rendering a days-old "Working" in full colour next to
  * "Offline" reads as a contradiction, and looks like the page is broken.
  */
@@ -69,7 +69,7 @@ function OnlinePip({ online }: { online: boolean }) {
   );
 }
 
-/** One bot's full log entry, sized for a column rather than a wide table. */
+/** One agent's full log entry, sized for a column rather than a wide table. */
 function BotRow({ bot }: { bot: BotHealth }) {
   const online = isBotOnline(bot.last_heartbeat_at);
   return (
@@ -115,7 +115,7 @@ function BotRow({ bot }: { bot: BotHealth }) {
   );
 }
 
-/** One column of bots — same shell for banks and kiosks. */
+/** One column of agents — same shell for banks and kiosks. */
 function BotColumn({
   title,
   icon: Icon,
@@ -157,7 +157,7 @@ function BotColumn({
         {bots.length === 0 ? (
           <div className="px-4 py-10 text-center text-xs text-muted-foreground">
             {!hydrated ? (
-              <ListLoading className="py-0" label="Loading bots…" />
+              <ListLoading className="py-0" label="Loading agents…" />
             ) : (
               emptyLabel
             )}
@@ -200,16 +200,17 @@ export default function BotHealthPage() {
           b.state.includes(q),
       )
       .sort((a, b) => {
-        // Anything wrong first — that's what this page is for. Then offline,
-        // then alphabetical so the list is stable between refreshes.
+        // Online first — a running agent is what you're usually here to check on.
+        // Within each group, anything wrong floats up (that's what this page is
+        // for), then alphabetical so the list is stable between refreshes.
+        const on =
+          Number(isBotOnline(b.last_heartbeat_at)) -
+          Number(isBotOnline(a.last_heartbeat_at));
+        if (on !== 0) return on;
         const bad = (x: typeof a) =>
           x.state === "stuck" || x.state === "error" ? 0 : 1;
         const d = bad(a) - bad(b);
         if (d !== 0) return d;
-        const on =
-          Number(isBotOnline(a.last_heartbeat_at)) -
-          Number(isBotOnline(b.last_heartbeat_at));
-        if (on !== 0) return on;
         return a.bot_id.localeCompare(b.bot_id);
       });
 
@@ -223,8 +224,8 @@ export default function BotHealthPage() {
 
   const online = botHealth.filter((b) => isBotOnline(b.last_heartbeat_at)).length;
   const offline = botHealth.length - online;
-  // Bots that need attention: stuck/error AND currently online (a stale offline
-  // bot's last state is less actionable than a live problem).
+  // Agents that need attention: stuck/error AND currently online (a stale offline
+  // agent's last state is less actionable than a live problem).
   const attention = botHealth.filter(
     (b) =>
       isBotOnline(b.last_heartbeat_at) &&
@@ -241,9 +242,9 @@ export default function BotHealthPage() {
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold">Bot Health</h1>
+          <h1 className="text-2xl font-semibold">Agent Health</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Online = pinged within 90s. A bot that stopped pinging shows its{" "}
+            Online = pinged within 90s. An agent that stopped pinging shows its{" "}
             <span className="font-medium">last known</span> state — that state
             is however old the last ping is, not current.
           </p>
@@ -293,7 +294,7 @@ export default function BotHealthPage() {
           <Input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search bot id, step, state…"
+            placeholder="Search agent id, step, state…"
             className="h-8 pl-8"
           />
         </div>
@@ -304,23 +305,23 @@ export default function BotHealthPage() {
           different problems for different people, so they don't share a list. */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <BotColumn
-          title="Bank Bots"
+          title="Bank Agents"
           icon={Banknote}
           bots={bankBots}
           hydrated={hydrated}
           emptyLabel={
-            query ? "No bank bots match your search." : "No bank bots reporting."
+            query ? "No bank agents match your search." : "No bank agents reporting."
           }
         />
         <BotColumn
-          title="Kiosk Bots"
+          title="Kiosk Agents"
           icon={Gamepad2}
           bots={kioskBots}
           hydrated={hydrated}
           emptyLabel={
             query
-              ? "No kiosk bots match your search."
-              : "No kiosk bots reporting."
+              ? "No kiosk agents match your search."
+              : "No kiosk agents reporting."
           }
         />
       </div>

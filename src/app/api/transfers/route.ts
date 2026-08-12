@@ -15,7 +15,7 @@ const createSchema = z.object({
   amount: z.number().positive(),
   reference: z.string().optional(),
   notes: z.string().optional(),
-  // Fully manual: the bot never acts on it and it never auto-confirms.
+  // Fully manual: the agent never acts on it and it never auto-confirms.
   skip_bot: z.boolean().optional(),
 });
 

@@ -12,12 +12,12 @@ import { jsonError } from "@/lib/api-helpers";
 import { maybeCreateReferralBonus } from "@/lib/referral";
 
 /**
- * POST /api/deposits/:id/complete — manual completion of a skip-bot deposit.
+ * POST /api/deposits/:id/complete — manual completion of a skip-agent deposit.
  * The CS agent has already done the game top-up in the provider back-office;
- * this books the ledger exactly like the bot's completed transition (credits
+ * this books the ledger exactly like the agent's completed transition (credits
  * the player's game balance, deducts the company BO pool when one exists, and
- * bumps total_deposits) and marks the deposit completed. Only skip-bot deposits
- * in "processing" qualify — normal deposits are completed by the bot.
+ * bumps total_deposits) and marks the deposit completed. Only skip-agent deposits
+ * in "processing" qualify — normal deposits are completed by the agent.
  */
 export async function POST(
   _request: Request,
@@ -43,7 +43,7 @@ export async function POST(
         throw new AuthError(403, "Deposit is outside your company scope");
       }
       if (!row.skip_bot) {
-        throw new AuthError(422, "Only manual (skip-bot) deposits are completed here");
+        throw new AuthError(422, "Only manual (skip-agent) deposits are completed here");
       }
       if (row.status !== "processing") {
         throw new AuthError(409, `Deposit is "${row.status}", approve it first`);
