@@ -38,6 +38,16 @@ export async function POST(
       if (!["pending", "matched"].includes(row.status)) {
         throw new AuthError(409, `Deposit is "${row.status}", expected pending/matched`);
       }
+      // Claim first, then act: whoever dispatches a deposit to the agent owns
+      // it, and the claim is what stops two agents pushing the same one.
+      if (row.assigned_to_user_id !== user.user_id) {
+        throw new AuthError(
+          409,
+          row.assigned_to_user_id
+            ? "That deposit is handled by someone else"
+            : "Assign this deposit to yourself before approving",
+        );
+      }
       if (!row.player_id) {
         throw new AuthError(422, "Assign a player before approving");
       }

@@ -1,7 +1,7 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { players, transactions, withdrawals } from "@/db/schema";
+import { gameCredits, players, transactions, withdrawals } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 
@@ -33,6 +33,27 @@ export async function POST(request: Request) {
       !user.companyIds.includes(player.company_entity_id)
     ) {
       throw new AuthError(403, "Player is outside your company scope");
+    }
+
+    // A player can't withdraw more game credit than they hold. The UI already
+    // caps the field, but this is the only check the bot and any direct API
+    // caller pass through — without it an over-balance request reaches the
+    // pull-credits step and fails there, after CS has told the player yes.
+    const [credit] = await db
+      .select()
+      .from(gameCredits)
+      .where(
+        and(
+          eq(gameCredits.player_id, body.player_id),
+          eq(gameCredits.game_name, body.game_name),
+        ),
+      );
+    const balance = credit?.current_balance ?? 0;
+    if (body.requested_amount > balance) {
+      return jsonError(
+        `Insufficient ${body.game_name} balance (${balance.toFixed(2)})`,
+        422,
+      );
     }
 
     const [created] = await db

@@ -10,18 +10,24 @@ type Kind = "deposit" | "withdrawal" | "game_transfer";
 /**
  * Who is handling a transaction, and a one-click way to claim it.
  *
- * Claiming is advisory — it doesn't lock the row or gate any action. It exists
- * so that when several agents are working the same queue they can see a
- * transaction is already being dealt with instead of both picking it up.
+ * For deposits the claim gates the Approve button, so this is also where you
+ * pick a deposit up before dispatching it. `locked` hides the release link once
+ * the row has moved past the point where it can be handed back (an approved
+ * deposit stays with whoever sent it to the agent); the server enforces the
+ * same rule.
  */
 export function AssigneeCell({
   kind,
   id,
   assignedToUserId,
+  locked = false,
+  lockedTitle,
 }: {
   kind: Kind;
   id: number;
   assignedToUserId?: number | null;
+  locked?: boolean;
+  lockedTitle?: string;
 }) {
   const [busy, setBusy] = useState(false);
   const me = useStore((s) => s.me);
@@ -42,10 +48,13 @@ export function AssigneeCell({
   if (assignedToUserId) {
     return (
       <div className="flex items-center gap-1.5">
-        <span className={`text-[12px] ${isMine ? "font-medium" : ""}`}>
+        <span
+          className={`text-[12px] ${isMine ? "font-medium" : ""}`}
+          title={isMine && locked ? lockedTitle : undefined}
+        >
           {isMine ? "You" : userName(assignedToUserId)}
         </span>
-        {isMine && !isViewer && (
+        {isMine && !isViewer && !locked && (
           <button
             onClick={toggle}
             disabled={busy}

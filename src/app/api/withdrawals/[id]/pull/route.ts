@@ -28,6 +28,16 @@ export async function POST(
       if (row.status !== "requested") {
         throw new AuthError(409, `Withdrawal is "${row.status}", expected requested`);
       }
+      // Same rule as approving a deposit: claim it, then act. Pulling moves
+      // real credit under your name, so it needs an owner.
+      if (row.assigned_to_user_id !== user.user_id) {
+        throw new AuthError(
+          409,
+          row.assigned_to_user_id
+            ? "That withdrawal is handled by someone else"
+            : "Assign this withdrawal to yourself before pulling credits",
+        );
+      }
 
       const [player] = await txn
         .select()

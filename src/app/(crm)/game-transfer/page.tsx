@@ -27,7 +27,11 @@ import { Label } from "@/components/ui/label";
 import { PlayerNameLink } from "@/components/player-name-link";
 import { StatusBadge } from "@/components/status-badge";
 import { ListLoading } from "@/components/list-loading";
-import { ArrowLeftRight, Loader2, Search } from "lucide-react";
+import { ArrowLeftRight, Loader2, Search, UserCheck, X } from "lucide-react";
+import { cn } from "@/lib/utils";
+
+/** Transfers the agent still has in hand — the only ones worth claiming. */
+const IN_FLIGHT = new Set<string>(IN_FLIGHT_TRANSFER_STATUSES);
 import { toast } from "sonner";
 
 /**
@@ -84,6 +88,9 @@ export default function GameTransferPage() {
   const [fromGameSel, setFromGameSel] = useState("");
   const [toGameSel, setToGameSel] = useState("");
   const [amount, setAmount] = useState("");
+  const [transferAll, setTransferAll] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkAssigning, setBulkAssigning] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const transfers = useStore((s) => s.gameTransfers);
@@ -100,6 +107,7 @@ export default function GameTransferPage() {
   const companyInScope = useStore((s) => s.companyInScope);
 
   const isViewer = me?.role === "viewer";
+  const setAssignment = useStore((s) => s.setAssignment);
   const games = gamesFn();
   const fromGame = fromGameSel || games[0] || "";
   const toGame =
@@ -130,9 +138,64 @@ export default function GameTransferPage() {
     [transfers, selectedCompanyId, selectedLeaderId, playerById],
   );
 
+  // Only in-flight transfers are worth claiming — a completed or failed one has
+  // nobody left to handle it. The agent does the work, so claiming is all CS can
+  // do in bulk here.
+  const selectableIds = useMemo(
+    () =>
+      isViewer
+        ? []
+        : scopedTransfers
+            .filter((t) => IN_FLIGHT.has(t.status))
+            .map((t) => t.transfer_id),
+    [scopedTransfers, isViewer],
+  );
+  const selected = useMemo(
+    () => selectableIds.filter((id) => selectedIds.has(id)),
+    [selectableIds, selectedIds],
+  );
+
+  function toggleRow(transferId: number) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(transferId)) next.delete(transferId);
+      else next.add(transferId);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    setSelectedIds((prev) =>
+      selected.length === selectableIds.length && selectableIds.length > 0
+        ? new Set()
+        : new Set([...prev, ...selectableIds]),
+    );
+  }
+
+  /** Claim every selected transfer that isn't already someone else's. */
+  async function handleBulkAssign() {
+    if (selected.length === 0 || bulkAssigning) return;
+    setBulkAssigning(true);
+    const res = await setAssignment({ kind: "game_transfer", ids: selected });
+    setBulkAssigning(false);
+    if (!res.ok) {
+      toast.error(res.error ?? "Could not assign");
+      return;
+    }
+    toast.success(
+      `${res.changed} transfer${res.changed === 1 ? "" : "s"} assigned to you`,
+    );
+    if (res.skipped) {
+      toast.warning(`${res.skipped} skipped — already assigned to someone else`);
+    }
+    setSelectedIds(new Set());
+  }
+
   const player = playerId ? playerById(playerId) : undefined;
   const fromBal = player ? getBalance(player.player_id, fromGame) : 0;
-  const amt = Number(amount) || 0;
+  // Derived, not stamped into the field — switching the source game or a
+  // refreshed balance keeps "transfer all" meaning the whole current balance.
+  const amt = transferAll ? fromBal : Number(amount) || 0;
   const canTransfer =
     !!player && amt > 0 && amt <= fromBal && !!fromGame && !!toGame && fromGame !== toGame;
 
@@ -154,6 +217,7 @@ export default function GameTransferPage() {
       `Transfer queued — ${formatRM(amt)} from ${fromGame} to ${toGame}, waiting for the agent`,
     );
     setAmount("");
+    setTransferAll(false);
   }
 
   return (
@@ -252,11 +316,24 @@ export default function GameTransferPage() {
               </div>
 
               <div className="space-y-2">
-                <Label>Amount (RM)</Label>
+                <div className="flex items-center justify-between gap-3">
+                  <Label>Amount (RM)</Label>
+                  <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground select-none">
+                    <input
+                      type="checkbox"
+                      className="cursor-pointer"
+                      checked={transferAll}
+                      disabled={!player || fromBal <= 0}
+                      onChange={(e) => setTransferAll(e.target.checked)}
+                    />
+                    Transfer all
+                  </label>
+                </div>
                 <Input
                   type="number"
-                  value={amount}
+                  value={transferAll ? fromBal.toFixed(2) : amount}
                   onChange={(e) => setAmount(e.target.value)}
+                  disabled={transferAll}
                   placeholder="0.00"
                   min={0}
                   max={fromBal}
@@ -286,12 +363,68 @@ export default function GameTransferPage() {
           }
         >
           <CardHeader className="border-b">
-            <CardTitle className="text-base">Recent Transfers</CardTitle>
+            <div className="flex items-center gap-2">
+              <CardTitle className="text-base">Recent Transfers</CardTitle>
+              {selected.length > 0 && (
+                <div className="ml-auto flex items-center gap-1.5">
+                  <span className="mr-1 text-[11px] font-medium">
+                    {selected.length} selected
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void handleBulkAssign()}
+                    disabled={bulkAssigning}
+                    title="Claim these so other agents can see you're on them"
+                    className="cursor-pointer"
+                  >
+                    {bulkAssigning ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <UserCheck className="h-3.5 w-3.5" />
+                    )}
+                    Assign to me
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setSelectedIds(new Set())}
+                    disabled={bulkAssigning}
+                    className="cursor-pointer"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                    Clear
+                  </Button>
+                </div>
+              )}
+            </div>
           </CardHeader>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-muted/50 text-muted-foreground">
                 <tr>
+                  {!isViewer && (
+                    <th className="w-8 px-3 py-2.5">
+                      <input
+                        type="checkbox"
+                        aria-label="Select all in-flight transfers"
+                        checked={
+                          selectableIds.length > 0 &&
+                          selected.length === selectableIds.length
+                        }
+                        ref={(el) => {
+                          if (el) {
+                            el.indeterminate =
+                              selected.length > 0 &&
+                              selected.length < selectableIds.length;
+                          }
+                        }}
+                        onChange={toggleAll}
+                        disabled={selectableIds.length === 0 || bulkAssigning}
+                        className="cursor-pointer disabled:cursor-not-allowed"
+                      />
+                    </th>
+                  )}
                   <th className="px-3 py-2.5 text-left font-medium">Date</th>
                   <th className="px-3 py-2.5 text-left font-medium">Player</th>
                   <th className="px-3 py-2.5 text-left font-medium">From</th>
@@ -311,7 +444,7 @@ export default function GameTransferPage() {
                 {scopedTransfers.length === 0 && (
                   <tr className="border-t">
                     <td
-                      colSpan={9}
+                      colSpan={isViewer ? 9 : 10}
                       className="px-3 py-10 text-center text-sm text-muted-foreground"
                     >
                       {!hydrated ? (
@@ -324,8 +457,29 @@ export default function GameTransferPage() {
                 )}
                 {scopedTransfers.map((t) => {
                   const p = playerById(t.player_id);
+                  const selectable = !isViewer && IN_FLIGHT.has(t.status);
                   return (
-                    <tr key={t.transfer_id} className="border-t hover:bg-muted/30">
+                    <tr
+                      key={t.transfer_id}
+                      className={cn(
+                        "border-t",
+                        selectedIds.has(t.transfer_id) && selectable
+                          ? "bg-primary/5 hover:bg-primary/10"
+                          : "hover:bg-muted/30",
+                      )}
+                    >
+                      {!isViewer && (
+                        <td className="px-3 py-2">
+                          <input
+                            type="checkbox"
+                            aria-label={`Select transfer ${t.transfer_id}`}
+                            checked={selectable && selectedIds.has(t.transfer_id)}
+                            onChange={() => toggleRow(t.transfer_id)}
+                            disabled={!selectable || bulkAssigning}
+                            className="cursor-pointer disabled:cursor-not-allowed"
+                          />
+                        </td>
+                      )}
                       <td className="px-3 py-2 whitespace-nowrap text-[12px]">
                         {formatDateTime(t.created_at)}
                       </td>

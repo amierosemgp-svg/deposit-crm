@@ -179,6 +179,8 @@ export default function DepositsPage() {
     () => selectableIds.filter((id) => selectedIds.has(id)),
     [selectableIds, selectedIds],
   );
+  // Approving dispatches to the agent under your name, so it needs the claim —
+  // the server rejects an approve on a deposit you don't hold.
   const approvable = useMemo(
     () =>
       filtered
@@ -186,10 +188,11 @@ export default function DepositsPage() {
           (d) =>
             selected.includes(d.deposit_id) &&
             d.player_id !== null &&
-            !!d.selected_game,
+            !!d.selected_game &&
+            d.assigned_to_user_id === me?.user_id,
         )
         .map((d) => d.deposit_id),
-    [filtered, selected],
+    [filtered, selected, me?.user_id],
   );
 
   function toggleRow(depositId: number) {
@@ -615,8 +618,20 @@ export default function DepositsPage() {
                 {filtered.map((d) => {
                   const actionable = d.status === "pending" || d.status === "matched";
                   const editable = actionable && !isViewer;
+                  const isMine = d.assigned_to_user_id === me?.user_id;
                   const canApprove =
-                    editable && d.player_id !== null && !!d.selected_game;
+                    editable && d.player_id !== null && !!d.selected_game && isMine;
+                  const approveHint = !editable
+                    ? undefined
+                    : !isMine
+                      ? d.assigned_to_user_id
+                        ? "Handled by someone else"
+                        : "Assign this deposit to yourself first"
+                      : d.player_id === null
+                        ? "Assign a player first"
+                        : !d.selected_game
+                          ? "Select a game first"
+                          : undefined;
                   return (
                     <motion.tr
                       key={d.deposit_id}
@@ -816,6 +831,8 @@ export default function DepositsPage() {
                           kind="deposit"
                           id={d.deposit_id}
                           assignedToUserId={d.assigned_to_user_id}
+                          locked={!actionable}
+                          lockedTitle="Approved deposits stay with whoever dispatched them"
                         />
                       </td>
                       <td className="px-3 py-2 text-right">
@@ -830,6 +847,7 @@ export default function DepositsPage() {
                                 if (!r.ok) toast.error(r.error ?? "Approve failed");
                               }}
                               disabled={!canApprove}
+                              title={approveHint}
                               className="cursor-pointer bg-emerald-600 text-white hover:bg-emerald-700 disabled:bg-emerald-600/30 disabled:text-white/70"
                             >
                               <Zap className="h-3.5 w-3.5" />
@@ -858,6 +876,7 @@ export default function DepositsPage() {
                             size="sm"
                             onClick={() => setApprovingId(d.deposit_id)}
                             disabled={!canApprove}
+                            title={approveHint}
                             className="cursor-pointer bg-emerald-600 text-white hover:bg-emerald-700 disabled:bg-emerald-600/30 disabled:text-white/70"
                           >
                             <Zap className="h-3.5 w-3.5" />

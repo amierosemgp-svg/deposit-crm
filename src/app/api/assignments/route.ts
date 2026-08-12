@@ -15,16 +15,26 @@ const KINDS = {
     table: deposits,
     id: deposits.deposit_id,
     assignee: deposits.assigned_to_user_id,
+    // Approving hands the deposit to the agent under your name, so the claim
+    // stops being advisory at that point — it is the record of who dispatched
+    // it. Only a deposit still awaiting action can be handed back.
+    releasable: inArray(deposits.status, ["pending", "matched"]),
+    lockedMessage:
+      "Already approved — an approved deposit stays with whoever dispatched it",
   },
   withdrawal: {
     table: withdrawals,
     id: withdrawals.withdrawal_id,
     assignee: withdrawals.assigned_to_user_id,
+    releasable: undefined,
+    lockedMessage: undefined,
   },
   game_transfer: {
     table: gameTransfers,
     id: gameTransfers.transfer_id,
     assignee: gameTransfers.assigned_to_user_id,
+    releasable: undefined,
+    lockedMessage: undefined,
   },
 } as const;
 
@@ -71,6 +81,9 @@ export async function POST(request: Request) {
       eq(target.assignee, user.user_id),
     )!;
 
+    // Releasing can be blocked per kind once the row has moved on (see KINDS).
+    const releaseGuard = assign ? undefined : target.releasable;
+
     const updated = await db
       .update(target.table)
       .set(
@@ -78,13 +91,22 @@ export async function POST(request: Request) {
           ? { assigned_to_user_id: user.user_id, assigned_at: nowIso }
           : { assigned_to_user_id: null, assigned_at: null },
       )
-      .where(and(inArray(target.id, ids), claimable))
+      .where(and(inArray(target.id, ids), claimable, releaseGuard))
       .returning({ id: target.id });
 
     const changed = updated.length;
     const skipped = ids.length - changed;
 
     if (changed === 0) {
+      if (releaseGuard && target.lockedMessage) {
+        // Nothing moved on a release — either someone else holds it, or it is
+        // past the point where it can be handed back. Say which.
+        const [stillClaimable] = await db
+          .select({ id: target.id })
+          .from(target.table)
+          .where(and(inArray(target.id, ids), claimable));
+        if (stillClaimable) return jsonError(target.lockedMessage, 409);
+      }
       return jsonError(
         ids.length === 1
           ? "That transaction is assigned to someone else"

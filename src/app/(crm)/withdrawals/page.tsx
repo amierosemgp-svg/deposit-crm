@@ -64,6 +64,7 @@ export default function WithdrawalsPage() {
   const rejectWithdrawal = useStore((s) => s.rejectWithdrawal);
   const uploadFile = useStore((s) => s.uploadFile);
   const setAssignment = useStore((s) => s.setAssignment);
+  const pullCredits = useStore((s) => s.pullCreditsForWithdrawal);
   const me = useStore((s) => s.me);
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
   const selectedLeaderId = useStore((s) => s.selectedLeaderId);
@@ -76,6 +77,7 @@ export default function WithdrawalsPage() {
   const [statusFilter, setStatusFilter] = useState<string>("requested");
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [bulkAssigning, setBulkAssigning] = useState(false);
+  const [bulkPulling, setBulkPulling] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
 
   // --- New Withdrawal dialog state ---
@@ -83,6 +85,7 @@ export default function WithdrawalsPage() {
   const [newPlayerId, setNewPlayerId] = useState("");
   const [newGame, setNewGame] = useState("");
   const [newAmount, setNewAmount] = useState("");
+  const [newAll, setNewAll] = useState(false);
   const [newBankName, setNewBankName] = useState("");
   const [newBankAccount, setNewBankAccount] = useState("");
   const [newSkipBot, setNewSkipBot] = useState(false);
@@ -179,7 +182,10 @@ export default function WithdrawalsPage() {
     .sort((a, b) => a.localeCompare(b));
   const newBalance =
     newPlayer && newGame ? getBalance(newPlayer.player_id, newGame) : 0;
-  const newAmt = Number(newAmount) || 0;
+  // "Withdraw all" derives the amount from the live balance rather than
+  // stamping it into the field, so switching game or a refreshed balance can't
+  // leave a stale number behind.
+  const newAmt = newAll ? newBalance : Number(newAmount) || 0;
   const newValid =
     !!newPlayer && !!newGame && newAmt > 0 && newAmt <= newBalance;
 
@@ -200,6 +206,20 @@ export default function WithdrawalsPage() {
   const selected = useMemo(
     () => selectableIds.filter((id) => selectedIds.has(id)),
     [selectableIds, selectedIds],
+  );
+  // Pulling needs the claim (the server enforces it), so the bulk button only
+  // counts rows you hold that are still awaiting a pull.
+  const pullable = useMemo(
+    () =>
+      sorted
+        .filter(
+          (w) =>
+            selected.includes(w.withdrawal_id) &&
+            w.status === "requested" &&
+            w.assigned_to_user_id === me?.user_id,
+        )
+        .map((w) => w.withdrawal_id),
+    [sorted, selected, me?.user_id],
   );
 
   function toggleRow(withdrawalId: number) {
@@ -238,10 +258,34 @@ export default function WithdrawalsPage() {
     setSelectedIds(new Set());
   }
 
+  /**
+   * Pull every selected withdrawal you hold. Runs the plain store action rather
+   * than the pull-back modal — that animation is a per-row confirmation and
+   * would be nonsense twenty times over.
+   */
+  async function handleBulkPull() {
+    if (pullable.length === 0 || bulkPulling) return;
+    setBulkPulling(true);
+    let ok = 0;
+    let failed = 0;
+    for (const id of pullable) {
+      const res = await pullCredits(id);
+      if (res.ok) ok += 1;
+      else failed += 1;
+    }
+    setBulkPulling(false);
+    setSelectedIds(new Set());
+    if (ok > 0)
+      toast.success(`Credits pulled for ${ok} withdrawal${ok === 1 ? "" : "s"}`);
+    if (failed > 0)
+      toast.error(`${failed} withdrawal${failed === 1 ? "" : "s"} failed to pull`);
+  }
+
   function resetNewForm() {
     setNewPlayerId("");
     setNewGame("");
     setNewAmount("");
+    setNewAll(false);
     setNewBankName("");
     setNewBankAccount("");
     setNewSkipBot(false);
@@ -358,7 +402,7 @@ export default function WithdrawalsPage() {
                 variant="outline"
                 size="sm"
                 onClick={() => void handleBulkAssign()}
-                disabled={bulkAssigning}
+                disabled={bulkAssigning || bulkPulling}
                 title="Claim these so other agents can see you're on them"
                 className="cursor-pointer"
               >
@@ -370,10 +414,28 @@ export default function WithdrawalsPage() {
                 Assign to me
               </Button>
               <Button
+                size="sm"
+                onClick={() => void handleBulkPull()}
+                disabled={pullable.length === 0 || bulkAssigning || bulkPulling}
+                title={
+                  pullable.length === 0
+                    ? "Assign these to yourself first — only requested withdrawals you hold can be pulled"
+                    : undefined
+                }
+                className="cursor-pointer bg-emerald-600 text-white hover:bg-emerald-700 disabled:bg-emerald-600/30 disabled:text-white/70"
+              >
+                {bulkPulling ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <ArrowDownToLine className="h-3.5 w-3.5" />
+                )}
+                Pull Credits ({pullable.length})
+              </Button>
+              <Button
                 variant="ghost"
                 size="sm"
                 onClick={() => setSelectedIds(new Set())}
-                disabled={bulkAssigning}
+                disabled={bulkAssigning || bulkPulling}
                 className="cursor-pointer"
               >
                 <X className="h-3.5 w-3.5" />
@@ -478,7 +540,15 @@ export default function WithdrawalsPage() {
               {sorted.map((w) => {
                 const player = playerById(w.player_id);
                 const bal = getBalance(w.player_id, w.game_name);
-                const canPull = !isViewer && w.status === "requested";
+                const isMine = w.assigned_to_user_id === me?.user_id;
+                // Pulling needs the claim, same as approving a deposit.
+                const canPull = !isViewer && w.status === "requested" && isMine;
+                const showPull = !isViewer && w.status === "requested";
+                const pullHint = !isMine
+                  ? w.assigned_to_user_id
+                    ? "Handled by someone else"
+                    : "Assign this withdrawal to yourself first"
+                  : undefined;
                 const canPay = !isViewer && w.status === "credits_pulled";
                 const selectable =
                   !isViewer &&
@@ -556,12 +626,14 @@ export default function WithdrawalsPage() {
                       />
                     </td>
                     <td className="px-3 py-2 text-right">
-                      {canPull && (
+                      {showPull && (
                         <div className="flex items-center justify-end gap-1.5">
                           <Button
                             size="sm"
                             onClick={() => setPullingId(w.withdrawal_id)}
-                            className="cursor-pointer bg-blue-600 text-white hover:bg-blue-700"
+                            disabled={!canPull}
+                            title={pullHint}
+                            className="cursor-pointer bg-blue-600 text-white hover:bg-blue-700 disabled:bg-blue-600/30 disabled:text-white/70"
                           >
                             <ArrowDownToLine className="h-3.5 w-3.5" />
                             Pull Credits
@@ -704,12 +776,25 @@ export default function WithdrawalsPage() {
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="wd-amount">Requested amount (RM)</Label>
+              <div className="flex items-center justify-between gap-3">
+                <Label htmlFor="wd-amount">Requested amount (RM)</Label>
+                <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground select-none">
+                  <input
+                    type="checkbox"
+                    className="cursor-pointer"
+                    checked={newAll}
+                    disabled={!newPlayer || !newGame || newBalance <= 0}
+                    onChange={(e) => setNewAll(e.target.checked)}
+                  />
+                  Withdraw all
+                </label>
+              </div>
               <Input
                 id="wd-amount"
                 type="number"
-                value={newAmount}
+                value={newAll ? newBalance.toFixed(2) : newAmount}
                 onChange={(e) => setNewAmount(e.target.value)}
+                disabled={newAll}
                 placeholder="0.00"
                 min={0}
                 max={newBalance}
