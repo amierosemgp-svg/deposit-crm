@@ -11,7 +11,17 @@ import { StatusBadge } from "@/components/status-badge";
 import { PlayerNameLink } from "@/components/player-name-link";
 import { ImportPlayersModal } from "@/components/import-players-modal";
 import { CreatePlayerModal } from "@/components/create-player-modal";
-import { Search, Send, Upload, UserPlus, Users } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Search,
+  Send,
+  Upload,
+  UserPlus,
+  Users,
+} from "lucide-react";
+
+const PAGE_SIZE = 50;
 
 export default function PlayersPage() {
   const players = useStore((s) => s.players);
@@ -23,6 +33,7 @@ export default function PlayersPage() {
   const selectedLeaderId = useStore((s) => s.selectedLeaderId);
   const companyInScope = useStore((s) => s.companyInScope);
   const [q, setQ] = useState("");
+  const [page, setPage] = useState(0);
   const [importOpen, setImportOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
 
@@ -49,6 +60,22 @@ export default function PlayersPage() {
   const inScopeTotal = players.filter((p) =>
     companyInScope(p.company_entity_id),
   ).length;
+
+  // Back to page 1 whenever the result set changes underneath us — searching on
+  // page 12 and landing on an empty page is the classic pagination bug.
+  const filterKey = `${q}|${selectedCompanyId}|${selectedLeaderId}`;
+  const [prevKey, setPrevKey] = useState(filterKey);
+  if (filterKey !== prevKey) {
+    setPrevKey(filterKey);
+    setPage(0);
+  }
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  // Clamp rather than trusting `page`: a background poll can shrink the list
+  // while you're on the last page.
+  const safePage = Math.min(page, totalPages - 1);
+  const start = safePage * PAGE_SIZE;
+  const pageRows = filtered.slice(start, start + PAGE_SIZE);
 
   return (
     <div className="space-y-5">
@@ -106,7 +133,9 @@ export default function PlayersPage() {
             />
           </div>
           <span className="ml-auto text-[11px] text-muted-foreground">
-            {filtered.length} shown
+            {filtered.length === 0
+              ? "0 shown"
+              : `${start + 1}–${start + pageRows.length} of ${filtered.length}`}
           </span>
         </div>
 
@@ -143,7 +172,7 @@ export default function PlayersPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((p) => (
+                {pageRows.map((p) => (
                   <tr key={p.player_id} className="border-t hover:bg-muted/30">
                     <td className="px-3 py-2">
                       <div className="flex items-center gap-2.5">
@@ -189,6 +218,36 @@ export default function PlayersPage() {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {filtered.length > PAGE_SIZE && (
+          <div className="flex items-center justify-between border-t px-4 py-2.5">
+            <span className="text-[11px] text-muted-foreground">
+              Page {safePage + 1} of {totalPages}
+            </span>
+            <div className="flex items-center gap-1.5">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={safePage === 0}
+                onClick={() => setPage((n) => Math.max(0, Math.min(n, totalPages - 1) - 1))}
+                className="cursor-pointer"
+              >
+                <ChevronLeft className="h-3.5 w-3.5" />
+                Prev
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={safePage >= totalPages - 1}
+                onClick={() => setPage((n) => Math.min(Math.min(n, totalPages - 1) + 1, totalPages - 1))}
+                className="cursor-pointer"
+              >
+                Next
+                <ChevronRight className="h-3.5 w-3.5" />
+              </Button>
+            </div>
           </div>
         )}
       </Card>
