@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { db } from "@/db";
 import { entities, players, transactions } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { inArray } from "drizzle-orm";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 
@@ -29,6 +29,9 @@ const playerSchema = z.object({
 
 const createSchema = z.union([playerSchema, z.array(playerSchema).min(1)]);
 
+/** Rows per INSERT — keeps each statement well under Postgres's parameter cap. */
+const INSERT_CHUNK = 500;
+
 /** POST /api/players — create one player, or an array (import). */
 export async function POST(request: Request) {
   try {
@@ -39,49 +42,67 @@ export async function POST(request: Request) {
     }
     const rows = Array.isArray(parsed.data) ? parsed.data : [parsed.data];
 
-    for (const row of rows) {
-      if (
-        user.companyIds !== null &&
-        !user.companyIds.includes(row.company_entity_id)
-      ) {
-        throw new AuthError(
-          403,
-          `Company ${row.company_entity_id} is outside your scope`,
-        );
-      }
-      const [company] = await db
-        .select()
-        .from(entities)
-        .where(eq(entities.entity_id, row.company_entity_id));
-      if (!company || company.entity_type !== "company") {
-        return jsonError(`Entity ${row.company_entity_id} is not a company`);
+    // Validate the companies once over the distinct ids. This used to be a
+    // SELECT per row, awaited in sequence — an import assigns the same company
+    // to every row, so a 2,600-row file meant 2,600 identical round trips and
+    // the request died on the function timeout before reaching the insert.
+    const companyIds = [...new Set(rows.map((r) => r.company_entity_id))];
+    for (const id of companyIds) {
+      if (user.companyIds !== null && !user.companyIds.includes(id)) {
+        throw new AuthError(403, `Company ${id} is outside your scope`);
       }
     }
-
-    const created = await db
-      .insert(players)
-      .values(
-        rows.map((r) => ({
-          ...r,
-          telegram_username: !r.telegram_username
-            ? null
-            : r.telegram_username.startsWith("@")
-            ? r.telegram_username
-            : `@${r.telegram_username}`,
-        })),
-      )
-      .returning();
-
-    await db.insert(transactions).values(
-      created.map((p) => ({
-        player_id: p.player_id,
-        entity_id: p.company_entity_id,
-        type: "player_import" as const,
-        amount: 0,
-        user_id: user.user_id,
-        details: { username: p.username, company_entity_id: p.company_entity_id },
-      })),
+    const found = await db
+      .select({ id: entities.entity_id, type: entities.entity_type })
+      .from(entities)
+      .where(inArray(entities.entity_id, companyIds));
+    const companies = new Set(
+      found.filter((e) => e.type === "company").map((e) => e.id),
     );
+    const notCompany = companyIds.find((id) => !companies.has(id));
+    if (notCompany !== undefined) {
+      return jsonError(`Entity ${notCompany} is not a company`);
+    }
+
+    const values = rows.map((r) => ({
+      ...r,
+      telegram_username: !r.telegram_username
+        ? null
+        : r.telegram_username.startsWith("@")
+          ? r.telegram_username
+          : `@${r.telegram_username}`,
+    }));
+
+    // One statement per chunk rather than one giant multi-row INSERT: Postgres
+    // caps a statement at 65,535 bind parameters, and a wide table reaches that
+    // sooner than the row count suggests. All in one transaction, so a big
+    // import can't half-land.
+    const created = await db.transaction(async (txn) => {
+      const inserted: (typeof players.$inferSelect)[] = [];
+      for (let i = 0; i < values.length; i += INSERT_CHUNK) {
+        const batch = await txn
+          .insert(players)
+          .values(values.slice(i, i + INSERT_CHUNK))
+          .returning();
+        inserted.push(...batch);
+      }
+      for (let i = 0; i < inserted.length; i += INSERT_CHUNK) {
+        await txn.insert(transactions).values(
+          inserted.slice(i, i + INSERT_CHUNK).map((p) => ({
+            player_id: p.player_id,
+            entity_id: p.company_entity_id,
+            type: "player_import" as const,
+            amount: 0,
+            user_id: user.user_id,
+            details: {
+              username: p.username,
+              company_entity_id: p.company_entity_id,
+            },
+          })),
+        );
+      }
+      return inserted;
+    });
 
     return Response.json({ players: created }, { status: 201 });
   } catch (e) {
