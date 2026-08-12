@@ -156,8 +156,10 @@ export default function PlayersPage() {
                           <PlayerNameLink playerId={p.player_id}>
                             {p.full_name}
                           </PlayerNameLink>
+                          {/* The member code is what CS quotes; the internal
+                              player id means nothing to them. */}
                           <div className="text-[10px] text-muted-foreground">
-                            @{p.username} · P-{p.player_id}
+                            {p.username}
                           </div>
                         </div>
                       </div>
