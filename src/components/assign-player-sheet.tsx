@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { CreatePlayerModal } from "@/components/create-player-modal";
 import { useStore } from "@/lib/store";
+import { extractSenderName } from "@/lib/bank-remark";
 import { formatRM } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -177,6 +178,11 @@ export function AssignPlayerSheet({
             {single ? (
               <>
                 {formatRM(single.deposit_amount)} · {single.bank_name}
+                {extractSenderName(single.bank_description) && (
+                  <span className="mt-0.5 block truncate font-medium text-foreground">
+                    Sender: {extractSenderName(single.bank_description)}
+                  </span>
+                )}
                 {single.bank_description && (
                   <span className="mt-0.5 block truncate italic">
                     {single.bank_description}

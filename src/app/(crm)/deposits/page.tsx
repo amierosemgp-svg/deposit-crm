@@ -45,6 +45,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Deposit } from "@/lib/types";
+import { extractSenderName } from "@/lib/bank-remark";
 
 const STATUS_FILTERS: { value: string; tab: string }[] = [
   { value: "pending", tab: "Pending" },
@@ -134,6 +135,7 @@ export default function DepositsPage() {
           d.transaction_ref,
           d.player_username,
           d.bank_description,
+          extractSenderName(d.bank_description),
           d.bank_account_holder,
           d.bank_account_number,
           d.bank_name,
@@ -198,11 +200,13 @@ export default function DepositsPage() {
   /** What the confirm dialog restates back before the action is taken. */
   function depositSummary(d: Deposit): SummaryRow[] {
     const player = d.player_id != null ? playerById(d.player_id) : undefined;
+    const sender = extractSenderName(d.bank_description);
     return [
       { label: "Player", value: player?.full_name ?? d.player_username ?? "—" },
       { label: "Member code", value: player?.username ?? "—" },
       { label: "Reference", value: d.transaction_ref },
       { label: "Bank", value: `${d.bank_name}${d.bank_account_number ? ` · ${d.bank_account_number}` : ""}` },
+      ...(sender ? [{ label: "Sender", value: sender }] : []),
       { label: "Game", value: d.selected_game ?? "—" },
       {
         label: "Deposit + bonus",
@@ -366,6 +370,7 @@ export default function DepositsPage() {
       "Transaction Ref",
       "Player",
       "Bank Description",
+      "Sender",
       "Deposit Amount",
       "Bank",
       "Account Holder",
@@ -383,6 +388,7 @@ export default function DepositsPage() {
       d.transaction_ref,
       d.player_username ?? "",
       d.bank_description ?? "",
+      extractSenderName(d.bank_description) ?? "",
       d.deposit_amount.toFixed(2),
       d.bank_name,
       d.bank_account_holder ?? "",
@@ -730,9 +736,19 @@ export default function DepositsPage() {
                               // this is the only clue to who sent an unmatched
                               // deposit, and the tail is often the useful part.
                               // The max-width keeps the column from stretching.
-                              <span className="block max-w-[240px] text-[12px] italic leading-snug break-words text-muted-foreground">
-                                {d.bank_description}
-                              </span>
+                              <>
+                                {extractSenderName(d.bank_description) && (
+                                  <span
+                                    className="block max-w-[240px] truncate text-[12px] font-medium"
+                                    title="Sender on the bank statement — the payment channel, not necessarily the player"
+                                  >
+                                    {extractSenderName(d.bank_description)}
+                                  </span>
+                                )}
+                                <span className="block max-w-[240px] text-[12px] italic leading-snug break-words text-muted-foreground">
+                                  {d.bank_description}
+                                </span>
+                              </>
                             ) : (
                               <span className="block text-[12px] italic text-muted-foreground">
                                 Unmatched deposit
