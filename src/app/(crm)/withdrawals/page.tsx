@@ -586,7 +586,7 @@ export default function WithdrawalsPage() {
                         {player?.username ?? `P-${w.player_id}`}
                       </PlayerNameLink>
                       <div className="text-[10px] text-muted-foreground">
-                        {player?.telegram_username}
+                        {player?.telegram_username ?? "—"}
                       </div>
                     </td>
                     <td className="px-3 py-2 text-right font-semibold whitespace-nowrap">

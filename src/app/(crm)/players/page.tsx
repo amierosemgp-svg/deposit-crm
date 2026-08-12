@@ -39,7 +39,7 @@ export default function PlayersPage() {
           !q ||
           p.full_name.toLowerCase().includes(q.toLowerCase()) ||
           p.username.toLowerCase().includes(q.toLowerCase()) ||
-          p.telegram_username.toLowerCase().includes(q.toLowerCase());
+          (p.telegram_username ?? "").toLowerCase().includes(q.toLowerCase());
         return matchQ && companyInScope(p.company_entity_id);
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -168,7 +168,7 @@ export default function PlayersPage() {
                     <td className="px-3 py-2">
                       <div className="inline-flex items-center gap-1 text-[11px]">
                         <Send className="h-3 w-3 text-muted-foreground" />
-                        {p.telegram_username}
+                        {p.telegram_username ?? "—"}
                       </div>
                     </td>
                     <td className="px-3 py-2 text-right font-medium whitespace-nowrap">

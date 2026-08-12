@@ -182,7 +182,7 @@ export const players = pgTable("players", {
   username: varchar("username", { length: 60 }).notNull().unique(),
   full_name: varchar("full_name", { length: 120 }).notNull(),
   contact_number: varchar("contact_number", { length: 40 }),
-  telegram_username: varchar("telegram_username", { length: 80 }).notNull(),
+  telegram_username: varchar("telegram_username", { length: 80 }),
   wechat_id: varchar("wechat_id", { length: 80 }),
   company_entity_id: integer("company_entity_id")
     .notNull()

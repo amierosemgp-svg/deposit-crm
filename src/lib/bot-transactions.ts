@@ -93,7 +93,7 @@ export async function resolveReceivingAccount(input: BotTransactionInput) {
 /** Minimal player fields the agent needs to perform the top-up in the provider. */
 export type PlayerGameInfo = {
   player_id: number;
-  telegram_username: string;
+  telegram_username: string | null;
   game_accounts: Array<{ game_name: string; game_username: string }> | null;
 };
 

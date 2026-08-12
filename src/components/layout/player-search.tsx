@@ -43,7 +43,7 @@ export function PlayerSearch() {
           companyInScope(p.company_entity_id) &&
           (p.full_name.toLowerCase().includes(q) ||
             p.username.toLowerCase().includes(q) ||
-            p.telegram_username.toLowerCase().includes(q) ||
+            (p.telegram_username ?? "").toLowerCase().includes(q) ||
             (p.contact_number ?? "").toLowerCase().includes(q)),
       )
       .slice(0, MAX_RESULTS);

@@ -163,7 +163,7 @@ export function PlayerPickerSheet({
                           )}
                         </span>
                         <span className="block truncate text-[11px] text-muted-foreground">
-                          @{p.username} · {p.telegram_username}
+                          @{p.username}{p.telegram_username ? ` · ${p.telegram_username}` : ""}
                           {p.bank_accounts?.[0] &&
                             ` · ${p.bank_accounts[0].bank_name} ${p.bank_accounts[0].account_number}`}
                         </span>

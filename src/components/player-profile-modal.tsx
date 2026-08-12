@@ -272,7 +272,7 @@ export function PlayerProfileModal({ playerId, open, onOpenChange }: Props) {
                                 <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
                                   <span className="inline-flex items-center gap-1.5">
                                     <Send className="h-3 w-3" />
-                                    {player.telegram_username}
+                                    {player.telegram_username ?? "—"}
                                   </span>
                                   {player.wechat_id && (
                                     <span className="inline-flex items-center gap-1.5">

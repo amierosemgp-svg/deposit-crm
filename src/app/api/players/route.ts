@@ -9,7 +9,7 @@ const playerSchema = z.object({
   username: z.string().min(2),
   full_name: z.string().min(1),
   contact_number: z.string().optional(),
-  telegram_username: z.string().min(2),
+  telegram_username: z.string().min(2).optional(),
   wechat_id: z.string().optional(),
   company_entity_id: z.number().int().positive(),
   bank_accounts: z
@@ -63,7 +63,9 @@ export async function POST(request: Request) {
       .values(
         rows.map((r) => ({
           ...r,
-          telegram_username: r.telegram_username.startsWith("@")
+          telegram_username: !r.telegram_username
+            ? null
+            : r.telegram_username.startsWith("@")
             ? r.telegram_username
             : `@${r.telegram_username}`,
         })),

@@ -200,7 +200,7 @@ type Store = {
   createPlayer: (input: {
     username: string;
     full_name: string;
-    telegram_username: string;
+    telegram_username?: string;
     company_entity_id: number;
     contact_number?: string;
     wechat_id?: string;

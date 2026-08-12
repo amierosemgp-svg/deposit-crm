@@ -70,7 +70,7 @@ export type Player = {
   username: string;
   full_name: string;
   contact_number?: string | null;
-  telegram_username: string;
+  telegram_username: string | null;
   wechat_id?: string | null;
   company_entity_id: number;
   bank_accounts?: PlayerBankAccount[] | null;

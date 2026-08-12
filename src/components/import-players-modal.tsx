@@ -36,7 +36,7 @@ type Props = {
 type RowData = {
   full_name: string;
   username: string;
-  telegram_username: string;
+  telegram_username?: string;
   contact_number?: string;
   wechat_id?: string;
   bank_accounts?: PlayerBankAccount[];
@@ -49,7 +49,40 @@ type ParsedRow = {
   error?: string;
 };
 
-const REQUIRED_COLS = ["full_name", "username", "telegram_username"] as const;
+const REQUIRED_COLS = ["full_name", "username"] as const;
+
+/**
+ * A real CSV split: quoted fields, embedded commas, and "" for a literal quote.
+ *
+ * The naive `line.split(",")` this replaces shifted every column after the
+ * first comma inside a name or phone number, so a handful of rows in any real
+ * export imported silently wrong — an account number landing in the holder
+ * field, and nothing to show it had happened.
+ */
+function splitCsvLine(line: string): string[] {
+  const cells: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') {
+          cur += '"';
+          i++;
+        } else inQuotes = false;
+      } else cur += ch;
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ",") {
+      cells.push(cur);
+      cur = "";
+    } else cur += ch;
+  }
+  cells.push(cur);
+  // Excel writes tabs into text-forced columns (phone, account number).
+  return cells.map((c) => c.replace(/\t/g, "").trim());
+}
 
 const SAMPLE_CSV = `full_name,username,telegram_username,contact_number,wechat_id,bank_name,bank_account_number,bank_account_holder
 Tan Hong Ming,thm_tan,@thm_tan,+60 12-555 0011,thmtan_wx,Maybank,5128 4471 9023,Tan Hong Ming
@@ -65,10 +98,10 @@ function parseCSV(text: string, banks: string[]): ParsedRow[] {
     .filter(Boolean);
   if (lines.length === 0) return [];
 
-  const headers = lines[0].split(",").map((h) => h.trim().toLowerCase());
+  const headers = splitCsvLine(lines[0]).map((h) => h.toLowerCase());
 
   return lines.slice(1).map((line, i) => {
-    const cells = line.split(",").map((c) => c.trim());
+    const cells = splitCsvLine(line);
     const raw: Record<string, string> = {};
     headers.forEach((h, idx) => {
       raw[h] = cells[idx] ?? "";
@@ -110,9 +143,11 @@ function parseCSV(text: string, banks: string[]): ParsedRow[] {
     row.data = {
       full_name: raw.full_name,
       username: raw.username,
-      telegram_username: raw.telegram_username.startsWith("@")
-        ? raw.telegram_username
-        : `@${raw.telegram_username}`,
+      telegram_username: raw.telegram_username
+        ? raw.telegram_username.startsWith("@")
+          ? raw.telegram_username
+          : `@${raw.telegram_username}`
+        : undefined,
       contact_number: raw.contact_number || undefined,
       wechat_id: raw.wechat_id || undefined,
       bank_accounts: bankAccounts,
@@ -218,7 +253,7 @@ export function ImportPlayersModal({ open, onOpenChange }: Props) {
               Import players
             </h2>
             <p className="text-[12px] text-muted-foreground leading-tight mt-0.5">
-              Required: full_name, username, telegram_username · Optional:
+              Required: full_name, username · Optional: telegram_username,
               contact_number, wechat_id, bank_name, bank_account_number,
               bank_account_holder · For multiple banks or game accounts, use
               the Create Player form
@@ -392,7 +427,7 @@ export function ImportPlayersModal({ open, onOpenChange }: Props) {
                                 @{row.data!.username}
                               </td>
                               <td className="px-2 py-1.5 text-muted-foreground">
-                                {row.data!.telegram_username}
+                                {row.data!.telegram_username ?? "—"}
                               </td>
                               <td className="px-2 py-1.5 text-muted-foreground">
                                 {row.data!.bank_accounts?.[0]?.bank_name ?? "—"}
