@@ -22,4 +22,9 @@ SET type      = 'recommend_bonus',
 FROM game_transfers gt
 WHERE t.type = 'game_transfer'
   AND t.reference_id = gt.transfer_id
-  AND gt.from_game = gt.to_game;
+  AND gt.from_game = gt.to_game
+  -- Only the row that recorded credit actually landing. The same transfer also
+  -- accumulates 'solving' and 'failed' rows from the stall sweep; those record
+  -- retry attempts, not payment, and retyping them would make one unpaid bonus
+  -- read as three payouts in the history.
+  AND t.details ->> 'action' = 'completed';
