@@ -21,6 +21,10 @@ import { PlayerNameLink } from "@/components/player-name-link";
 import { ApprovalFlowModal } from "@/components/approval-flow-modal";
 import { AssignPlayerSheet } from "@/components/assign-player-sheet";
 import { ManualDepositDialog } from "@/components/manual-deposit-dialog";
+import {
+  ConfirmActionDialog,
+  type SummaryRow,
+} from "@/components/confirm-action-dialog";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
 import {
@@ -53,24 +57,13 @@ const STATUS_FILTERS: { value: string; tab: string }[] = [
   { value: "all", tab: "All" },
 ];
 
-/** Reject control for manual (skip-agent) deposits — confirms, then fails the row. */
-function RejectDepositButton({
-  depositId,
-  onReject,
-}: {
-  depositId: number;
-  onReject: (id: number) => Promise<{ ok: boolean; error?: string }>;
-}) {
+/** Reject control for manual (skip-agent) deposits — opens the confirm dialog. */
+function RejectDepositButton({ onClick }: { onClick: () => void }) {
   return (
     <Button
       size="sm"
       variant="outline"
-      onClick={async () => {
-        if (!confirm("Reject this deposit? It will be marked failed.")) return;
-        const r = await onReject(depositId);
-        if (!r.ok) toast.error(r.error ?? "Reject failed");
-        else toast.success("Deposit rejected");
-      }}
+      onClick={onClick}
       className="cursor-pointer gap-1 border-red-300 text-red-700 dark:text-red-300 hover:bg-red-50 hover:text-red-800"
     >
       <X className="h-3.5 w-3.5" />
@@ -106,6 +99,10 @@ export default function DepositsPage() {
   const [statusFilter, setStatusFilter] = useState<string>("pending");
   const [searchQuery, setSearchQuery] = useState("");
   const [approvingId, setApprovingId] = useState<number | null>(null);
+  // Deposit awaiting a confirmed approve (skip-agent rows) / reject / bulk approve.
+  const [confirmApproveId, setConfirmApproveId] = useState<number | null>(null);
+  const [confirmRejectId, setConfirmRejectId] = useState<number | null>(null);
+  const [confirmBulk, setConfirmBulk] = useState(false);
   const [receiptUrl, setReceiptUrl] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -195,6 +192,46 @@ export default function DepositsPage() {
     [filtered, selected, me?.user_id],
   );
 
+  const depositById = (id: number | null) =>
+    id === null ? undefined : deposits.find((d) => d.deposit_id === id);
+
+  /** What the confirm dialog restates back before the action is taken. */
+  function depositSummary(d: Deposit): SummaryRow[] {
+    const player = d.player_id != null ? playerById(d.player_id) : undefined;
+    return [
+      { label: "Player", value: player?.full_name ?? d.player_username ?? "—" },
+      { label: "Member code", value: player?.username ?? "—" },
+      { label: "Reference", value: d.transaction_ref },
+      { label: "Bank", value: `${d.bank_name}${d.bank_account_number ? ` · ${d.bank_account_number}` : ""}` },
+      { label: "Game", value: d.selected_game ?? "—" },
+      {
+        label: "Deposit + bonus",
+        value: `${formatRM(d.deposit_amount)} + ${formatRM(d.bonus_amount)}`,
+      },
+      { label: "Total to credit", value: formatRM(d.total_amount), emphasis: true },
+    ];
+  }
+
+  async function runApprove(depositId: number) {
+    const d = depositById(depositId);
+    setConfirmApproveId(null);
+    if (!d?.skip_bot) {
+      // ApprovalFlowModal performs the approve itself and animates the handoff.
+      setApprovingId(depositId);
+      return;
+    }
+    const r = await approveDeposit(depositId);
+    if (!r.ok) toast.error(r.error ?? "Approve failed");
+    else toast.success("Deposit approved — agent topping up");
+  }
+
+  async function runReject(depositId: number) {
+    const r = await rejectDeposit(depositId);
+    if (!r.ok) toast.error(r.error ?? "Reject failed");
+    else toast.success("Deposit rejected");
+    setConfirmRejectId(null);
+  }
+
   function toggleRow(depositId: number) {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -283,6 +320,7 @@ export default function DepositsPage() {
   }
 
   async function handleBulkApprove() {
+    setConfirmBulk(false);
     if (approvable.length === 0 || bulkApproving) return;
     setBulkApproving(true);
     let ok = 0;
@@ -484,7 +522,7 @@ export default function DepositsPage() {
                 />
                 <Button
                   size="sm"
-                  onClick={() => void handleBulkApprove()}
+                  onClick={() => setConfirmBulk(true)}
                   disabled={approvable.length === 0 || bulkApproving}
                   className="cursor-pointer bg-emerald-600 text-white hover:bg-emerald-700 disabled:bg-emerald-600/30 disabled:text-white/70"
                 >
@@ -842,10 +880,7 @@ export default function DepositsPage() {
                           <div className="flex items-center justify-end gap-1.5">
                             <Button
                               size="sm"
-                              onClick={async () => {
-                                const r = await approveDeposit(d.deposit_id);
-                                if (!r.ok) toast.error(r.error ?? "Approve failed");
-                              }}
+                              onClick={() => setConfirmApproveId(d.deposit_id)}
                               disabled={!canApprove}
                               title={approveHint}
                               className="cursor-pointer bg-emerald-600 text-white hover:bg-emerald-700 disabled:bg-emerald-600/30 disabled:text-white/70"
@@ -853,7 +888,7 @@ export default function DepositsPage() {
                               <Zap className="h-3.5 w-3.5" />
                               Approve
                             </Button>
-                            <RejectDepositButton depositId={d.deposit_id} onReject={rejectDeposit} />
+                            <RejectDepositButton onClick={() => setConfirmRejectId(d.deposit_id)} />
                           </div>
                         ) : !isViewer && d.skip_bot && d.status === "processing" ? (
                           <div className="flex items-center justify-end gap-1.5">
@@ -869,12 +904,12 @@ export default function DepositsPage() {
                               <CheckCircle2 className="h-3.5 w-3.5" />
                               Complete
                             </Button>
-                            <RejectDepositButton depositId={d.deposit_id} onReject={rejectDeposit} />
+                            <RejectDepositButton onClick={() => setConfirmRejectId(d.deposit_id)} />
                           </div>
                         ) : actionable && !isViewer ? (
                           <Button
                             size="sm"
-                            onClick={() => setApprovingId(d.deposit_id)}
+                            onClick={() => setConfirmApproveId(d.deposit_id)}
                             disabled={!canApprove}
                             title={approveHint}
                             className="cursor-pointer bg-emerald-600 text-white hover:bg-emerald-700 disabled:bg-emerald-600/30 disabled:text-white/70"
@@ -971,6 +1006,69 @@ export default function DepositsPage() {
         depositId={approvingId}
         open={approvingId !== null}
         onOpenChange={(o) => !o && setApprovingId(null)}
+      />
+
+      {(() => {
+        const d = depositById(confirmApproveId);
+        return (
+          <ConfirmActionDialog
+            open={d !== undefined}
+            onOpenChange={(o) => !o && setConfirmApproveId(null)}
+            title="Approve this deposit?"
+            description="The agent tops up the player's game account. Credit is only booked once it confirms."
+            summary={d ? depositSummary(d) : []}
+            confirmLabel="Approve"
+            onConfirm={() => runApprove(d!.deposit_id)}
+          />
+        );
+      })()}
+
+      {(() => {
+        const d = depositById(confirmRejectId);
+        return (
+          <ConfirmActionDialog
+            open={d !== undefined}
+            onOpenChange={(o) => !o && setConfirmRejectId(null)}
+            title="Reject this deposit?"
+            description="It is marked failed. No credit is given and nothing is reversed."
+            summary={d ? depositSummary(d) : []}
+            confirmLabel="Reject"
+            tone="danger"
+            onConfirm={() => runReject(d!.deposit_id)}
+          />
+        );
+      })()}
+
+      <ConfirmActionDialog
+        open={confirmBulk}
+        onOpenChange={setConfirmBulk}
+        title={`Approve ${approvable.length} deposit${approvable.length === 1 ? "" : "s"}?`}
+        description="Each is dispatched to the agent for top-up, one after another."
+        summary={[
+          { label: "Deposits", value: String(approvable.length) },
+          {
+            label: "Players",
+            value: String(
+              new Set(
+                approvable
+                  .map((id) => depositById(id)?.player_id)
+                  .filter((v) => v != null),
+              ).size,
+            ),
+          },
+          {
+            label: "Total to credit",
+            value: formatRM(
+              approvable.reduce(
+                (sum, id) => sum + (depositById(id)?.total_amount ?? 0),
+                0,
+              ),
+            ),
+            emphasis: true,
+          },
+        ]}
+        confirmLabel={`Approve ${approvable.length}`}
+        onConfirm={handleBulkApprove}
       />
 
       <AssignPlayerSheet

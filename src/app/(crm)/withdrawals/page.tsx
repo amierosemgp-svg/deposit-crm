@@ -43,6 +43,10 @@ import {
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { PlayerPickerSheet } from "@/components/player-picker-sheet";
+import {
+  ConfirmActionDialog,
+  type SummaryRow,
+} from "@/components/confirm-action-dialog";
 
 const STATUS_FILTERS: { value: string; tab: string }[] = [
   { value: "requested", tab: "Requested" },
@@ -78,6 +82,7 @@ export default function WithdrawalsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [bulkAssigning, setBulkAssigning] = useState(false);
   const [bulkPulling, setBulkPulling] = useState(false);
+  const [confirmRejectId, setConfirmRejectId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
   // --- New Withdrawal dialog state ---
@@ -279,6 +284,30 @@ export default function WithdrawalsPage() {
       toast.success(`Credits pulled for ${ok} withdrawal${ok === 1 ? "" : "s"}`);
     if (failed > 0)
       toast.error(`${failed} withdrawal${failed === 1 ? "" : "s"} failed to pull`);
+  }
+
+  /** What the confirm dialog restates back before rejecting. */
+  function withdrawalSummary(w: (typeof withdrawals)[number]): SummaryRow[] {
+    const player = playerById(w.player_id);
+    return [
+      { label: "Player", value: player?.full_name ?? `P-${w.player_id}` },
+      { label: "Member code", value: player?.username ?? "—" },
+      { label: "Game", value: w.game_name },
+      {
+        label: "Pay to",
+        value: w.bank_name
+          ? `${w.bank_name}${w.bank_account_number ? ` · ${w.bank_account_number}` : ""}`
+          : "—",
+      },
+      { label: "Requested", value: formatRM(w.requested_amount), emphasis: true },
+    ];
+  }
+
+  async function runReject(withdrawalId: number) {
+    const r = await rejectWithdrawal(withdrawalId);
+    if (!r.ok) toast.error(r.error ?? "Reject failed");
+    else toast.success("Withdrawal rejected");
+    setConfirmRejectId(null);
   }
 
   function resetNewForm() {
@@ -641,12 +670,7 @@ export default function WithdrawalsPage() {
                           <Button
                             size="sm"
                             variant="outline"
-                            onClick={async () => {
-                              if (!confirm("Reject this withdrawal request? It will be marked failed.")) return;
-                              const r = await rejectWithdrawal(w.withdrawal_id);
-                              if (!r.ok) toast.error(r.error ?? "Reject failed");
-                              else toast.success("Withdrawal rejected");
-                            }}
+                            onClick={() => setConfirmRejectId(w.withdrawal_id)}
                             className="cursor-pointer gap-1 border-red-300 text-red-700 dark:text-red-300 hover:bg-red-50 hover:text-red-800"
                           >
                             <X className="h-3.5 w-3.5" />
@@ -867,6 +891,22 @@ export default function WithdrawalsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {(() => {
+        const w = withdrawals.find((x) => x.withdrawal_id === confirmRejectId);
+        return (
+          <ConfirmActionDialog
+            open={w !== undefined}
+            onOpenChange={(o) => !o && setConfirmRejectId(null)}
+            title="Reject this withdrawal?"
+            description="It is marked failed. No credit is pulled and the player is not paid."
+            summary={w ? withdrawalSummary(w) : []}
+            confirmLabel="Reject"
+            tone="danger"
+            onConfirm={() => runReject(w!.withdrawal_id)}
+          />
+        );
+      })()}
 
       <PlayerPickerSheet
         open={playerPickerOpen}

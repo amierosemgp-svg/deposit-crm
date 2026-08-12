@@ -27,6 +27,10 @@ import { Switch } from "@/components/ui/switch";
 import { BankAccountFormModal } from "@/components/bank-account-form-modal";
 import { ListLoading } from "@/components/list-loading";
 import { BankTransferModal } from "@/components/bank-transfer-modal";
+import {
+  ConfirmActionDialog,
+  type SummaryRow,
+} from "@/components/confirm-action-dialog";
 import { cn } from "@/lib/utils";
 
 function maskAccountNumber(num: string) {
@@ -90,6 +94,9 @@ export default function BankAccountsPage() {
   const [transferOpen, setTransferOpen] = useState(false);
   const [transferDefaultFrom, setTransferDefaultFrom] = useState<number | null>(null);
   const [actingTransferId, setActingTransferId] = useState<number | null>(null);
+  const [confirmTransferAction, setConfirmTransferAction] = useState<
+    { id: number; kind: "confirm" | "reject" } | null
+  >(null);
 
   // Live tick for the auto-confirm countdowns
   const [now, setNow] = useState(() => Date.now());
@@ -208,6 +215,7 @@ export default function BankAccountsPage() {
     setTransferOpen(true);
   }
   async function handleConfirm(t: BankTransfer) {
+    setConfirmTransferAction(null);
     setActingTransferId(t.transfer_id);
     const result = await confirmTransfer(t.transfer_id);
     setActingTransferId(null);
@@ -218,8 +226,7 @@ export default function BankAccountsPage() {
     toast.success(`Transfer of ${formatRM(t.amount)} confirmed`);
   }
   async function handleReject(t: BankTransfer) {
-    if (!confirm(`Reject this transfer of ${formatRM(t.amount)}? The sender will be refunded.`))
-      return;
+    setConfirmTransferAction(null);
     setActingTransferId(t.transfer_id);
     const result = await rejectTransfer(t.transfer_id);
     setActingTransferId(null);
@@ -230,11 +237,31 @@ export default function BankAccountsPage() {
     toast.success("Transfer rejected — sender refunded");
   }
 
+  /** What the confirm dialog restates back before confirming/rejecting. */
+  function transferSummary(t: BankTransfer): SummaryRow[] {
+    const from = accountById.get(t.from_account_id);
+    const to = accountById.get(t.to_account_id);
+    const label = (a?: BankAccount) =>
+      a ? `${a.bank_name} · ${a.account_number}` : "—";
+    return [
+      { label: "From", value: label(from) },
+      { label: "To", value: label(to) },
+      { label: "Requested", value: formatDateTime(t.created_at) },
+      { label: "Amount", value: formatRM(t.amount), emphasis: true },
+    ];
+  }
+
   function transferRoute(t: BankTransfer) {
     const from = accountById.get(t.from_account_id);
     const to = accountById.get(t.to_account_id);
     return { from, to };
   }
+
+
+  const pendingAction = confirmTransferAction
+    ? transfers.find((t) => t.transfer_id === confirmTransferAction.id)
+    : undefined;
+  const isRejecting = confirmTransferAction?.kind === "reject";
 
   return (
     <div className="space-y-5">
@@ -332,7 +359,7 @@ export default function BankAccountsPage() {
                       <>
                         <Button
                           size="sm"
-                          onClick={() => handleConfirm(t)}
+                          onClick={() => setConfirmTransferAction({ id: t.transfer_id, kind: "confirm" })}
                           disabled={actingTransferId === t.transfer_id}
                           className="cursor-pointer h-7"
                         >
@@ -342,7 +369,7 @@ export default function BankAccountsPage() {
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => handleReject(t)}
+                          onClick={() => setConfirmTransferAction({ id: t.transfer_id, kind: "reject" })}
                           disabled={actingTransferId === t.transfer_id}
                           className="cursor-pointer h-7 text-rose-600 dark:text-rose-400 hover:text-rose-700"
                         >
@@ -719,6 +746,25 @@ export default function BankAccountsPage() {
         open={transferOpen}
         onOpenChange={setTransferOpen}
         defaultFromAccountId={transferDefaultFrom}
+      />
+
+      <ConfirmActionDialog
+        open={pendingAction !== undefined}
+        onOpenChange={(o) => !o && setConfirmTransferAction(null)}
+        title={isRejecting ? "Reject this transfer?" : "Confirm this transfer?"}
+        description={
+          isRejecting
+            ? "The amount is returned to the sending account and the transfer is marked rejected."
+            : "The amount is credited to the receiving account. This is what releases the funds."
+        }
+        summary={pendingAction ? transferSummary(pendingAction) : []}
+        confirmLabel={isRejecting ? "Reject" : "Confirm"}
+        tone={isRejecting ? "danger" : "default"}
+        onConfirm={() =>
+          isRejecting
+            ? handleReject(pendingAction!)
+            : handleConfirm(pendingAction!)
+        }
       />
     </div>
   );

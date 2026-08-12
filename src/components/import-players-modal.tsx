@@ -24,7 +24,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useStore } from "@/lib/store";
-import type { PlayerBankAccount } from "@/lib/types";
+import type { PlayerBankAccount, PlayerGameAccount } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -40,6 +40,7 @@ type RowData = {
   contact_number?: string;
   wechat_id?: string;
   bank_accounts?: PlayerBankAccount[];
+  game_accounts?: PlayerGameAccount[];
 };
 
 type ParsedRow = {
@@ -90,14 +91,14 @@ function splitCsvLine(line: string): string[] {
   return cells.map((c) => c.replace(/\t/g, "").trim());
 }
 
-const SAMPLE_CSV = `full_name,member_code,telegram_username,contact_number,wechat_id,bank_name,bank_account_number,bank_account_holder
-Tan Hong Ming,thm_tan,@thm_tan,+60 12-555 0011,thmtan_wx,Maybank,5128 4471 9023,Tan Hong Ming
-Nurul Aisyah,nurul_a,@nurul_a,+60 19-700 4422,,CIMB,7042 1188 5530,Nurul Aisyah
-Vikram Pillai,vik_pillai,@vik_pillai,,vikpillai88,,,
-Chloe Ng,chloe_ng,@chloeng,+60 16-880 9912,chloeng_wx,Public Bank,4-9112-7733-08,Chloe Ng
-Mohd Hafiz,hafiz_m,@hafiz_m,+60 13-220 7766,,Hong Leong,381 5577 0023,Mohd Hafiz`;
+const SAMPLE_CSV = `full_name,member_code,telegram_username,contact_number,wechat_id,bank_name,bank_account_number,bank_account_holder,game_accounts
+Tan Hong Ming,thm_tan,@thm_tan,+60 12-555 0011,thmtan_wx,Maybank,5128 4471 9023,Tan Hong Ming,Mega888:0905310837
+Nurul Aisyah,nurul_a,@nurul_a,+60 19-700 4422,,CIMB,7042 1188 5530,Nurul Aisyah,Mega888:0901141114|Pussy888:8812340
+Vikram Pillai,vik_pillai,@vik_pillai,,vikpillai88,,,,
+Chloe Ng,chloe_ng,@chloeng,+60 16-880 9912,chloeng_wx,Public Bank,4-9112-7733-08,Chloe Ng,XE88:5540221
+Mohd Hafiz,hafiz_m,@hafiz_m,+60 13-220 7766,,Hong Leong,381 5577 0023,Mohd Hafiz,`;
 
-function parseCSV(text: string, banks: string[]): ParsedRow[] {
+function parseCSV(text: string, banks: string[], games: string[]): ParsedRow[] {
   const lines = text
     .split(/\r?\n/)
     .map((l) => l.trim())
@@ -151,6 +152,35 @@ function parseCSV(text: string, banks: string[]): ParsedRow[] {
           ]
         : undefined;
 
+    // One cell carries every game the player holds: "Mega888:0905…|XE88:1234".
+    // A column per game would need the header to change every time a provider
+    // is added; 453 of these players hold more than one.
+    let gameAccounts: PlayerGameAccount[] | undefined;
+    if (raw.game_accounts) {
+      gameAccounts = [];
+      for (const pair of raw.game_accounts.split("|")) {
+        if (!pair.trim()) continue;
+        const idx = pair.indexOf(":");
+        if (idx < 1) {
+          row.error = `Bad game_accounts entry "${pair.trim()}" — expected Game:id`;
+          return row;
+        }
+        const gameRaw = pair.slice(0, idx).trim();
+        const id = pair.slice(idx + 1).trim();
+        const game = games.find((g) => g.toLowerCase() === gameRaw.toLowerCase());
+        if (!game) {
+          row.error = `Unknown game "${gameRaw}"`;
+          return row;
+        }
+        if (!id) {
+          row.error = `Missing id for game "${gameRaw}"`;
+          return row;
+        }
+        gameAccounts.push({ game_name: game, game_username: id });
+      }
+      if (gameAccounts.length === 0) gameAccounts = undefined;
+    }
+
     row.data = {
       full_name: raw.full_name,
       username: memberCode,
@@ -162,6 +192,7 @@ function parseCSV(text: string, banks: string[]): ParsedRow[] {
       contact_number: raw.contact_number || undefined,
       wechat_id: raw.wechat_id || undefined,
       bank_accounts: bankAccounts,
+      game_accounts: gameAccounts,
     };
     return row;
   });
@@ -171,10 +202,12 @@ export function ImportPlayersModal({ open, onOpenChange }: Props) {
   const importPlayers = useStore((s) => s.importPlayers);
   const companiesFn = useStore((s) => s.companies);
   const banksFn = useStore((s) => s.banks);
+  const gamesFn = useStore((s) => s.games);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const companies = companiesFn();
   const banks = banksFn();
+  const games = gamesFn();
 
   const [companyId, setCompanyId] = useState("");
   const [csvText, setCsvText] = useState("");
@@ -183,7 +216,10 @@ export function ImportPlayersModal({ open, onOpenChange }: Props) {
   const [progress, setProgress] = useState(0);
   const [importedCount, setImportedCount] = useState(0);
 
-  const parsed = useMemo(() => parseCSV(csvText, banks), [csvText, banks]);
+  const parsed = useMemo(
+    () => parseCSV(csvText, banks, games),
+    [csvText, banks, games],
+  );
   const validRows = parsed.filter((r) => r.data);
   const errorRows = parsed.filter((r) => r.error);
   const targetCompany = companies.find(
@@ -266,8 +302,8 @@ export function ImportPlayersModal({ open, onOpenChange }: Props) {
             <p className="text-[12px] text-muted-foreground leading-tight mt-0.5">
               Required: full_name, member_code · Optional: telegram_username,
               contact_number, wechat_id, bank_name, bank_account_number,
-              bank_account_holder · For multiple banks or game accounts, use
-              the Create Player form
+              bank_account_holder, game_accounts (Mega888:12345|XE88:67890) ·
+              For multiple banks, use the Create Player form
             </p>
           </div>
         </div>
@@ -356,7 +392,7 @@ export function ImportPlayersModal({ open, onOpenChange }: Props) {
                 setCsvText(e.target.value);
                 if (fileName) setFileName(null);
               }}
-              placeholder="full_name,member_code,telegram_username,contact_number,wechat_id,bank_name,bank_account_number,bank_account_holder&#10;Lim Ah Kow,lim_ak,@lim_ak,+60 12-345 6789,,Maybank,5128 4471 9023,Lim Ah Kow"
+              placeholder="full_name,member_code,telegram_username,contact_number,wechat_id,bank_name,bank_account_number,bank_account_holder,game_accounts&#10;Lim Ah Kow,lim_ak,@lim_ak,+60 12-345 6789,,Maybank,5128 4471 9023,Lim Ah Kow,Mega888:0905310837"
               spellCheck={false}
               className="w-full h-36 rounded-md border border-input bg-background px-3 py-2 text-[12px] font-mono outline-none focus:border-ring focus:ring-2 focus:ring-ring/30 resize-none"
             />
