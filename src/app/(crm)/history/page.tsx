@@ -73,6 +73,21 @@ const TYPE_META: Record<AuditType, { label: string; className: string }> = {
   },
 };
 
+/**
+ * Never index TYPE_META directly on a row's type. The ledger can carry a type
+ * this build doesn't know about — a migration that adds an enum value lands
+ * before the deploy that teaches the UI about it — and an undefined lookup here
+ * takes the whole page down over one unrecognised row.
+ */
+function typeMeta(type: string): { label: string; className: string } {
+  return (
+    TYPE_META[type as AuditType] ?? {
+      label: type.replace(/_/g, " "),
+      className: "bg-zinc-500/10 text-zinc-700 dark:text-zinc-300",
+    }
+  );
+}
+
 const TYPE_ORDER: AuditType[] = [
   "deposit",
   "withdrawal",
@@ -256,7 +271,7 @@ export default function HistoryPage() {
       ];
       const rows = all.map((e) => [
         e.created_at.slice(0, 19).replace("T", " "),
-        TYPE_META[e.type].label,
+        typeMeta(e.type).label,
         e.player_full_name
           ? `${e.player_full_name} (@${e.player_username})`
           : "",
@@ -484,7 +499,7 @@ export default function HistoryPage() {
               </thead>
               <tbody>
                 {entries.map((e) => {
-                  const meta = TYPE_META[e.type];
+                  const meta = typeMeta(e.type);
                   const signed = e.type === "bo_adjustment";
                   return (
                     <tr
