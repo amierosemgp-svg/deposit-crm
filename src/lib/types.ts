@@ -320,7 +320,8 @@ export type AuditEntry = {
     | "credit_pull"
     | "bank_transfer"
     | "bo_adjustment"
-    | "player_import";
+    | "player_import"
+    | "recommend_bonus";
   amount: number;
   game_name?: string | null;
   reference_id?: number | null;

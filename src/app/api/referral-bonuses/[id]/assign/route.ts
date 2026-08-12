@@ -1,8 +1,7 @@
-import { eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import {
-  gameCredits,
   gameTransfers,
   players,
   referralBonuses,
@@ -10,6 +9,10 @@ import {
 } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
+import {
+  creditRecommendBonus,
+  InsufficientBoCreditError,
+} from "@/lib/referral";
 
 const bodySchema = z.object({
   game_name: z.string().min(1),
@@ -87,22 +90,23 @@ export async function POST(
       let gameTransferId: number | null = null;
 
       if (skip_bot) {
-        // CS moved it by hand — book the credit now.
-        await txn
-          .insert(gameCredits)
-          .values({
-            player_id: upline.player_id,
-            game_name,
-            current_balance: bonus.bonus_amount,
-            last_updated_at: nowIso,
-          })
-          .onConflictDoUpdate({
-            target: [gameCredits.player_id, gameCredits.game_name],
-            set: {
-              current_balance: sql`${gameCredits.current_balance} + ${bonus.bonus_amount}`,
-              last_updated_at: nowIso,
-            },
+        // CS moved it by hand — book the credit now, out of the company's BO
+        // pool. The credit CS handed over came from that pool in the real
+        // back-office, so the CRM has to spend it here too.
+        try {
+          await creditRecommendBonus(txn, {
+            playerId: upline.player_id,
+            companyEntityId: upline.company_entity_id,
+            gameName: game_name,
+            amount: bonus.bonus_amount,
+            nowIso,
           });
+        } catch (e) {
+          if (e instanceof InsufficientBoCreditError) {
+            throw new AuthError(422, e.message);
+          }
+          throw e;
+        }
       } else {
         // Queue it for the agent. Same lifecycle as a CS-requested transfer, so
         // the stall sweep and the Game Credit Transfer page cover it for free.
@@ -142,7 +146,7 @@ export async function POST(
       await txn.insert(transactions).values({
         player_id: upline.player_id,
         entity_id: upline.company_entity_id,
-        type: "game_topup",
+        type: "recommend_bonus",
         amount: bonus.bonus_amount,
         game_name,
         reference_id: bonus.bonus_id,

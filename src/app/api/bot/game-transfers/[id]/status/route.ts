@@ -4,6 +4,10 @@ import { db } from "@/db";
 import { gameCredits, gameTransfers, players, transactions } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
 import {
+  creditRecommendBonus,
+  InsufficientBoCreditError,
+} from "@/lib/referral";
+import {
   BotError,
   botErrorResponse,
   gameTransferJson,
@@ -72,6 +76,12 @@ export async function PATCH(
       }
 
       const nowIso = new Date().toISOString();
+      // from_game === to_game is not a move — it's a recommend bonus queued by
+      // /api/referral-bonuses/:id/assign, riding this queue because it is the
+      // only "go do something in the back-office" queue the agent polls.
+      // POST /api/game-transfers rejects from === to, so nothing else can
+      // produce this shape.
+      const creditIn = row.from_game === row.to_game;
 
       // Claiming: mark that the agent has started, and restart the stall clock so
       // the 5-minute sweep measures from "work began", not "CS asked".
@@ -99,53 +109,78 @@ export async function PATCH(
       }
 
       if (body.status === "completed") {
-        // Re-validate the source balance atomically — it may have moved since
-        // the CS request created this transfer.
-        const [fromCredit] = await txn
-          .select()
-          .from(gameCredits)
-          .where(
-            and(
-              eq(gameCredits.player_id, row.player_id),
-              eq(gameCredits.game_name, row.from_game),
-            ),
-          )
-          .for("update");
-        const fromBalance = fromCredit?.current_balance ?? 0;
-        if (fromBalance < row.transfer_amount) {
-          throw new BotError(
-            422,
-            `Insufficient ${row.from_game} balance (${fromBalance.toFixed(2)} available, ${row.transfer_amount.toFixed(2)} needed)`,
-          );
-        }
+        if (creditIn) {
+          // A recommend bonus riding the transfer queue (see the note on
+          // `creditIn` above). It is a top-up, not a move: there is no source
+          // balance to debit — the credit is issued from the company's BO pool,
+          // exactly as a deposit top-up is.
+          const [owner] = await txn
+            .select({ company_entity_id: players.company_entity_id })
+            .from(players)
+            .where(eq(players.player_id, row.player_id));
+          try {
+            await creditRecommendBonus(txn, {
+              playerId: row.player_id,
+              companyEntityId: owner?.company_entity_id ?? null,
+              gameName: row.to_game,
+              amount: row.transfer_amount,
+              nowIso,
+            });
+          } catch (e) {
+            if (e instanceof InsufficientBoCreditError) {
+              throw new BotError(422, e.message);
+            }
+            throw e;
+          }
+        } else {
+          // Re-validate the source balance atomically — it may have moved since
+          // the CS request created this transfer.
+          const [fromCredit] = await txn
+            .select()
+            .from(gameCredits)
+            .where(
+              and(
+                eq(gameCredits.player_id, row.player_id),
+                eq(gameCredits.game_name, row.from_game),
+              ),
+            )
+            .for("update");
+          const fromBalance = fromCredit?.current_balance ?? 0;
+          if (fromBalance < row.transfer_amount) {
+            throw new BotError(
+              422,
+              `Insufficient ${row.from_game} balance (${fromBalance.toFixed(2)} available, ${row.transfer_amount.toFixed(2)} needed)`,
+            );
+          }
 
-        await txn
-          .update(gameCredits)
-          .set({
-            current_balance: +(fromBalance - row.transfer_amount).toFixed(2),
-            last_updated_at: nowIso,
-          })
-          .where(
-            and(
-              eq(gameCredits.player_id, row.player_id),
-              eq(gameCredits.game_name, row.from_game),
-            ),
-          );
-        await txn
-          .insert(gameCredits)
-          .values({
-            player_id: row.player_id,
-            game_name: row.to_game,
-            current_balance: row.transfer_amount,
-            last_updated_at: nowIso,
-          })
-          .onConflictDoUpdate({
-            target: [gameCredits.player_id, gameCredits.game_name],
-            set: {
-              current_balance: sql`${gameCredits.current_balance} + ${row.transfer_amount}`,
+          await txn
+            .update(gameCredits)
+            .set({
+              current_balance: +(fromBalance - row.transfer_amount).toFixed(2),
               last_updated_at: nowIso,
-            },
-          });
+            })
+            .where(
+              and(
+                eq(gameCredits.player_id, row.player_id),
+                eq(gameCredits.game_name, row.from_game),
+              ),
+            );
+          await txn
+            .insert(gameCredits)
+            .values({
+              player_id: row.player_id,
+              game_name: row.to_game,
+              current_balance: row.transfer_amount,
+              last_updated_at: nowIso,
+            })
+            .onConflictDoUpdate({
+              target: [gameCredits.player_id, gameCredits.game_name],
+              set: {
+                current_balance: sql`${gameCredits.current_balance} + ${row.transfer_amount}`,
+                last_updated_at: nowIso,
+              },
+            });
+        }
       }
 
       const [updated] = await txn
@@ -174,9 +209,11 @@ export async function PATCH(
       await txn.insert(transactions).values({
         player_id: row.player_id,
         entity_id: player?.company_entity_id ?? null,
-        type: "game_transfer",
+        // A credit-in carries the bonus that queued it, so it lands in the
+        // ledger under the same type as the hand-credited path.
+        type: creditIn ? "recommend_bonus" : "game_transfer",
         amount: row.transfer_amount,
-        game_name: `${row.from_game} → ${row.to_game}`,
+        game_name: creditIn ? row.to_game : `${row.from_game} → ${row.to_game}`,
         reference_id: row.transfer_id,
         details: {
           source: "bot",

@@ -139,6 +139,9 @@ export const auditTypeEnum = pgEnum("audit_type", [
   "bank_transfer",
   "bo_adjustment",
   "player_import",
+  // Referral payout credited to an upline. Kept apart from game_topup so
+  // bonus spend can be totalled without unpicking deposit-driven top-ups.
+  "recommend_bonus",
 ]);
 
 // ---------- Core hierarchy ----------

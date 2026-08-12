@@ -67,12 +67,17 @@ const TYPE_META: Record<AuditType, { label: string; className: string }> = {
     label: "Player Import",
     className: "bg-zinc-500/10 text-zinc-700 dark:text-zinc-300",
   },
+  recommend_bonus: {
+    label: "Recommend Bonus",
+    className: "bg-teal-500/10 text-teal-700 dark:text-teal-300",
+  },
 };
 
 const TYPE_ORDER: AuditType[] = [
   "deposit",
   "withdrawal",
   "game_topup",
+  "recommend_bonus",
   "game_transfer",
   "credit_pull",
   "bank_transfer",

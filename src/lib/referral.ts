@@ -1,6 +1,12 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { deposits, players, referralBonuses } from "@/db/schema";
+import {
+  deposits,
+  gameCredits,
+  players,
+  providerBoAccounts,
+  referralBonuses,
+} from "@/db/schema";
 
 /** Share of a downline's first deposit that the upline earns. */
 export const REFERRAL_BONUS_PERCENTAGE = 20;
@@ -154,3 +160,85 @@ export async function wouldCycle(
   }
   return false;
 }
+
+/**
+ * Book a recommend bonus as free game credit, the same way a deposit top-up is
+ * booked: the credit comes out of the company's wholesale BO pool for that
+ * game and lands in the player's game balance.
+ *
+ * A bonus is a top-up minus the money — so unlike a deposit this deliberately
+ * leaves `players.total_deposits` alone; nothing was deposited.
+ *
+ * A company with no active BO row for the game is credited anyway (matching the
+ * deposit path): the pool is a mirror of the provider back-office, and refusing
+ * to record credit CS has already moved would leave the CRM further from the
+ * truth, not closer.
+ *
+ * Caller must hold whatever lock it needs on the bonus/transfer row — this only
+ * locks the BO account it debits.
+ */
+export async function creditRecommendBonus(
+  txn: Txn,
+  {
+    playerId,
+    companyEntityId,
+    gameName,
+    amount,
+    nowIso,
+  }: {
+    playerId: number;
+    companyEntityId: number | null;
+    gameName: string;
+    amount: number;
+    nowIso: string;
+  },
+): Promise<{ boDebited: boolean }> {
+  let boDebited = false;
+
+  if (companyEntityId !== null) {
+    const [bo] = await txn
+      .select()
+      .from(providerBoAccounts)
+      .where(
+        and(
+          eq(providerBoAccounts.company_entity_id, companyEntityId),
+          eq(providerBoAccounts.game_name, gameName),
+          eq(providerBoAccounts.status, "active"),
+        ),
+      )
+      .for("update");
+    if (bo) {
+      if (bo.current_credit < amount) {
+        throw new InsufficientBoCreditError(
+          `Insufficient BO credit for ${gameName} (${bo.current_credit.toFixed(2)} available, ${amount.toFixed(2)} needed)`,
+        );
+      }
+      await txn
+        .update(providerBoAccounts)
+        .set({ current_credit: +(bo.current_credit - amount).toFixed(2) })
+        .where(eq(providerBoAccounts.bo_account_id, bo.bo_account_id));
+      boDebited = true;
+    }
+  }
+
+  await txn
+    .insert(gameCredits)
+    .values({
+      player_id: playerId,
+      game_name: gameName,
+      current_balance: amount,
+      last_updated_at: nowIso,
+    })
+    .onConflictDoUpdate({
+      target: [gameCredits.player_id, gameCredits.game_name],
+      set: {
+        current_balance: sql`${gameCredits.current_balance} + ${amount}`,
+        last_updated_at: nowIso,
+      },
+    });
+
+  return { boDebited };
+}
+
+/** Thrown by creditRecommendBonus so each caller can map it to its own status. */
+export class InsufficientBoCreditError extends Error {}
