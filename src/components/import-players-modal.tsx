@@ -49,7 +49,13 @@ type ParsedRow = {
   error?: string;
 };
 
-const REQUIRED_COLS = ["full_name", "username"] as const;
+/**
+ * The player's code is labelled "Member Code" throughout the UI. Files written
+ * against the older header still import, so a CSV prepared before the rename
+ * doesn't silently fail.
+ */
+const CODE_COLS = ["member_code", "username"] as const;
+const REQUIRED_COLS = ["full_name"] as const;
 
 /**
  * A real CSV split: quoted fields, embedded commas, and "" for a literal quote.
@@ -84,7 +90,7 @@ function splitCsvLine(line: string): string[] {
   return cells.map((c) => c.replace(/\t/g, "").trim());
 }
 
-const SAMPLE_CSV = `full_name,username,telegram_username,contact_number,wechat_id,bank_name,bank_account_number,bank_account_holder
+const SAMPLE_CSV = `full_name,member_code,telegram_username,contact_number,wechat_id,bank_name,bank_account_number,bank_account_holder
 Tan Hong Ming,thm_tan,@thm_tan,+60 12-555 0011,thmtan_wx,Maybank,5128 4471 9023,Tan Hong Ming
 Nurul Aisyah,nurul_a,@nurul_a,+60 19-700 4422,,CIMB,7042 1188 5530,Nurul Aisyah
 Vikram Pillai,vik_pillai,@vik_pillai,,vikpillai88,,,
@@ -115,6 +121,11 @@ function parseCSV(text: string, banks: string[]): ParsedRow[] {
         return row;
       }
     }
+    const memberCode = CODE_COLS.map((c) => raw[c]).find(Boolean);
+    if (!memberCode) {
+      row.error = 'Missing "member_code"';
+      return row;
+    }
 
     let bankName: string | undefined;
     if (raw.bank_name) {
@@ -142,7 +153,7 @@ function parseCSV(text: string, banks: string[]): ParsedRow[] {
 
     row.data = {
       full_name: raw.full_name,
-      username: raw.username,
+      username: memberCode,
       telegram_username: raw.telegram_username
         ? raw.telegram_username.startsWith("@")
           ? raw.telegram_username
@@ -253,7 +264,7 @@ export function ImportPlayersModal({ open, onOpenChange }: Props) {
               Import players
             </h2>
             <p className="text-[12px] text-muted-foreground leading-tight mt-0.5">
-              Required: full_name, username · Optional: telegram_username,
+              Required: full_name, member_code · Optional: telegram_username,
               contact_number, wechat_id, bank_name, bank_account_number,
               bank_account_holder · For multiple banks or game accounts, use
               the Create Player form
@@ -345,7 +356,7 @@ export function ImportPlayersModal({ open, onOpenChange }: Props) {
                 setCsvText(e.target.value);
                 if (fileName) setFileName(null);
               }}
-              placeholder="full_name,username,telegram_username,contact_number,wechat_id,bank_name,bank_account_number,bank_account_holder&#10;Lim Ah Kow,lim_ak,@lim_ak,+60 12-345 6789,,Maybank,5128 4471 9023,Lim Ah Kow"
+              placeholder="full_name,member_code,telegram_username,contact_number,wechat_id,bank_name,bank_account_number,bank_account_holder&#10;Lim Ah Kow,lim_ak,@lim_ak,+60 12-345 6789,,Maybank,5128 4471 9023,Lim Ah Kow"
               spellCheck={false}
               className="w-full h-36 rounded-md border border-input bg-background px-3 py-2 text-[12px] font-mono outline-none focus:border-ring focus:ring-2 focus:ring-ring/30 resize-none"
             />
@@ -384,7 +395,7 @@ export function ImportPlayersModal({ open, onOpenChange }: Props) {
                           Name
                         </th>
                         <th className="px-2 py-1.5 text-left font-medium">
-                          Username
+                          Member Code
                         </th>
                         <th className="px-2 py-1.5 text-left font-medium">
                           Telegram

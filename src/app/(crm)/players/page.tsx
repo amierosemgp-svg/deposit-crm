@@ -101,7 +101,7 @@ export default function PlayersPage() {
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="Search name, username, Telegram…"
+              placeholder="Search name, member code, Telegram…"
               className="h-8 w-full rounded-md border border-input bg-background pl-9 pr-3 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/30"
             />
           </div>

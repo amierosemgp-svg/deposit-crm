@@ -99,7 +99,7 @@ export function PlayerPickerSheet({
                 autoFocus
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search name, username, phone, bank account…"
+                placeholder="Search name, member code, phone, bank account…"
                 className="pl-8"
               />
             </div>

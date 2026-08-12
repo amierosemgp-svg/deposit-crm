@@ -133,7 +133,7 @@ export function CreatePlayerModal({
     username: !form.username.trim()
       ? "Required"
       : usernameTaken
-        ? "Username already exists"
+        ? "Member code already exists"
         : null,
     telegram_username: !form.telegram_username.trim() ? "Required" : null,
     company_entity_id: !form.company_entity_id ? "Required" : null,
@@ -292,18 +292,18 @@ export function CreatePlayerModal({
                   </div>
                   <div className="space-y-1.5">
                     <Label htmlFor="cp-username">
-                      Username <span className="text-rose-600 dark:text-rose-400">*</span>
+                      Member Code <span className="text-rose-600 dark:text-rose-400">*</span>
                     </Label>
                     <Input
                       id="cp-username"
                       value={form.username}
                       onChange={(e) => update("username", e.target.value)}
-                      placeholder="thm_tan"
+                      placeholder="S2616"
                       aria-invalid={!!errors.username}
                     />
-                    {errors.username === "Username already exists" && (
+                    {errors.username === "Member code already exists" && (
                       <p className="text-[11px] text-rose-600 dark:text-rose-400">
-                        This username is already taken
+                        This member code is already taken
                       </p>
                     )}
                   </div>
