@@ -23,19 +23,21 @@ import { cn } from "@/lib/utils";
 import { useStore } from "@/lib/store";
 import { REPORT_DEFS } from "@/lib/report-defs";
 
+// Daily queue first (players → the money moving through them), then the
+// accounts and records behind it, with admin last.
 const NAV = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/deposits", label: "Deposits", icon: Wallet, badge: "pending_deposits" as const },
   { href: "/players", label: "Players", icon: Users },
-  { href: "/hierarchy", label: "Organization Hierarchy", icon: Network },
+  { href: "/deposits", label: "Deposits", icon: Wallet, badge: "pending_deposits" as const },
   { href: "/withdrawals", label: "Withdrawals", icon: Banknote, badge: "pending_withdrawals" as const },
+  { href: "/game-transfer", label: "Game Credit Transfer", icon: ArrowLeftRight },
+  { href: "/expenses", label: "Expenses", icon: Receipt },
+  { href: "/bot-health", label: "Agent Health", icon: Bot },
   { href: "/bank-accounts", label: "Bank Accounts", icon: Landmark },
   { href: "/provider-accounts", label: "Provider BO Accounts", icon: KeyRound },
-  { href: "/bot-health", label: "Agent Health", icon: Bot },
-  { href: "/game-transfer", label: "Game Credit Transfer", icon: ArrowLeftRight },
   { href: "/history", label: "Transaction History", icon: History },
   { href: "/reports", label: "Reports", icon: BarChart3 },
-  { href: "/expenses", label: "Expenses", icon: Receipt },
+  { href: "/hierarchy", label: "Organization Hierarchy", icon: Network },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
