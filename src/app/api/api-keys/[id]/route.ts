@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { apiKeys } from "@/db/schema";
 import { AuthError, authErrorResponse, requireUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
+import { describeChanges, diffFields, logActivity } from "@/lib/activity-log";
 
 function requireAdmin(user: Awaited<ReturnType<typeof requireUser>>) {
   if (user.role !== "super_admin") {
@@ -30,6 +31,11 @@ export async function PATCH(
     if (!parsed.success) return jsonError("Invalid payload");
     const patch = parsed.data;
 
+    const [before] = await db
+      .select()
+      .from(apiKeys)
+      .where(eq(apiKeys.key_id, Number(id)));
+
     const [updated] = await db
       .update(apiKeys)
       .set({
@@ -51,6 +57,25 @@ export async function PATCH(
         created_at: apiKeys.created_at,
       });
     if (!updated) return jsonError("Key not found", 404);
+
+    const changes = before ? diffFields(before, patch) : [];
+    if (changes.length) {
+      await logActivity({
+        category: "api_key",
+        action:
+          patch.status && patch.status !== before?.status
+            ? `api_key.${patch.status === "active" ? "reactivated" : "revoked"}`
+            : "api_key.updated",
+        summary: `API key "${updated.label}" — ${describeChanges(changes)}`,
+        actor: user,
+        companyEntityId: updated.company_entity_id,
+        targetType: "api_key",
+        targetId: updated.key_id,
+        targetLabel: updated.label,
+        changes,
+      });
+    }
+
     return Response.json({ apiKey: updated });
   } catch (e) {
     return authErrorResponse(e) ?? (console.error(e), jsonError("Server error", 500));
@@ -66,7 +91,26 @@ export async function DELETE(
     const user = await requireUser();
     requireAdmin(user);
     const { id } = await params;
+    const [before] = await db
+      .select()
+      .from(apiKeys)
+      .where(eq(apiKeys.key_id, Number(id)));
     await db.delete(apiKeys).where(eq(apiKeys.key_id, Number(id)));
+
+    if (before) {
+      await logActivity({
+        category: "api_key",
+        action: "api_key.deleted",
+        summary: `API key "${before.label}" deleted (${before.hint})`,
+        actor: user,
+        companyEntityId: before.company_entity_id,
+        targetType: "api_key",
+        targetId: before.key_id,
+        targetLabel: before.label,
+        context: { hint: before.hint },
+      });
+    }
+
     return Response.json({ ok: true });
   } catch (e) {
     return authErrorResponse(e) ?? (console.error(e), jsonError("Server error", 500));

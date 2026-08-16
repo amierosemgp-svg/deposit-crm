@@ -57,6 +57,33 @@ snapshots the percentage and amount it was given.
 An existing database needs `migrations/2026-08-16-bonus-plans.sql`; a fresh
 `pnpm db:push` creates it all.
 
+## System log
+
+Three tables hold "what happened", and the **System Log** page (leaders and the
+super admin) unions them at read time — each action is written to exactly one
+of them, never mirrored:
+
+| Table | Holds | Written by |
+|-------|-------|------------|
+| `activity_log` | administration: staff, entities, settings, bonuses, bank accounts, kiosks, API keys, sign-ins | `logActivity()` in `src/lib/activity-log.ts` |
+| `transactions` | money and credit movement | the deposit/withdrawal/transfer routes |
+| `bot_events` | what the agent did | the agent, via `/api/bot/events` |
+
+`logActivity()` never throws — a failed audit write must not fail the action it
+records — and edits carry a field-level diff (`changes: [{field, from, to}]`)
+so the log answers *what* changed, not just *that* something did. Passwords,
+PINs and API keys are recorded as `•••`; bank account numbers are masked to the
+last four.
+
+Scope: the super admin sees everything. A leader sees actions touching their own
+companies plus anything their own staff did — system-wide rows (settings, API
+keys, leader accounts) are the admin's alone. CS agents and viewers get a 403.
+
+Sign-ins are logged including rejected attempts, with the username tried and the
+originating IP.
+
+An existing database needs `migrations/2026-08-16b-activity-log.sql`.
+
 ## Local development
 
 ```bash

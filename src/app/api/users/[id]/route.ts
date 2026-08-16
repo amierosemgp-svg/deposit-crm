@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { entities, users } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
+import { companyOfEntity, diffFields, logActivity } from "@/lib/activity-log";
 
 /** Load the target user and confirm the requester may manage them. */
 async function loadManageable(
@@ -52,7 +53,7 @@ export async function PATCH(
   try {
     const requester = await requireWriteUser();
     const { id } = await params;
-    await loadManageable(requester, Number(id));
+    const target = await loadManageable(requester, Number(id));
     const parsed = patchSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return jsonError("Invalid payload");
 
@@ -68,6 +69,25 @@ export async function PATCH(
         entity_id: users.entity_id,
         status: users.status,
       });
+
+    const changes = diffFields(target, parsed.data);
+    if (changes.length) {
+      await logActivity({
+        category: "user",
+        action:
+          parsed.data.status && parsed.data.status !== target.status
+            ? `user.${parsed.data.status === "active" ? "reactivated" : "deactivated"}`
+            : "user.updated",
+        summary: `${target.role.replace("_", " ")} "${target.username}" updated`,
+        actor: requester,
+        companyEntityId: await companyOfEntity(target.entity_id),
+        targetType: "user",
+        targetId: target.user_id,
+        targetLabel: target.username,
+        changes,
+      });
+    }
+
     return Response.json({ user: updated });
   } catch (e) {
     return authErrorResponse(e) ?? (console.error(e), jsonError("Server error", 500));
@@ -86,6 +106,9 @@ export async function DELETE(
     const requester = await requireWriteUser();
     const { id } = await params;
     const target = await loadManageable(requester, Number(id));
+    // Resolved before the delete: an emptied CS desk is removed with the user,
+    // and the company would be unresolvable afterwards.
+    const companyEntityId = await companyOfEntity(target.entity_id);
 
     if (target.role === "super_admin") {
       const admins = await db
@@ -115,6 +138,18 @@ export async function DELETE(
           await txn.delete(entities).where(eq(entities.entity_id, entity.entity_id));
         }
       }
+    });
+
+    await logActivity({
+      category: "user",
+      action: "user.deleted",
+      summary: `${target.role.replace("_", " ")} "${target.username}" (${target.full_name}) deleted`,
+      actor: requester,
+      companyEntityId,
+      targetType: "user",
+      targetId: target.user_id,
+      targetLabel: target.username,
+      context: { role: target.role, email: target.email },
     });
 
     return Response.json({ ok: true });

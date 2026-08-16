@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { entities } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
+import { logActivity } from "@/lib/activity-log";
 
 const createSchema = z.object({
   parent_entity_id: z.number().int().positive(),
@@ -50,6 +51,24 @@ export async function POST(request: Request) {
     }
 
     const [created] = await db.insert(entities).values(body).returning();
+
+    await logActivity({
+      category: "entity",
+      action: "entity.created",
+      summary: `${created.entity_type.replace("_", " ")} "${created.name}" created under ${parent.name}`,
+      actor: user,
+      companyEntityId:
+        created.entity_type === "company"
+          ? created.entity_id
+          : created.entity_type === "cs"
+            ? created.parent_entity_id
+            : null,
+      targetType: "entity",
+      targetId: created.entity_id,
+      targetLabel: created.name,
+      context: { entity_type: created.entity_type, parent: parent.name },
+    });
+
     return Response.json({ entity: created }, { status: 201 });
   } catch (e) {
     return (

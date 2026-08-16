@@ -5,6 +5,7 @@ import { db } from "@/db";
 import { users } from "@/db/schema";
 import { authErrorResponse, requireUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
+import { logActivity, requestContext } from "@/lib/activity-log";
 
 const schema = z.object({
   current_password: z.string().min(1),
@@ -24,7 +25,19 @@ export async function POST(request: Request) {
     const [row] = await db.select().from(users).where(eq(users.user_id, me.user_id));
     if (!row) return jsonError("Account not found", 404);
     const ok = await bcrypt.compare(current_password, row.password_hash);
-    if (!ok) return jsonError("Current password is incorrect", 403);
+    if (!ok) {
+      await logActivity({
+        category: "auth",
+        action: "auth.password_change_failed",
+        summary: `${row.full_name} tried to change their password with the wrong current password`,
+        actor: me,
+        targetType: "user",
+        targetId: me.user_id,
+        targetLabel: row.username,
+        context: requestContext(request),
+      });
+      return jsonError("Current password is incorrect", 403);
+    }
 
     await db
       .update(users)
@@ -33,6 +46,18 @@ export async function POST(request: Request) {
         updated_at: new Date().toISOString(),
       })
       .where(eq(users.user_id, me.user_id));
+
+    // The passwords themselves never touch the log — only the fact of it.
+    await logActivity({
+      category: "auth",
+      action: "auth.password_changed",
+      summary: `${row.full_name} changed their own password`,
+      actor: me,
+      targetType: "user",
+      targetId: me.user_id,
+      targetLabel: row.username,
+      context: requestContext(request),
+    });
 
     return Response.json({ ok: true });
   } catch (e) {

@@ -5,6 +5,7 @@ import { db } from "@/db";
 import { apiKeys, entities } from "@/db/schema";
 import { AuthError, authErrorResponse, requireUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
+import { logActivity } from "@/lib/activity-log";
 
 function requireAdmin(user: Awaited<ReturnType<typeof requireUser>>) {
   if (user.role !== "super_admin") {
@@ -98,6 +99,24 @@ export async function POST(request: Request) {
         allowed_ips: allowed_ips?.length ? allowed_ips : null,
       })
       .returning(keyColumns);
+
+    // The key itself is shown once and never stored in readable form — the log
+    // gets the hint only, the same masked string the settings screen shows.
+    await logActivity({
+      category: "api_key",
+      action: "api_key.created",
+      summary: `API key "${created.label}" issued (${created.hint})`,
+      actor: user,
+      companyEntityId: created.company_entity_id,
+      targetType: "api_key",
+      targetId: created.key_id,
+      targetLabel: created.label,
+      context: {
+        hint: created.hint,
+        allowed_ips: created.allowed_ips,
+        scoped_to_company: created.company_entity_id,
+      },
+    });
 
     // `key` is returned this one time; it is never retrievable again.
     return Response.json({ apiKey: created, key: raw }, { status: 201 });

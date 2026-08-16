@@ -5,6 +5,7 @@ import { db } from "@/db";
 import { entities, users } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
+import { logActivity } from "@/lib/activity-log";
 
 const schema = z.object({
   full_name: z.string().min(1),
@@ -65,6 +66,23 @@ export async function POST(request: Request) {
         })
         .returning();
       return created;
+    });
+
+    await logActivity({
+      category: "user",
+      action: "user.created",
+      summary: `Leader "${result.username}" (${result.full_name}) added${body.company_name ? ` with company ${body.company_name}` : ""}`,
+      actor: user,
+      // A leader sits above any single company, so this is a system-level row.
+      companyEntityId: null,
+      targetType: "user",
+      targetId: result.user_id,
+      targetLabel: result.username,
+      context: {
+        role: "company_leader",
+        email: result.email,
+        company: body.company_name ?? null,
+      },
     });
 
     const { password_hash: _h, ...safe } = result;

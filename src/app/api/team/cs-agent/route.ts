@@ -5,6 +5,7 @@ import { db } from "@/db";
 import { entities, users } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
+import { logActivity } from "@/lib/activity-log";
 
 const schema = z.object({
   company_entity_id: z.number().int().positive(),
@@ -66,6 +67,18 @@ export async function POST(request: Request) {
         })
         .returning();
       return created;
+    });
+
+    await logActivity({
+      category: "user",
+      action: "user.created",
+      summary: `CS agent "${result.username}" (${result.full_name}) added to ${company.name}`,
+      actor: user,
+      companyEntityId: company.entity_id,
+      targetType: "user",
+      targetId: result.user_id,
+      targetLabel: result.username,
+      context: { role: "cs_agent", company: company.name, email: result.email },
     });
 
     const { password_hash: _h, ...safe } = result;

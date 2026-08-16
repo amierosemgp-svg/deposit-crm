@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { entities, expenses } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
+import { logActivity } from "@/lib/activity-log";
 import { EXPENSE_CATEGORIES } from "@/lib/types";
 
 const createSchema = z.object({
@@ -46,6 +47,19 @@ export async function POST(request: Request) {
         recorded_by_user_id: user.user_id,
       })
       .returning();
+
+    await logActivity({
+      category: "expense",
+      action: "expense.created",
+      summary: `Expense recorded: ${created.description} — RM ${created.amount.toFixed(2)} (${created.category})`,
+      actor: user,
+      companyEntityId: created.company_entity_id,
+      targetType: "expense",
+      targetId: created.expense_id,
+      targetLabel: created.description,
+      context: { amount: created.amount, category: created.category },
+    });
+
     return Response.json({ expense: created }, { status: 201 });
   } catch (e) {
     return (

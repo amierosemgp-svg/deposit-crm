@@ -5,6 +5,7 @@ import { db } from "@/db";
 import { entities, users } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
+import { companyOfEntity, logActivity } from "@/lib/activity-log";
 
 const createSchema = z.object({
   username: z.string().min(2).regex(/^[a-z0-9_]+$/i, "Letters, numbers, underscores only"),
@@ -69,6 +70,18 @@ export async function POST(request: Request) {
         entity_id: body.entity_id,
       })
       .returning();
+
+    await logActivity({
+      category: "user",
+      action: "user.created",
+      summary: `${body.role.replace("_", " ")} "${created.username}" (${created.full_name}) created under ${entity.name}`,
+      actor: user,
+      companyEntityId: await companyOfEntity(entity.entity_id),
+      targetType: "user",
+      targetId: created.user_id,
+      targetLabel: created.username,
+      context: { role: created.role, entity: entity.name, email: created.email },
+    });
 
     const { password_hash: _hash, ...safe } = created;
     return Response.json({ user: safe }, { status: 201 });

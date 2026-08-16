@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { players } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
+import { describeChanges, diffFields, logActivity } from "@/lib/activity-log";
 import { recordGameAccountChanges } from "@/lib/game-account-audit";
 
 const patchSchema = z.object({
@@ -66,6 +67,26 @@ export async function PATCH(
         updated.game_accounts,
         { userId: user.user_id, source: "manual" },
       );
+    }
+
+    // Player creation is already in the ledger as player_import; only edits
+    // need recording here, and each action belongs to exactly one source.
+    const changes = diffFields(row, parsed.data);
+    if (changes.length) {
+      await logActivity({
+        category: "player",
+        action:
+          parsed.data.status && parsed.data.status !== row.status
+            ? `player.${parsed.data.status === "suspended" ? "suspended" : "reactivated"}`
+            : "player.updated",
+        summary: `Player "${row.username}" (${row.full_name}) — ${describeChanges(changes)}`,
+        actor: user,
+        companyEntityId: row.company_entity_id,
+        targetType: "player",
+        targetId: row.player_id,
+        targetLabel: row.username,
+        changes,
+      });
     }
 
     return Response.json({ player: updated });

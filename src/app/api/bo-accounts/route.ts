@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { entities, providerBoAccounts } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
+import { logActivity } from "@/lib/activity-log";
 
 const createSchema = z.object({
   company_entity_id: z.number().int().positive(),
@@ -44,6 +45,19 @@ export async function POST(request: Request) {
     }
 
     const [created] = await db.insert(providerBoAccounts).values(body).returning();
+
+    await logActivity({
+      category: "kiosk",
+      action: "kiosk.created",
+      summary: `Kiosk ${created.game_name} / ${created.bo_username} added to ${company.name}`,
+      actor: user,
+      companyEntityId: created.company_entity_id,
+      targetType: "kiosk",
+      targetId: created.bo_account_id,
+      targetLabel: `${created.game_name} / ${created.bo_username}`,
+      context: { game: created.game_name, company: company.name },
+    });
+
     return Response.json({ boAccount: created }, { status: 201 });
   } catch (e) {
     return (

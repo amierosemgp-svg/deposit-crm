@@ -5,6 +5,7 @@ import { bonusPlans } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { isUniqueViolation, jsonError } from "@/lib/api-helpers";
 import { assertPlanScope, planUsageCount } from "@/lib/bonus";
+import { diffFields, describeChanges, logActivity } from "@/lib/activity-log";
 
 const patchSchema = z.object({
   name: z.string().min(1).max(80).optional(),
@@ -88,6 +89,31 @@ export async function PATCH(
       .where(eq(bonusPlans.plan_id, planId))
       .returning();
 
+    const changes = diffFields(existing, {
+      name: body.name?.trim(),
+      type: body.type,
+      period: updated.period,
+      percentage: body.percentage,
+      min_deposit: body.min_deposit,
+      min_loss: updated.min_loss,
+      company_entity_id: body.company_entity_id,
+      status: body.status,
+      notes: body.notes,
+    });
+    if (changes.length) {
+      await logActivity({
+        category: "bonus",
+        action: "bonus.updated",
+        summary: `Bonus "${updated.name}" — ${describeChanges(changes)}`,
+        actor: user,
+        companyEntityId: updated.company_entity_id,
+        targetType: "bonus_plan",
+        targetId: updated.plan_id,
+        targetLabel: updated.name,
+        changes,
+      });
+    }
+
     return Response.json({ plan: updated });
   } catch (e) {
     if (isUniqueViolation(e)) {
@@ -112,7 +138,7 @@ export async function DELETE(
     const user = await requireWriteUser();
     const { id } = await params;
     const planId = Number(id);
-    await loadScoped(user, planId);
+    const existing = await loadScoped(user, planId);
 
     const used = await planUsageCount(planId);
     if (used > 0) {
@@ -123,6 +149,18 @@ export async function DELETE(
     }
 
     await db.delete(bonusPlans).where(eq(bonusPlans.plan_id, planId));
+
+    await logActivity({
+      category: "bonus",
+      action: "bonus.deleted",
+      summary: `Bonus "${existing.name}" deleted (${existing.percentage}% ${existing.type})`,
+      actor: user,
+      companyEntityId: existing.company_entity_id,
+      targetType: "bonus_plan",
+      targetId: existing.plan_id,
+      targetLabel: existing.name,
+    });
+
     return Response.json({ ok: true });
   } catch (e) {
     return authErrorResponse(e) ?? (console.error(e), jsonError("Server error", 500));

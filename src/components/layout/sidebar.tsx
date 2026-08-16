@@ -14,6 +14,7 @@ import {
   KeyRound,
   Gift,
   Receipt,
+  ScrollText,
   Bot,
   Network,
   type LucideIcon,
@@ -106,6 +107,12 @@ const NAV: NavGroup[] = [
     items: [
       { href: "/bot-health", label: "Agent Health", icon: Bot },
       {
+        href: "/system-log",
+        label: "System Log",
+        icon: ScrollText,
+        roles: ["super_admin", "company_leader"],
+      },
+      {
         href: "/settings",
         label: "Settings",
         icon: Settings,
@@ -145,8 +152,14 @@ export function Sidebar() {
       )}
     >
       {/* Own scroll container: a long nav scrolls inside the sidebar, leaving
-          the footer pinned and the page's own scroll untouched. */}
-      <div className="min-h-0 flex-1 overflow-y-auto py-3">
+          the footer pinned and the page's own scroll untouched.
+
+          The tall bottom padding is clearance for the agent live-feed button,
+          which floats at `bottom-20 left-4` — i.e. over this column, roughly
+          30–65px above this container's own bottom edge once the footer is
+          accounted for. Without it the last nav item sits underneath and can't
+          be clicked. */}
+      <div className="min-h-0 flex-1 overflow-y-auto pt-3 pb-20">
         <nav className="flex flex-col gap-1 px-2">
           {groups.map((group, groupIndex) => (
             <div key={group.label} className="flex flex-col gap-0.5">

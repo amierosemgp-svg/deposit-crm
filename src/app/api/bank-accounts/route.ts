@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { bankAccounts, entities } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
+import { companyOfEntity, logActivity } from "@/lib/activity-log";
 
 const createSchema = z.object({
   entity_id: z.number().int().positive(),
@@ -47,6 +48,21 @@ export async function POST(request: Request) {
     }
 
     const [created] = await db.insert(bankAccounts).values(body).returning();
+
+    // The account number is masked: the log says which account without
+    // becoming a place to harvest full numbers from.
+    await logActivity({
+      category: "bank_account",
+      action: "bank_account.created",
+      summary: `${created.role} account ${created.bank_name} ••••${created.account_number.slice(-4)} (${created.account_holder}) added to ${entity.name}`,
+      actor: user,
+      companyEntityId: await companyOfEntity(created.entity_id),
+      targetType: "bank_account",
+      targetId: created.account_id,
+      targetLabel: `${created.bank_name} ••••${created.account_number.slice(-4)}`,
+      context: { role: created.role, entity: entity.name, label: created.label },
+    });
+
     return Response.json({ account: created }, { status: 201 });
   } catch (e) {
     return (

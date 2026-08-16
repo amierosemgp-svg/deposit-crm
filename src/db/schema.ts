@@ -880,6 +880,69 @@ export const botEvents = pgTable("bot_events", {
     .defaultNow(),
 });
 
+// ---------- System log ----------
+
+/** Which part of the system an action touched. Drives the log's filters. */
+export const activityCategoryEnum = pgEnum("activity_category", [
+  "auth",
+  "user",
+  "entity",
+  "player",
+  "bank_account",
+  "kiosk",
+  "bonus",
+  "api_key",
+  "settings",
+  "expense",
+  "other",
+]);
+
+/**
+ * Who did what — everything the money ledger doesn't cover.
+ *
+ * `transactions` only records money moving; every row there joins a player and
+ * carries an amount. That left the whole administrative surface unrecorded:
+ * staff accounts, the entity tree, settings, bonuses, bank accounts, kiosks,
+ * API keys, sign-ins. Those land here instead.
+ *
+ * The System Log page reads this alongside `transactions` and `bot_events`.
+ * Each action is written to exactly one of the three — this is not a mirror of
+ * the ledger, and nothing should be logged twice.
+ */
+export const activityLog = pgTable("activity_log", {
+  log_id: serial("log_id").primaryKey(),
+  occurred_at: timestamp("occurred_at", { withTimezone: true, mode: "string" })
+    .notNull()
+    .defaultNow(),
+  category: activityCategoryEnum("category").notNull(),
+  // Machine tag, dotted: "bonus.updated", "auth.login_failed". Free text, not
+  // an enum, so a new action never needs a migration to be loggable.
+  action: varchar("action", { length: 60 }).notNull(),
+  // The line a person reads, written in the words that were true at the time.
+  summary: text("summary").notNull(),
+  // Null when there is no user behind it: a rejected sign-in, or the system.
+  actor_user_id: integer("actor_user_id").references(() => users.user_id),
+  // The actor as plain text, for when the id can't carry it — the username
+  // someone tried to sign in as, or an account since deleted.
+  actor_label: varchar("actor_label", { length: 120 }),
+  // Null = system-wide (settings, API keys); only the super admin sees those.
+  company_entity_id: integer("company_entity_id").references(
+    () => entities.entity_id,
+  ),
+  // What was acted on. Deliberately not a foreign key: the row may be deleted,
+  // and the log has to outlive it.
+  target_type: varchar("target_type", { length: 40 }),
+  target_id: integer("target_id"),
+  target_label: varchar("target_label", { length: 120 }),
+  // Field-level diff for edits — an audit that only says "updated" answers
+  // nothing. [{ field, from, to }].
+  changes: jsonb("changes").$type<
+    Array<{ field: string; from: unknown; to: unknown }>
+  >(),
+  // IP and user agent on sign-ins, counts on bulk actions, override reasons.
+  context: jsonb("context").$type<Record<string, unknown>>(),
+});
+
 // ---------- Integration ----------
 
 export const apiKeys = pgTable("api_keys", {

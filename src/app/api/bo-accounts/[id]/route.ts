@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { providerBoAccounts, providerBoAdjustments, transactions } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
+import { describeChanges, diffFields, logActivity } from "@/lib/activity-log";
 
 const patchSchema = z.object({
   bo_username: z.string().min(1).optional(),
@@ -94,6 +95,27 @@ export async function PATCH(
       .select()
       .from(providerBoAccounts)
       .where(eq(providerBoAccounts.bo_account_id, row.bo_account_id));
+
+    // The credit adjustment itself is money and already lands in the ledger as
+    // a bo_adjustment — only the login/config edit belongs here.
+    const changes = diffFields(row, fields);
+    if (changes.length) {
+      await logActivity({
+        category: "kiosk",
+        action:
+          fields.status && fields.status !== row.status
+            ? `kiosk.${fields.status === "active" ? "reactivated" : "deactivated"}`
+            : "kiosk.updated",
+        summary: `Kiosk ${row.game_name} / ${row.bo_username} — ${describeChanges(changes)}`,
+        actor: user,
+        companyEntityId: row.company_entity_id,
+        targetType: "kiosk",
+        targetId: row.bo_account_id,
+        targetLabel: `${row.game_name} / ${row.bo_username}`,
+        changes,
+      });
+    }
+
     return Response.json({ boAccount: updated });
   } catch (e) {
     return (
@@ -118,6 +140,19 @@ export async function DELETE(
         .delete(providerBoAccounts)
         .where(eq(providerBoAccounts.bo_account_id, row.bo_account_id));
     });
+
+    await logActivity({
+      category: "kiosk",
+      action: "kiosk.deleted",
+      summary: `Kiosk ${row.game_name} / ${row.bo_username} deleted (held ${row.current_credit.toFixed(2)} credit)`,
+      actor: user,
+      companyEntityId: row.company_entity_id,
+      targetType: "kiosk",
+      targetId: row.bo_account_id,
+      targetLabel: `${row.game_name} / ${row.bo_username}`,
+      context: { credit_at_deletion: row.current_credit },
+    });
+
     return Response.json({ ok: true });
   } catch (e) {
     return (

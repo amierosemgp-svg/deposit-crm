@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { bankAccounts } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
+import { companyOfEntity, describeChanges, diffFields, logActivity } from "@/lib/activity-log";
 
 const patchSchema = z.object({
   role: z.enum(["deposit", "withdrawal"]).optional(),
@@ -41,7 +42,7 @@ export async function PATCH(
   try {
     const user = await requireWriteUser();
     const { id } = await params;
-    await loadScoped(user, Number(id));
+    const before = await loadScoped(user, Number(id));
 
     const parsed = patchSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return jsonError("Invalid payload");
@@ -51,6 +52,26 @@ export async function PATCH(
       .set(parsed.data)
       .where(eq(bankAccounts.account_id, Number(id)))
       .returning();
+
+    const label = `${updated.bank_name} ••••${updated.account_number.slice(-4)}`;
+    const changes = diffFields(before, parsed.data);
+    if (changes.length) {
+      await logActivity({
+        category: "bank_account",
+        action:
+          parsed.data.status && parsed.data.status !== before.status
+            ? `bank_account.${parsed.data.status === "active" ? "reactivated" : "deactivated"}`
+            : "bank_account.updated",
+        summary: `Bank account ${label} — ${describeChanges(changes)}`,
+        actor: user,
+        companyEntityId: await companyOfEntity(updated.entity_id),
+        targetType: "bank_account",
+        targetId: updated.account_id,
+        targetLabel: label,
+        changes,
+      });
+    }
+
     return Response.json({ account: updated });
   } catch (e) {
     return (
@@ -71,6 +92,19 @@ export async function DELETE(
       return jsonError("Transfer the balance out before deleting this account", 422);
     }
     await db.delete(bankAccounts).where(eq(bankAccounts.account_id, Number(id)));
+
+    await logActivity({
+      category: "bank_account",
+      action: "bank_account.deleted",
+      summary: `Bank account ${row.bank_name} ••••${row.account_number.slice(-4)} (${row.account_holder}) deleted`,
+      actor: user,
+      companyEntityId: await companyOfEntity(row.entity_id),
+      targetType: "bank_account",
+      targetId: row.account_id,
+      targetLabel: `${row.bank_name} ••••${row.account_number.slice(-4)}`,
+      context: { role: row.role },
+    });
+
     return Response.json({ ok: true });
   } catch (e) {
     return (

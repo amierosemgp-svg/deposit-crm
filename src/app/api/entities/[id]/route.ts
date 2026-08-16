@@ -9,6 +9,7 @@ import {
   type AuthedUser,
 } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
+import { describeChanges, diffFields, logActivity } from "@/lib/activity-log";
 
 const patchSchema = z
   .object({
@@ -87,6 +88,30 @@ export async function PATCH(
       .set(patch)
       .where(eq(entities.entity_id, entityId))
       .returning();
+
+    const changes = diffFields(row, patch);
+    if (changes.length) {
+      await logActivity({
+        category: "entity",
+        action:
+          patch.status && patch.status !== row.status
+            ? `entity.${patch.status === "active" ? "reactivated" : "deactivated"}`
+            : "entity.updated",
+        summary: `${row.entity_type.replace("_", " ")} "${row.name}" — ${describeChanges(changes)}`,
+        actor: user,
+        companyEntityId:
+          row.entity_type === "company"
+            ? row.entity_id
+            : row.entity_type === "cs"
+              ? row.parent_entity_id
+              : null,
+        targetType: "entity",
+        targetId: row.entity_id,
+        targetLabel: row.name,
+        changes,
+      });
+    }
+
     return Response.json({ entity: updated });
   } catch (e) {
     return (

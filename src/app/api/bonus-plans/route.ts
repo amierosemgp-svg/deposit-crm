@@ -5,6 +5,7 @@ import { bonusPlans, entities } from "@/db/schema";
 import { authErrorResponse, requireUser, requireWriteUser } from "@/lib/auth";
 import { isUniqueViolation, jsonError } from "@/lib/api-helpers";
 import { assertPlanScope } from "@/lib/bonus";
+import { logActivity } from "@/lib/activity-log";
 
 const planSchema = z
   .object({
@@ -79,6 +80,24 @@ export async function POST(request: Request) {
         notes: body.notes ?? null,
       })
       .returning();
+
+    await logActivity({
+      category: "bonus",
+      action: "bonus.created",
+      summary: `Bonus "${created.name}" created — ${created.percentage}% ${created.type}${created.period ? `, ${created.period}` : ""}`,
+      actor: user,
+      companyEntityId: created.company_entity_id,
+      targetType: "bonus_plan",
+      targetId: created.plan_id,
+      targetLabel: created.name,
+      context: {
+        type: created.type,
+        period: created.period,
+        percentage: created.percentage,
+        min_deposit: created.min_deposit,
+        min_loss: created.min_loss,
+      },
+    });
 
     return Response.json({ plan: created }, { status: 201 });
   } catch (e) {
