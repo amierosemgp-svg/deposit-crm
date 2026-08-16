@@ -21,6 +21,21 @@ export function jsonError(message: string, status = 400) {
   return Response.json({ error: message }, { status });
 }
 
+/**
+ * Is this a Postgres unique-violation?
+ *
+ * Checked through `cause` as well as on the error itself: drizzle wraps driver
+ * errors in a DrizzleQueryError, so the pg error code is one level down and a
+ * plain `e.code === "23505"` silently never matches — a 409 turns into a 500.
+ */
+export function isUniqueViolation(e: unknown): boolean {
+  const codeOf = (x: unknown) => (x as { code?: string } | null | undefined)?.code;
+  return (
+    codeOf(e) === "23505" ||
+    codeOf((e as { cause?: unknown } | null | undefined)?.cause) === "23505"
+  );
+}
+
 /** SQL filter for deposit visibility under the user's scope. */
 export function depositScopeFilter(user: AuthedUser): SQL | undefined {
   if (user.companyIds === null) return undefined;

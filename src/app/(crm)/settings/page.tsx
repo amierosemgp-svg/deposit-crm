@@ -711,7 +711,6 @@ function SystemTab() {
   const [hours, setHours] = useState(String(settings.transfer_auto_confirm_hours ?? 24));
   const [games, setGames] = useState<string[]>(settings.games ?? []);
   const [banks, setBanks] = useState<string[]>(settings.banks ?? []);
-  const [bonus, setBonus] = useState((settings.bonus_options ?? []).join(", "));
   const [busy, setBusy] = useState(false);
 
   // Per-field re-sync: overwrite a local field only when the server's value for
@@ -722,12 +721,10 @@ function SystemTab() {
   const srvHours = String(settings.transfer_auto_confirm_hours ?? 24);
   const srvGamesSig = JSON.stringify(settings.games ?? []);
   const srvBanksSig = JSON.stringify(settings.banks ?? []);
-  const srvBonus = (settings.bonus_options ?? []).join(", ");
   const [synced, setSynced] = useState({
     hours: srvHours,
     games: srvGamesSig,
     banks: srvBanksSig,
-    bonus: srvBonus,
   });
   if (srvHours !== synced.hours) {
     setSynced((s) => ({ ...s, hours: srvHours }));
@@ -740,10 +737,6 @@ function SystemTab() {
   if (srvBanksSig !== synced.banks) {
     setSynced((s) => ({ ...s, banks: srvBanksSig }));
     setBanks(settings.banks ?? []);
-  }
-  if (srvBonus !== synced.bonus) {
-    setSynced((s) => ({ ...s, bonus: srvBonus }));
-    setBonus(srvBonus);
   }
 
   // Games and Banks persist immediately on add/remove — "Add" is a commit.
@@ -759,11 +752,9 @@ function SystemTab() {
   }
 
   async function save() {
-    const bonusArr = bonus.split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n));
     setBusy(true);
     const r = await updateSetting({
       transfer_auto_confirm_hours: Number(hours),
-      bonus_options: bonusArr,
     });
     setBusy(false);
     if (!r.ok) toast.error(r.error ?? "Failed to save");
@@ -805,14 +796,6 @@ function SystemTab() {
           </p>
         </div>
         <ChipEditor values={banks} onChange={commitBanks} placeholder="Add a bank (e.g. Maybank)" />
-      </Card>
-
-      <Card className="p-5 space-y-3">
-        <div>
-          <h2 className="text-sm font-semibold">Bonus percentages</h2>
-          <p className="text-xs text-muted-foreground mt-0.5">Comma-separated options offered on the deposits screen.</p>
-        </div>
-        <Input value={bonus} onChange={(e) => setBonus(e.target.value)} placeholder="0, 5, 10, 20, 30, 50, 100" />
       </Card>
 
       <div className="flex justify-end">

@@ -12,7 +12,7 @@ import { createHash } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { sql } from "drizzle-orm";
 import { db } from "./index";
-import { apiKeys, entities, settings, users } from "./schema";
+import { apiKeys, bonusPlans, entities, settings, users } from "./schema";
 
 const SEED_PASSWORD = process.env.SEED_PASSWORD ?? "Mpg@2026";
 
@@ -103,9 +103,35 @@ async function main() {
 
   await db.insert(settings).values([
     { key: "transfer_auto_confirm_hours", value: 24 },
-    { key: "bonus_options", value: [0, 5, 10, 20, 30, 50, 100] },
     { key: "games", value: ["Mega888", "Pussy888", "918Kiss", "XE88"] },
     { key: "banks", value: ["Maybank", "CIMB", "Hong Leong", "Public Bank", "RHB", "BSN", "Ambank"] },
+  ]);
+
+  // One of each kind, so the deposits dropdown has something to check against
+  // and the three rules are visible side by side.
+  await db.insert(bonusPlans).values([
+    {
+      name: "Welcome 100%",
+      type: "welcome",
+      percentage: 100,
+      min_deposit: 30,
+      notes: "First deposit only, once ever.",
+    },
+    {
+      name: "Daily 10%",
+      type: "recurring",
+      period: "daily",
+      percentage: 10,
+      min_deposit: 50,
+    },
+    {
+      name: "Weekly Rebate 5%",
+      type: "rebate",
+      period: "weekly",
+      percentage: 5,
+      min_loss: 500,
+      notes: "5% of what the player is down over the week.",
+    },
   ]);
 
   console.log("✔ Seed complete.");

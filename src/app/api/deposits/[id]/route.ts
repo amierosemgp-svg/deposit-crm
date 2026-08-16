@@ -4,9 +4,15 @@ import { db } from "@/db";
 import { deposits, players, transactions } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
+import { canOverrideEligibility, resolveBonusForDeposit } from "@/lib/bonus";
 
 const patchSchema = z.object({
+  // The bonus to apply; null clears it back to no bonus.
+  bonus_plan_id: z.number().int().positive().nullable().optional(),
+  // The old free-percentage path, still honoured when no plan is named.
   bonus_percentage: z.number().min(0).max(200).optional(),
+  // Leaders/admins only: force a bonus the player isn't entitled to, on record.
+  bonus_override_reason: z.string().max(200).optional(),
   selected_game: z.string().nullable().optional(),
   player_id: z.number().int().positive().optional(), // assign an unmatched bot deposit
 });
@@ -42,6 +48,8 @@ export async function PATCH(
     const body = parsed.data;
 
     let playerPatch = {};
+    let playerId = row.player_id;
+    let companyEntityId = row.company_entity_id;
     if (body.player_id !== undefined) {
       const [player] = await db
         .select()
@@ -59,18 +67,93 @@ export async function PATCH(
         player_username: player.username,
         company_entity_id: player.company_entity_id,
       };
+      playerId = player.player_id;
+      companyEntityId = player.company_entity_id;
     }
 
-    const bonusPct = body.bonus_percentage ?? row.bonus_percentage;
-    const bonusAmt = +((row.deposit_amount * bonusPct) / 100).toFixed(2);
+    // A bare percentage means "no plan" — it's the ad-hoc path, so naming one
+    // clears whatever plan the row was carrying.
+    const touchesBonus =
+      body.bonus_plan_id !== undefined || body.bonus_percentage !== undefined;
+    // Re-assigning the player invalidates a plan that was checked against the
+    // previous one: the new player may already have had the welcome bonus.
+    const playerChanged =
+      body.player_id !== undefined && body.player_id !== row.player_id;
+    const recheckBonus = touchesBonus || (playerChanged && !!row.bonus_plan_id);
+
+    let bonusPatch: Record<string, unknown> = {};
+    let bonusNote: Record<string, unknown> | null = null;
+
+    if (recheckBonus) {
+      const wantedPlanId = touchesBonus
+        ? (body.bonus_plan_id ?? null)
+        : row.bonus_plan_id;
+
+      if (wantedPlanId !== null && playerId === null) {
+        return jsonError("Assign a player before picking a bonus", 422);
+      }
+
+      const resolved =
+        playerId === null
+          ? null
+          : await resolveBonusForDeposit({
+              planId: wantedPlanId,
+              // Clearing the bonus means clearing it: only carry the row's old
+              // percentage forward when this request isn't the one removing it.
+              fallbackPercentage:
+                body.bonus_percentage ??
+                (body.bonus_plan_id === null ? 0 : row.bonus_percentage),
+              ctx: {
+                playerId,
+                companyEntityId,
+                depositAmount: row.deposit_amount,
+                // The row being edited is not its own competition.
+                excludeDepositId: depositId,
+              },
+              override: {
+                allowed:
+                  canOverrideEligibility(user.role) &&
+                  !!body.bonus_override_reason,
+                reason: body.bonus_override_reason,
+              },
+            });
+
+      if (resolved && !resolved.ok) {
+        // A bonus CS deliberately picked is worth an error. A bonus that only
+        // stopped applying because the deposit changed hands is not: assigning
+        // the player is the point of the request, so the stale bonus is dropped
+        // and recorded rather than blocking the assignment.
+        if (touchesBonus) return jsonError(resolved.reason, resolved.status);
+        bonusPatch = {
+          bonus_plan_id: null,
+          bonus_percentage: 0,
+          bonus_amount: 0,
+          bonus_basis_amount: null,
+          bonus_override_reason: null,
+          total_amount: row.deposit_amount,
+        };
+        bonusNote = { action: "bonus_cleared", reason: resolved.reason };
+      } else if (resolved?.ok) {
+        bonusPatch = resolved.fields;
+        bonusNote = {
+          action: "bonus_changed",
+          from: row.bonus_percentage,
+          to: resolved.fields.bonus_percentage,
+          bonus: resolved.plan?.name ?? null,
+          bonus_plan_id: resolved.fields.bonus_plan_id,
+          bonus_amount: resolved.fields.bonus_amount,
+          ...(resolved.fields.bonus_override_reason
+            ? { bonus_override_reason: resolved.fields.bonus_override_reason }
+            : {}),
+        };
+      }
+    }
 
     const [updated] = await db
       .update(deposits)
       .set({
         ...playerPatch,
-        bonus_percentage: bonusPct,
-        bonus_amount: bonusAmt,
-        total_amount: +(row.deposit_amount + bonusAmt).toFixed(2),
+        ...bonusPatch,
         selected_game:
           body.selected_game !== undefined ? body.selected_game : row.selected_game,
         updated_at: new Date().toISOString(),
@@ -100,17 +183,13 @@ export async function PATCH(
       });
     }
     if (
-      body.bonus_percentage !== undefined &&
-      body.bonus_percentage !== row.bonus_percentage
+      bonusNote &&
+      (bonusPatch.bonus_plan_id !== row.bonus_plan_id ||
+        bonusPatch.bonus_percentage !== row.bonus_percentage)
     ) {
       audits.push({
         ...base,
-        details: {
-          action: "bonus_changed",
-          from: row.bonus_percentage,
-          to: bonusPct,
-          transaction_ref: row.transaction_ref,
-        },
+        details: { ...bonusNote, transaction_ref: row.transaction_ref },
       });
     }
     if (

@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { deposits, players, transactions } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
+import { canOverrideEligibility, resolveBonusForDeposit } from "@/lib/bonus";
 
 const createSchema = z.object({
   player_id: z.number().int().positive(),
@@ -13,7 +14,12 @@ const createSchema = z.object({
   // "pending" = CS already sighted the receipt, straight to approval queue.
   status: z.enum(["pending_match", "pending"]).default("pending_match"),
   selected_game: z.string().optional(),
+  // The bonus to apply, checked against the player's history before it sticks.
+  bonus_plan_id: z.number().int().positive().nullable().optional(),
+  // The old free-percentage path, still honoured when no plan is named.
   bonus_percentage: z.number().min(0).max(200).optional(),
+  // Leaders/admins only: force a bonus the player isn't entitled to, on record.
+  bonus_override_reason: z.string().max(200).optional(),
   receipt_url: z.string().url().optional(),
   notes: z.string().optional(),
   // Fully manual: no agent bank-match or top-up — CS approves → completes it.
@@ -44,8 +50,22 @@ export async function POST(request: Request) {
       throw new AuthError(403, "Player is outside your company scope");
     }
 
-    const bonusPct = body.bonus_percentage ?? 0;
-    const bonusAmt = +((body.amount * bonusPct) / 100).toFixed(2);
+    const bonus = await resolveBonusForDeposit({
+      planId: body.bonus_plan_id ?? null,
+      fallbackPercentage: body.bonus_percentage,
+      ctx: {
+        playerId: player.player_id,
+        companyEntityId: player.company_entity_id,
+        depositAmount: body.amount,
+      },
+      override: {
+        allowed:
+          canOverrideEligibility(user.role) && !!body.bonus_override_reason,
+        reason: body.bonus_override_reason,
+      },
+    });
+    if (!bonus.ok) return jsonError(bonus.reason, bonus.status);
+
     // A skip-agent deposit has no agent bank-match step, so it always starts at
     // "pending" (ready for manual approval), never "pending_match".
     const status = body.skip_bot ? "pending" : body.status;
@@ -61,9 +81,7 @@ export async function POST(request: Request) {
         deposit_amount: body.amount,
         bank_name: body.bank_name,
         selected_game: body.selected_game,
-        bonus_percentage: bonusPct,
-        bonus_amount: bonusAmt,
-        total_amount: +(body.amount + bonusAmt).toFixed(2),
+        ...bonus.fields,
         status,
         source: "manual",
         skip_bot: body.skip_bot ?? false,
@@ -86,6 +104,18 @@ export async function POST(request: Request) {
         action: "intent_created",
         status,
         skip_bot: body.skip_bot ?? false,
+        ...(bonus.plan
+          ? {
+              bonus: bonus.plan.name,
+              bonus_plan_id: bonus.plan.plan_id,
+              bonus_amount: bonus.fields.bonus_amount,
+              // Present only when a leader/admin forced an ineligible bonus —
+              // this is the line an audit reads back.
+              ...(bonus.fields.bonus_override_reason
+                ? { bonus_override_reason: bonus.fields.bonus_override_reason }
+                : {}),
+            }
+          : {}),
       },
     });
 

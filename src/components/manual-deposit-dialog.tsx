@@ -15,6 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { PlayerPickerSheet } from "@/components/player-picker-sheet";
+import { BonusPicker } from "@/components/bonus-picker";
 import { useStore } from "@/lib/store";
 import type { Player } from "@/lib/types";
 
@@ -26,7 +27,6 @@ type Props = {
 export function ManualDepositDialog({ open, onOpenChange }: Props) {
   const players = useStore((s) => s.players);
   const banksFn = useStore((s) => s.banks);
-  const bonusOptionsFn = useStore((s) => s.bonusOptions);
   const createDepositIntent = useStore((s) => s.createDepositIntent);
   const uploadFile = useStore((s) => s.uploadFile);
   const companyInScope = useStore((s) => s.companyInScope);
@@ -36,14 +36,16 @@ export function ManualDepositDialog({ open, onOpenChange }: Props) {
   useStore((s) => s.selectedLeaderId);
 
   const banks = banksFn();
-  const bonusOptions = bonusOptionsFn();
 
   const [player, setPlayer] = useState<Player | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [amount, setAmount] = useState("");
   const [bank, setBank] = useState("");
   const [game, setGame] = useState("");
-  const [bonus, setBonus] = useState("0");
+  // The bonus plan CS picked, plus the override reason when a leader/admin
+  // forced one the player wasn't entitled to.
+  const [bonusPlanId, setBonusPlanId] = useState<number | null>(null);
+  const [bonusOverride, setBonusOverride] = useState<string | undefined>();
   const [verified, setVerified] = useState(false);
   const [skipBot, setSkipBot] = useState(false);
   const [file, setFile] = useState<File | null>(null);
@@ -59,7 +61,8 @@ export function ManualDepositDialog({ open, onOpenChange }: Props) {
       setAmount("");
       setBank("");
       setGame("");
-      setBonus("0");
+      setBonusPlanId(null);
+      setBonusOverride(undefined);
       setVerified(false);
       setSkipBot(false);
       setFile(null);
@@ -98,7 +101,8 @@ export function ManualDepositDialog({ open, onOpenChange }: Props) {
       bank_name: bank,
       status: verified || skipBot ? "pending" : "pending_match",
       selected_game: game || undefined,
-      bonus_percentage: Number(bonus) || 0,
+      bonus_plan_id: bonusPlanId,
+      bonus_override_reason: bonusOverride,
       receipt_url,
       skip_bot: skipBot,
     });
@@ -221,26 +225,20 @@ export function ManualDepositDialog({ open, onOpenChange }: Props) {
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <Label>Bonus %</Label>
-                <Select
-                  value={bonus}
-                  onValueChange={(v) => setBonus(v ?? "0")}
-                  items={bonusOptions.map((p) => ({
-                    value: String(p),
-                    label: `${p}%`,
-                  }))}
-                >
-                  <SelectTrigger className="h-8 w-full cursor-pointer">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {bonusOptions.map((p) => (
-                      <SelectItem key={p} value={String(p)}>
-                        {p}%
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <Label>Bonus</Label>
+                <BonusPicker
+                  playerId={player?.player_id ?? null}
+                  depositAmount={Number.isFinite(amt) ? amt : 0}
+                  planId={bonusPlanId}
+                  percentage={0}
+                  overrideReason={bonusOverride}
+                  align="end"
+                  className="h-8"
+                  onPick={(choice) => {
+                    setBonusPlanId(choice.bonus_plan_id);
+                    setBonusOverride(choice.bonus_override_reason);
+                  }}
+                />
               </div>
             </div>
 

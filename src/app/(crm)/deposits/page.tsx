@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { StatusBadge, SourceBadge } from "@/components/status-badge";
 import { SearchableSelect } from "@/components/searchable-select";
+import { BonusPicker } from "@/components/bonus-picker";
 import { AssigneeCell } from "@/components/assignee-cell";
 import { PlayerNameLink } from "@/components/player-name-link";
 import { ApprovalFlowModal } from "@/components/approval-flow-modal";
@@ -90,10 +91,9 @@ export default function DepositsPage() {
   const banksFn = useStore((s) => s.banks);
   const playerById = useStore((s) => s.playerById);
   const setAssignment = useStore((s) => s.setAssignment);
-  const bonusOptionsFn = useStore((s) => s.bonusOptions);
+  const bonusPlanById = useStore((s) => s.bonusPlanById);
 
   const banks = banksFn();
-  const bonusOptions = bonusOptionsFn();
   const isViewer = me?.role === "viewer";
 
   const [bankFilter, setBankFilter] = useState<string>("all");
@@ -351,7 +351,12 @@ export default function DepositsPage() {
 
   async function handleDraft(
     depositId: number,
-    patch: Partial<Pick<Deposit, "bonus_percentage" | "selected_game" | "player_id">>,
+    patch: Partial<
+      Pick<
+        Deposit,
+        "bonus_percentage" | "bonus_plan_id" | "selected_game" | "player_id"
+      >
+    > & { bonus_override_reason?: string },
   ) {
     const res = await updateDraft(depositId, patch);
     if (!res.ok) toast.error(res.error ?? "Failed to update deposit");
@@ -375,6 +380,7 @@ export default function DepositsPage() {
       "Bank",
       "Account Holder",
       "Account Number",
+      "Bonus",
       "Bonus %",
       "Bonus Amount",
       "Total",
@@ -393,6 +399,7 @@ export default function DepositsPage() {
       d.bank_name,
       d.bank_account_holder ?? "",
       d.bank_account_number ?? "",
+      bonusPlanById(d.bonus_plan_id)?.name ?? "",
       d.bonus_percentage,
       d.bonus_amount.toFixed(2),
       d.total_amount.toFixed(2),
@@ -798,30 +805,23 @@ export default function DepositsPage() {
                       </td>
                       <td className="px-3 py-2">
                         {editable ? (
-                          <Select
-                            value={String(d.bonus_percentage)}
-                            onValueChange={(v) => {
-                              if (v !== null)
-                                void handleDraft(d.deposit_id, { bonus_percentage: Number(v) });
-                            }}
-                            items={bonusOptions.map((p) => ({
-                              value: String(p),
-                              label: `${p}%`,
-                            }))}
-                          >
-                            <SelectTrigger className="h-7 w-[90px] cursor-pointer">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {bonusOptions.map((p) => (
-                                <SelectItem key={p} value={String(p)}>
-                                  {p}%
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                          <BonusPicker
+                            playerId={d.player_id}
+                            depositAmount={d.deposit_amount}
+                            depositId={d.deposit_id}
+                            planId={d.bonus_plan_id}
+                            percentage={d.bonus_percentage}
+                            overrideReason={d.bonus_override_reason}
+                            className="w-[150px]"
+                            onPick={(choice) => handleDraft(d.deposit_id, choice)}
+                          />
                         ) : (
-                          <span className="text-[12px]">{d.bonus_percentage}%</span>
+                          <span className="text-[12px]">
+                            {bonusPlanById(d.bonus_plan_id)?.name ?? "—"}
+                            <span className="ml-1 text-muted-foreground">
+                              {d.bonus_percentage}%
+                            </span>
+                          </span>
                         )}
                       </td>
                       <td className="px-3 py-2 text-right whitespace-nowrap text-muted-foreground">

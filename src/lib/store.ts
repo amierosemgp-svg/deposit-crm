@@ -5,6 +5,8 @@ import type {
   ApiKeyRow,
   BankAccount,
   BankTransfer,
+  BonusOption,
+  BonusPlan,
   CompanyView,
   BotHealth,
   Deposit,
@@ -72,6 +74,7 @@ type StateResponse = {
   bankTransfers: BankTransfer[];
   boAccounts: ProviderBoAccount[];
   boAdjustments: ProviderBoAdjustment[];
+  bonusPlans: BonusPlan[];
   expenses: Expense[];
   botHealth: BotHealth[];
   gameAccountStock: GameAccountStock[];
@@ -92,6 +95,7 @@ type Store = {
   bankTransfers: BankTransfer[];
   boAccounts: ProviderBoAccount[];
   boAdjustments: ProviderBoAdjustment[];
+  bonusPlans: BonusPlan[];
   expenses: Expense[];
   botHealth: BotHealth[];
   gameAccountStock: GameAccountStock[];
@@ -128,14 +132,31 @@ type Store = {
   entityName: (entityId?: number | null) => string;
   games: () => string[];
   banks: () => string[];
-  bonusOptions: () => number[];
   /** Games with an active BO/kiosk login for a company; null → full catalog. */
   kioskGames: (companyId: number | null) => string[];
 
+  /** Look up a bonus by id — for naming the plan a deposit already carries. */
+  bonusPlanById: (planId?: number | null) => BonusPlan | undefined;
+
   // --- mutations (API-backed; refresh() after success) ---
+  /**
+   * Ask the server which bonuses this player qualifies for at this amount.
+   * Not cached: eligibility depends on the player's live deposit/withdrawal
+   * history, and a stale "eligible" is exactly the answer that misleads.
+   */
+  fetchBonusOptions: (input: {
+    playerId: number;
+    amount: number;
+    depositId?: number;
+  }) => Promise<{ ok: boolean; options?: BonusOption[]; error?: string }>;
   updateDepositDraft: (
     depositId: number,
-    patch: Partial<Pick<Deposit, "bonus_percentage" | "selected_game" | "player_id">>,
+    patch: Partial<
+      Pick<
+        Deposit,
+        "bonus_percentage" | "bonus_plan_id" | "selected_game" | "player_id"
+      >
+    > & { bonus_override_reason?: string },
   ) => Promise<MutationResult>;
   approveDeposit: (depositId: number) => Promise<MutationResult>;
   completeDeposit: (depositId: number) => Promise<MutationResult>;
@@ -147,7 +168,9 @@ type Store = {
     bank_name: string;
     status?: "pending_match" | "pending";
     selected_game?: string;
+    bonus_plan_id?: number | null;
     bonus_percentage?: number;
+    bonus_override_reason?: string;
     receipt_url?: string;
     skip_bot?: boolean;
   }) => Promise<MutationResult>;
@@ -273,6 +296,22 @@ type Store = {
     patch: Record<string, unknown>,
   ) => Promise<MutationResult>;
   deleteBoAccount: (boAccountId: number) => Promise<MutationResult>;
+  createBonusPlan: (input: {
+    name: string;
+    type: "welcome" | "recurring" | "rebate";
+    period?: "daily" | "weekly" | "monthly" | null;
+    percentage: number;
+    min_deposit?: number;
+    min_loss?: number;
+    company_entity_id?: number | null;
+    status?: "active" | "inactive";
+    notes?: string | null;
+  }) => Promise<MutationResult>;
+  updateBonusPlan: (
+    planId: number,
+    patch: Partial<Parameters<Store["createBonusPlan"]>[0]>,
+  ) => Promise<MutationResult>;
+  deleteBonusPlan: (planId: number) => Promise<MutationResult>;
   adjustBoCredit: (input: {
     boAccountId: number;
     amount: number;
@@ -345,7 +384,6 @@ type Store = {
     transfer_auto_confirm_hours?: number;
     games?: string[];
     banks?: string[];
-    bonus_options?: number[];
   }) => Promise<MutationResult>;
 
   uploadFile: (file: File) => Promise<{ ok: boolean; url?: string; error?: string }>;
@@ -385,6 +423,7 @@ export const useStore = create<Store>((set, get) => {
     bankTransfers: [],
     boAccounts: [],
     boAdjustments: [],
+    bonusPlans: [],
     expenses: [],
     botHealth: [],
     gameAccountStock: [],
@@ -495,7 +534,6 @@ export const useStore = create<Store>((set, get) => {
     games: () => get().settings.games ?? ["Mega888", "Pussy888", "918Kiss", "XE88"],
     banks: () =>
       get().settings.banks ?? ["Maybank", "CIMB", "Hong Leong", "Public Bank"],
-    bonusOptions: () => get().settings.bonus_options ?? [0, 5, 10, 20, 30, 50, 100],
 
     // Games a company can actually be topped up with: those with an active
     // provider back-office (kiosk) login the agent can sign in to. Pass null
@@ -511,6 +549,19 @@ export const useStore = create<Store>((set, get) => {
       return get()
         .games()
         .filter((g) => seen.has(g));
+    },
+
+    bonusPlanById: (planId) =>
+      get().bonusPlans.find((p) => p.plan_id === planId),
+
+    fetchBonusOptions: async ({ playerId, amount, depositId }) => {
+      const query = new URLSearchParams({ amount: String(amount) });
+      if (depositId) query.set("deposit_id", String(depositId));
+      const res = await api<{ options: BonusOption[] }>(
+        `/api/players/${playerId}/bonus-eligibility?${query}`,
+      );
+      if (!res.ok) return { ok: false, error: res.error };
+      return { ok: true, options: res.data?.options ?? [] };
     },
 
     updateDepositDraft: async (depositId, patch) => {
@@ -542,13 +593,24 @@ export const useStore = create<Store>((set, get) => {
           return next;
         }),
       });
-      const res = await api(`/api/deposits/${depositId}`, {
+      const res = await api<{ deposit: Deposit }>(`/api/deposits/${depositId}`, {
         method: "PATCH",
         body: JSON.stringify(patch),
       });
       if (!res.ok) {
         await get().refresh(); // revert the optimistic row to server truth
         return { ok: false, error: res.error };
+      }
+      // Take the server's row over the guess. A plan's payout isn't derivable
+      // here — a rebate is a share of the player's losses, not of this deposit —
+      // so the optimistic math above is only ever right for a bare percentage.
+      const saved = res.data?.deposit;
+      if (saved) {
+        set({
+          deposits: get().deposits.map((d) =>
+            d.deposit_id === depositId ? { ...d, ...saved } : d,
+          ),
+        });
       }
       return { ok: true };
     },
@@ -786,6 +848,18 @@ export const useStore = create<Store>((set, get) => {
         method: "PATCH",
         body: JSON.stringify({ adjust_amount: amount, adjust_reason: reason }),
       }),
+
+    createBonusPlan: (input) =>
+      mutate("/api/bonus-plans", { method: "POST", body: JSON.stringify(input) }),
+
+    updateBonusPlan: (planId, patch) =>
+      mutate(`/api/bonus-plans/${planId}`, {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+      }),
+
+    deleteBonusPlan: (planId) =>
+      mutate(`/api/bonus-plans/${planId}`, { method: "DELETE" }),
 
     createExpense: (input) =>
       mutate("/api/expenses", { method: "POST", body: JSON.stringify(input) }),

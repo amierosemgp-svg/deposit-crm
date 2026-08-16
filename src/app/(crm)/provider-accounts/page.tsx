@@ -155,7 +155,7 @@ export default function ProviderAccountsPage() {
     <div className="space-y-5">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold">Provider BO Accounts</h1>
+          <h1 className="text-2xl font-semibold">Kiosks Accounts</h1>
           <p className="text-sm text-muted-foreground mt-1">
             Game-provider back-office logins and the wholesale credit each holds
             {activeCompanyName && (

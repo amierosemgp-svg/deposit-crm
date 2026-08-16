@@ -29,6 +29,34 @@ have a `role` of `deposit` (player collection, watched by the bot) or
 same leader, or leader→own company, and require recipient confirmation
 (auto-confirmed after a configurable window; default 24h).
 
+## Bonuses
+
+A bonus is a rule, not a percentage. `bonus_plans` holds the catalogue
+(the **Bonuses** page; super admin owns the house-wide ones, a leader can pin
+a plan to a company they own) and every deposit records which plan it used, so
+eligibility is answerable instead of remembered:
+
+| Type | Who qualifies | What the % applies to |
+|------|---------------|-----------------------|
+| `welcome` | Their first deposit, once ever | The deposit |
+| `recurring` | Once per calendar day / week / month | The deposit |
+| `rebate` | Once per period, and only if they're down over it | The **net loss** (completed deposits − paid withdrawals) |
+
+Every type can set a minimum deposit; a rebate can also set a minimum loss.
+Periods are calendar-based in business time (UTC+8, Malaysia): a week starts
+Monday, a month on the 1st. A deposit holds its claim on a plan unless it
+fails, so an in-flight deposit can't be double-bonused.
+
+CS picks from the dropdown on the deposits screen, which shows each bonus with
+a yes/no and the reason for a no. The API re-checks on write and rejects an
+ineligible bonus with 422; a leader or the super admin can force one through by
+supplying `bonus_override_reason`, which is stored on the deposit and written
+to the audit log. Editing a plan only affects future deposits — each deposit
+snapshots the percentage and amount it was given.
+
+An existing database needs `migrations/2026-08-16-bonus-plans.sql`; a fresh
+`pnpm db:push` creates it all.
+
 ## Local development
 
 ```bash

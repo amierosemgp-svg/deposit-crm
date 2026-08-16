@@ -1,8 +1,9 @@
-import { asc, desc, inArray } from "drizzle-orm";
+import { asc, desc, inArray, isNull, or } from "drizzle-orm";
 import { db } from "@/db";
 import {
   bankAccounts,
   bankTransfers,
+  bonusPlans,
   botHealth,
   deposits,
   expenses,
@@ -161,6 +162,25 @@ export async function GET() {
       db.select().from(settings),
     ]);
 
+    // The bonus catalogue: everyone sees the house-wide plans, plus any pinned
+    // to a company they can see. Inactive ones come too — the admin screen
+    // needs them, and the deposits dropdown filters them out itself.
+    const scopedBonusPlans = await db
+      .select()
+      .from(bonusPlans)
+      .where(
+        user.companyIds === null
+          ? undefined
+          : or(
+              isNull(bonusPlans.company_entity_id),
+              inArray(
+                bonusPlans.company_entity_id,
+                companyIds.length ? companyIds : [-1],
+              ),
+            ),
+      )
+      .orderBy(asc(bonusPlans.type), asc(bonusPlans.name));
+
     // Include transfers *into* my accounts that originate elsewhere (pending inbox)
     const inboundIds = accountIds.length
       ? await db
@@ -215,6 +235,7 @@ export async function GET() {
       ),
       boAccounts: scopedBoAccounts,
       boAdjustments: scopedAdjustments,
+      bonusPlans: scopedBonusPlans,
       expenses: scopedExpenses,
       botHealth: bots,
       // Counts only — how many pre-registered accounts are left per game, so

@@ -9,10 +9,9 @@ const schema = z.object({
   transfer_auto_confirm_hours: z.number().int().min(1).max(168).optional(),
   games: z.array(z.string().min(1)).optional(),
   banks: z.array(z.string().min(1)).optional(),
-  bonus_options: z.array(z.number().min(0).max(500)).optional(),
 });
 
-const KEYS = ["transfer_auto_confirm_hours", "games", "banks", "bonus_options"] as const;
+const KEYS = ["transfer_auto_confirm_hours", "games", "banks"] as const;
 
 /** PATCH /api/settings — super_admin edits system configuration. */
 export async function PATCH(request: Request) {

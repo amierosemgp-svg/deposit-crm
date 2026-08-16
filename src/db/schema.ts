@@ -89,6 +89,24 @@ export const referralBonusStatusEnum = pgEnum("referral_bonus_status", [
   "cancelled",
 ]);
 
+/**
+ * What entitles a player to a bonus:
+ *  - welcome   — their first deposit, once ever
+ *  - recurring — claimable once per period (daily/weekly/monthly)
+ *  - rebate    — a share of what they lost over the period, once per period
+ */
+export const bonusPlanTypeEnum = pgEnum("bonus_plan_type", [
+  "welcome",
+  "recurring",
+  "rebate",
+]);
+
+export const bonusPeriodEnum = pgEnum("bonus_period", [
+  "daily",
+  "weekly",
+  "monthly",
+]);
+
 export const gameAccountActionEnum = pgEnum("game_account_action", [
   "added",
   "updated",
@@ -292,6 +310,67 @@ export const bankTransfers = pgTable("bank_transfers", {
     .defaultNow(),
 });
 
+/**
+ * A bonus CS can put on a deposit, and the rule that decides who may have it.
+ *
+ * The percentage on its own was never the interesting part — the rule is. A
+ * plan carries both, so picking a bonus is one choice ("Welcome 100%") that the
+ * server can then check against the player's own history rather than trusting
+ * whoever opened the dropdown.
+ *
+ * Editing a plan changes what future deposits get, never what past ones got:
+ * the deposit snapshots its percentage and amount at the time it was applied.
+ */
+export const bonusPlans = pgTable(
+  "bonus_plans",
+  {
+    plan_id: serial("plan_id").primaryKey(),
+    name: varchar("name", { length: 80 }).notNull(),
+    type: bonusPlanTypeEnum("type").notNull(),
+    // How often it may be claimed. Null for "welcome" — that one is once ever.
+    period: bonusPeriodEnum("period"),
+    percentage: numeric("percentage", {
+      precision: 5,
+      scale: 2,
+      mode: "number",
+    }).notNull(),
+    // Gate on the deposit being made. 0 = no minimum.
+    min_deposit: numeric("min_deposit", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    })
+      .notNull()
+      .default(0),
+    // Rebate only: how far down the player must be over the period before the
+    // rebate is offered at all. 0 = any loss qualifies.
+    min_loss: numeric("min_loss", { precision: 12, scale: 2, mode: "number" })
+      .notNull()
+      .default(0),
+    // Null = offered to every company. Set to reserve the plan to one company.
+    company_entity_id: integer("company_entity_id").references(
+      () => entities.entity_id,
+    ),
+    status: activeStatusEnum("status").notNull().default("active"),
+    notes: text("notes"),
+    created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+    updated_at: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    // Two plans of the same name in one scope is a CS trap, not a feature.
+    // NULLS NOT DISTINCT because the house-wide plans are exactly the ones with
+    // a null company — under the default rule every one of them would be
+    // considered unique from every other, which is the opposite of the point.
+    unique("bonus_plans_name_scope_key")
+      .on(t.name, t.company_entity_id)
+      .nullsNotDistinct(),
+  ],
+);
+
 export const deposits = pgTable("deposits", {
   deposit_id: serial("deposit_id").primaryKey(),
   // Agent idempotency key — the agent's own queue id, e.g.
@@ -318,6 +397,20 @@ export const deposits = pgTable("deposits", {
   received_into_account_id: integer("received_into_account_id").references(
     () => bankAccounts.account_id,
   ),
+  // Which bonus was applied. Null = an ad-hoc percentage with no plan behind
+  // it — still allowed, and what every deposit taken before plans existed is.
+  bonus_plan_id: integer("bonus_plan_id").references(() => bonusPlans.plan_id),
+  // Set when a leader/admin forced a bonus the player did not qualify for.
+  // Null on every deposit that passed the eligibility check on its own.
+  bonus_override_reason: text("bonus_override_reason"),
+  // What the percentage was applied to, when that isn't the deposit itself:
+  // for a rebate it's the net loss over the period. Snapshotted so a later
+  // deposit or withdrawal can never rewrite a rebate that was already paid.
+  bonus_basis_amount: numeric("bonus_basis_amount", {
+    precision: 12,
+    scale: 2,
+    mode: "number",
+  }),
   bonus_percentage: numeric("bonus_percentage", {
     precision: 5,
     scale: 2,

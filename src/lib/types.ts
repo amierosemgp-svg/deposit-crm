@@ -52,7 +52,65 @@ export const BANKS: string[] = [
   "BSN",
   "Ambank",
 ];
-export const BONUS_OPTIONS = [0, 5, 10, 20, 30, 50, 100] as const;
+
+/**
+ * What entitles a player to a bonus:
+ *  - welcome   — their first deposit, once ever
+ *  - recurring — claimable once per period (daily/weekly/monthly)
+ *  - rebate    — a share of what they lost over the period, once per period
+ */
+export type BonusPlanType = "welcome" | "recurring" | "rebate";
+
+export type BonusPeriod = "daily" | "weekly" | "monthly";
+
+export type BonusPlan = {
+  plan_id: number;
+  name: string;
+  type: BonusPlanType;
+  /** Null only for a welcome bonus, which is claimed once ever. */
+  period: BonusPeriod | null;
+  percentage: number;
+  min_deposit: number;
+  /** Rebate only: the loss the player must be carrying to qualify. */
+  min_loss: number;
+  /** Null = offered to every company. */
+  company_entity_id: number | null;
+  status: "active" | "inactive";
+  notes?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+/** One bonus as offered for a specific player and deposit amount. */
+export type BonusOption = {
+  plan_id: number;
+  name: string;
+  type: BonusPlanType;
+  period: BonusPeriod | null;
+  percentage: number;
+  min_deposit: number;
+  min_loss: number;
+  eligible: boolean;
+  /** Why not, in the words CS should repeat to the player. Null when eligible. */
+  reason: string | null;
+  bonus_amount: number;
+  /** What the percentage was applied to — the deposit, or the loss for a rebate. */
+  basis_amount: number;
+  /** Rebate only: deposits minus withdrawals over the period. */
+  net_loss: number | null;
+};
+
+export const BONUS_TYPE_LABELS: Record<BonusPlanType, string> = {
+  welcome: "Welcome",
+  recurring: "Recurring",
+  rebate: "Rebate",
+};
+
+export const BONUS_PERIOD_LABELS: Record<BonusPeriod, string> = {
+  daily: "Daily",
+  weekly: "Weekly",
+  monthly: "Monthly",
+};
 
 export type PlayerBankAccount = {
   bank_name: string;
@@ -138,6 +196,12 @@ export type Deposit = {
   bank_account_holder?: string | null;
   bank_description?: string | null;
   received_into_account_id?: number | null;
+  /** The bonus that was applied. Null = an ad-hoc percentage with no plan. */
+  bonus_plan_id?: number | null;
+  /** Set when a leader/admin forced a bonus the player wasn't entitled to. */
+  bonus_override_reason?: string | null;
+  /** What the percentage was applied to, when that isn't the deposit (rebates). */
+  bonus_basis_amount?: number | null;
   bonus_percentage: number;
   bonus_amount: number;
   total_amount: number;
@@ -368,7 +432,6 @@ export type Expense = {
 
 export type ServerSettings = {
   transfer_auto_confirm_hours?: number;
-  bonus_options?: number[];
   games?: string[];
   banks?: string[];
   [key: string]: unknown;
