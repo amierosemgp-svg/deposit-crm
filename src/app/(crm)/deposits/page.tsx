@@ -1111,20 +1111,48 @@ export default function DepositsPage() {
         onOpenChange={setConfirmBulk}
         title={`Approve ${approvable.length} deposit${approvable.length === 1 ? "" : "s"}?`}
         description="Each is dispatched to the agent for top-up, one after another."
+        items={approvable.map((id) => {
+          const dep = depositById(id);
+          return {
+            key: id,
+            label: dep?.player_username ?? `Deposit #${id}`,
+            meta: [
+              dep?.selected_game,
+              dep && dep.bonus_amount > 0
+                ? `${formatRM(dep.deposit_amount)} + ${formatRM(dep.bonus_amount)}`
+                : dep
+                  ? formatRM(dep.deposit_amount)
+                  : null,
+            ]
+              .filter(Boolean)
+              .join(" · "),
+            value: formatRM(dep?.total_amount ?? 0),
+          };
+        })}
+        onRemoveItem={(key) =>
+          setSelectedIds((prev) => {
+            const next = new Set(prev);
+            next.delete(Number(key));
+            return next;
+          })
+        }
         summary={[
-          { label: "Deposits", value: String(approvable.length) },
           {
-            label: "Players",
-            value: String(
+            label: `${approvable.length} deposit${approvable.length === 1 ? "" : "s"} · ${
               new Set(
                 approvable
                   .map((id) => depositById(id)?.player_id)
                   .filter((v) => v != null),
-              ).size,
-            ),
-          },
-          {
-            label: "Total to credit",
+              ).size
+            } player${
+              new Set(
+                approvable
+                  .map((id) => depositById(id)?.player_id)
+                  .filter((v) => v != null),
+              ).size === 1
+                ? ""
+                : "s"
+            }`,
             value: formatRM(
               approvable.reduce(
                 (sum, id) => sum + (depositById(id)?.total_amount ?? 0),
