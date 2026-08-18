@@ -2,7 +2,7 @@
 
 import { useMemo, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
-import { formatRM, formatDateTime, formatRelative } from "@/lib/format";
+import { formatRM, formatShortDateTime, formatRelative } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ListLoading } from "@/components/list-loading";
@@ -84,6 +84,9 @@ export default function WithdrawalsPage() {
   const [bulkPulling, setBulkPulling] = useState(false);
   const [confirmRejectId, setConfirmRejectId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  // Agent-created vs hand-entered. Rows predating the column read as manual —
+  // withdrawals have always been raised by CS unless the agent said otherwise.
+  const [sourceFilter, setSourceFilter] = useState<string>("all");
 
   // --- New Withdrawal dialog state ---
   const [newOpen, setNewOpen] = useState(false);
@@ -116,8 +119,11 @@ export default function WithdrawalsPage() {
   // Search applied first; the status tabs show counts from this set.
   const searched = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return scoped;
-    return scoped.filter((w) => {
+    const bySource = scoped.filter(
+      (w) => sourceFilter === "all" || (w.source ?? "manual") === sourceFilter,
+    );
+    if (!q) return bySource;
+    return bySource.filter((w) => {
       const player = playerById(w.player_id);
       return [
         player?.full_name,
@@ -133,7 +139,7 @@ export default function WithdrawalsPage() {
         .toLowerCase()
         .includes(q);
     });
-  }, [scoped, searchQuery, playerById]);
+  }, [scoped, searchQuery, sourceFilter, playerById]);
 
   const statusCounts = useMemo(() => {
     const m = new Map<string, number>();
@@ -413,6 +419,24 @@ export default function WithdrawalsPage() {
 
       <Card className="overflow-hidden p-0 gap-0">
         <div className="flex flex-wrap items-center gap-2 border-b bg-muted/30 px-4 py-2.5">
+          <Select
+            value={sourceFilter}
+            onValueChange={(v) => setSourceFilter(v ?? "all")}
+            items={[
+              { value: "all", label: "All sources" },
+              { value: "bot", label: "Auto" },
+              { value: "manual", label: "Manual" },
+            ]}
+          >
+            <SelectTrigger className="h-8 w-[120px] cursor-pointer">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All sources</SelectItem>
+              <SelectItem value="bot">Auto</SelectItem>
+              <SelectItem value="manual">Manual</SelectItem>
+            </SelectContent>
+          </Select>
           <div className="relative">
             <Search className="absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -531,29 +555,24 @@ export default function WithdrawalsPage() {
                             selected.length < selectableIds.length;
                       }}
                       onChange={toggleAll}
-                      disabled={selectableIds.length === 0 || bulkAssigning}
+                      disabled={selectableIds.length === 0 || bulkPulling}
                       className="h-4 w-4 cursor-pointer accent-primary disabled:cursor-not-allowed"
                     />
                   </th>
                 )}
-                <th className="px-3 py-2.5 text-left font-medium whitespace-nowrap">Requested</th>
+                <th className="px-3 py-2.5 text-left font-medium">When</th>
                 <th className="px-3 py-2.5 text-left font-medium">Player</th>
-                <th className="px-3 py-2.5 text-right font-medium whitespace-nowrap">Requested Amt</th>
                 <th className="px-3 py-2.5 text-left font-medium">Game</th>
-                <th className="px-3 py-2.5 text-right font-medium whitespace-nowrap">Current Balance</th>
-                <th className="px-3 py-2.5 text-right font-medium whitespace-nowrap">Pulled</th>
+                <th className="px-3 py-2.5 text-right font-medium">Amount</th>
+                <th className="px-3 py-2.5 text-right font-medium">Pulled</th>
                 <th className="px-3 py-2.5 text-left font-medium">Status</th>
-                <th className="px-3 py-2.5 text-left font-medium whitespace-nowrap">
-                  Handled by
-                </th>
-                <th className="px-3 py-2.5 text-right font-medium">Action</th>
               </tr>
             </thead>
-            <tbody>
-              {sorted.length === 0 && (
+            {sorted.length === 0 && (
+              <tbody>
                 <tr className="border-t">
                   <td
-                    colSpan={10}
+                    colSpan={isViewer ? 6 : 7}
                     className="px-3 py-10 text-center text-sm text-muted-foreground"
                   >
                     {!hydrated ? (
@@ -565,158 +584,228 @@ export default function WithdrawalsPage() {
                     )}
                   </td>
                 </tr>
-              )}
-              {sorted.map((w) => {
-                const player = playerById(w.player_id);
-                const bal = getBalance(w.player_id, w.game_name);
-                const isMine = w.assigned_to_user_id === me?.user_id;
-                // Pulling needs the claim, same as approving a deposit.
-                const canPull = !isViewer && w.status === "requested" && isMine;
-                const showPull = !isViewer && w.status === "requested";
-                const pullHint = !isMine
-                  ? w.assigned_to_user_id
-                    ? "Handled by someone else"
-                    : "Assign this withdrawal to yourself first"
-                  : undefined;
-                const canPay = !isViewer && w.status === "credits_pulled";
-                const selectable =
-                  !isViewer &&
-                  (w.status === "requested" || w.status === "credits_pulled");
-                return (
-                  <tr
-                    key={w.withdrawal_id}
-                    className={cn(
-                      "border-t",
-                      selectedIds.has(w.withdrawal_id) && selectable
-                        ? "bg-primary/5 hover:bg-primary/10"
-                        : "hover:bg-muted/30",
-                    )}
-                  >
+              </tbody>
+            )}
+            {sorted.map((w) => {
+              const player = playerById(w.player_id);
+              const bal = getBalance(w.player_id, w.game_name);
+              // Withdrawals record only the bank and account number — the
+              // holder's name lives on the player's saved accounts, so match it
+              // back by account number (falling back to the bank).
+              const payoutAccount =
+                player?.bank_accounts?.find(
+                  (b) => b.account_number === w.bank_account_number,
+                ) ??
+                player?.bank_accounts?.find((b) => b.bank_name === w.bank_name);
+              const isMine = w.assigned_to_user_id === me?.user_id;
+              // Pulling needs the claim, same as approving a deposit.
+              const canPull = !isViewer && w.status === "requested" && isMine;
+              const showPull = !isViewer && w.status === "requested";
+              const pullHint = !isMine
+                ? w.assigned_to_user_id
+                  ? "Handled by someone else"
+                  : "Assign this withdrawal to yourself first"
+                : undefined;
+              const canPay = !isViewer && w.status === "credits_pulled";
+              const selectable =
+                !isViewer &&
+                (w.status === "requested" || w.status === "credits_pulled");
+              return (
+                // One withdrawal is two rows — detail above, how-it-pays and the
+                // actions below — so the group is a tbody of its own.
+                <tbody
+                  key={w.withdrawal_id}
+                  className={cn(
+                    "border-t-2 align-middle",
+                    selectedIds.has(w.withdrawal_id) && selectable
+                      ? "bg-primary/5 hover:bg-primary/10"
+                      : "hover:bg-muted/30",
+                  )}
+                >
+                  <tr className="align-top">
                     {!isViewer && (
-                      <td className="px-3 py-2">
-                        <input
-                          type="checkbox"
-                          aria-label={`Select withdrawal ${w.withdrawal_id}`}
-                          checked={selectable && selectedIds.has(w.withdrawal_id)}
-                          onChange={() => toggleRow(w.withdrawal_id)}
-                          disabled={!selectable || bulkAssigning}
-                          className="h-4 w-4 cursor-pointer accent-primary disabled:cursor-not-allowed disabled:opacity-30"
-                        />
+                      <td className="px-3 pt-2.5 pb-2.5">
+                        <div className="flex min-h-7 items-center">
+                          <input
+                            type="checkbox"
+                            aria-label={`Select withdrawal ${w.withdrawal_id}`}
+                            checked={selectable && selectedIds.has(w.withdrawal_id)}
+                            onChange={() => toggleRow(w.withdrawal_id)}
+                            disabled={!selectable || bulkAssigning}
+                            className="h-4 w-4 cursor-pointer accent-primary disabled:cursor-not-allowed disabled:opacity-30"
+                          />
+                        </div>
                       </td>
                     )}
-                    <td className="px-3 py-2 whitespace-nowrap">
-                      <div className="text-[12px]">{formatDateTime(w.created_at)}</div>
-                      <div className="text-[10px] text-muted-foreground">
-                        {formatRelative(w.created_at)}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2 whitespace-nowrap">
-                      <PlayerNameLink playerId={w.player_id}>
-                        {player?.username ?? `P-${w.player_id}`}
-                      </PlayerNameLink>
-                      <div className="text-[10px] text-muted-foreground">
-                        {player?.telegram_username ?? "—"}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2 text-right font-semibold whitespace-nowrap">
-                      {formatRM(w.requested_amount)}
-                    </td>
-                    <td className="px-3 py-2">
-                      <span className="inline-flex items-center rounded-md border bg-card px-1.5 py-0.5 text-[11px]">
-                        {w.game_name}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 text-right whitespace-nowrap text-muted-foreground">
-                      {formatRM(bal)}
-                    </td>
-                    <td className="px-3 py-2 text-right whitespace-nowrap">
-                      {w.credit_pulled_amount > 0
-                        ? formatRM(w.credit_pulled_amount)
-                        : "—"}
-                    </td>
-                    <td className="px-3 py-2">
-                      <div className="flex flex-col items-start gap-1">
-                        <StatusBadge status={w.status} />
-                        <div className="flex items-center gap-1">
-                          <SourceBadge source={w.source} />
-                          {w.skip_bot && (
-                            <span className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 dark:bg-amber-950/40 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
-                              No agent
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-3 py-2">
-                      <AssigneeCell
-                        kind="withdrawal"
-                        id={w.withdrawal_id}
-                        assignedToUserId={w.assigned_to_user_id}
-                      />
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      {showPull && (
-                        <div className="flex items-center justify-end gap-1.5">
-                          <Button
-                            size="sm"
-                            onClick={() => setPullingId(w.withdrawal_id)}
-                            disabled={!canPull}
-                            title={pullHint}
-                            className="cursor-pointer bg-blue-600 text-white hover:bg-blue-700 disabled:bg-blue-600/30 disabled:text-white/70"
-                          >
-                            <ArrowDownToLine className="h-3.5 w-3.5" />
-                            Pull Credits
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => setConfirmRejectId(w.withdrawal_id)}
-                            className="cursor-pointer gap-1 border-red-300 text-red-700 dark:text-red-300 hover:bg-red-50 hover:text-red-800"
-                          >
-                            <X className="h-3.5 w-3.5" />
-                            Reject
-                          </Button>
-                        </div>
-                      )}
-                      {canPay && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="cursor-pointer"
-                          onClick={() => {
-                            resetPayForm();
-                            setPayingId(w.withdrawal_id);
-                          }}
-                        >
-                          <Banknote className="h-3.5 w-3.5" />
-                          Mark Paid
-                        </Button>
-                      )}
-                      {w.status === "paid" && (
-                        <span className="inline-flex items-center gap-1 text-[11px] text-emerald-700 dark:text-emerald-300">
-                          <CheckCircle2 className="h-3.5 w-3.5" />
-                          Sent
-                          {w.proof_url && (
-                            <a
-                              href={w.proof_url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="cursor-pointer text-muted-foreground hover:text-foreground"
-                              title="Proof of payment"
-                            >
-                              <Paperclip className="h-3.5 w-3.5" />
-                            </a>
-                          )}
+                    <td className="px-3 pt-2.5 pb-2.5 whitespace-nowrap">
+                      <div className="flex min-h-7 flex-wrap items-center gap-x-2">
+                        <span className="text-[12px] font-medium">
+                          {formatShortDateTime(w.created_at)}
                         </span>
-                      )}
-                      {w.status === "failed" && (
-                        <span className="text-[11px] text-red-600 dark:text-red-400">Failed</span>
-                      )}
+                        <span className="text-[10px] text-muted-foreground">
+                          {formatRelative(w.created_at)}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="px-3 pt-2.5 pb-2.5">
+                      <div className="flex min-h-7 flex-wrap items-center gap-x-2">
+                        <PlayerNameLink playerId={w.player_id}>
+                          {player?.username ?? `P-${w.player_id}`}
+                        </PlayerNameLink>
+                        <span className="text-[10px] text-muted-foreground">
+                          {player?.telegram_username ?? "—"}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="px-3 pt-2.5 pb-2.5">
+                      <div className="flex min-h-7 flex-wrap items-center gap-x-2">
+                        <span className="inline-flex items-center rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium whitespace-nowrap">
+                          {w.game_name}
+                        </span>
+                        <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+                          bal {formatRM(bal)}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="px-3 pt-2.5 pb-2.5 text-right whitespace-nowrap">
+                      <div className="flex min-h-7 items-center justify-end font-semibold">
+                        {formatRM(w.requested_amount)}
+                      </div>
+                    </td>
+                    <td className="px-3 pt-2.5 pb-2.5 text-right whitespace-nowrap">
+                      <div className="flex min-h-7 items-center justify-end">
+                        {w.credit_pulled_amount > 0 ? (
+                          <span className="text-blue-700 dark:text-blue-400">
+                            {formatRM(w.credit_pulled_amount)}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-3 pt-2.5 pb-2.5">
+                      <div className="flex min-h-7 items-center">
+                        <StatusBadge status={w.status} />
+                      </div>
                     </td>
                   </tr>
-                );
-              })}
-            </tbody>
+
+                  {/* Second row: how it was raised and where it pays out, with
+                      every action on the right. Indented past the checkbox so it
+                      lines up under When. */}
+                  <tr>
+                    {!isViewer && <td className="px-3" />}
+                    <td colSpan={6} className="px-3 pb-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-lg bg-muted/50 px-3 py-2">
+                        <div className="min-w-0 flex-1 basis-[280px]">
+                          <p className="text-[12px] leading-snug break-words">
+                            <span className="mr-1.5 inline-flex items-center gap-1 align-middle">
+                              <SourceBadge source={w.source} />
+                              {w.skip_bot && (
+                                <span className="inline-flex items-center rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                                  No agent
+                                </span>
+                              )}
+                            </span>
+                            <span className="font-mono text-[11px] text-muted-foreground">
+                              W-{w.withdrawal_id}
+                            </span>
+                            <span className="mx-1.5 text-muted-foreground">–</span>
+                            {w.bank_name || w.bank_account_number ? (
+                              <>
+                                <span className="font-medium">{w.bank_name ?? "Bank"}</span>
+                                {payoutAccount?.account_holder && (
+                                  <span className="ml-1.5">
+                                    {payoutAccount.account_holder}
+                                  </span>
+                                )}
+                                {w.bank_account_number && (
+                                  <span className="ml-1.5 font-mono text-[11px] text-muted-foreground">
+                                    {w.bank_account_number}
+                                  </span>
+                                )}
+                              </>
+                            ) : (
+                              <span className="italic text-muted-foreground">
+                                No payout bank on file
+                              </span>
+                            )}
+                          </p>
+                        </div>
+
+                        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                          {/* Who holds it sits with the actions, because
+                              claiming is the first of them. */}
+                          <AssigneeCell
+                            kind="withdrawal"
+                            id={w.withdrawal_id}
+                            showLabel
+                            assignedToUserId={w.assigned_to_user_id}
+                          />
+                          {showPull && (
+                            <>
+                              <Button
+                                size="xs"
+                                onClick={() => setPullingId(w.withdrawal_id)}
+                                disabled={!canPull}
+                                title={pullHint}
+                                className="cursor-pointer bg-blue-600 text-white hover:bg-blue-700 disabled:bg-blue-600/30 disabled:text-white/70"
+                              >
+                                <ArrowDownToLine className="h-3 w-3" />
+                                Pull Credits
+                              </Button>
+                              <Button
+                                size="xs"
+                                variant="outline"
+                                onClick={() => setConfirmRejectId(w.withdrawal_id)}
+                                className="cursor-pointer gap-1 border-red-300 text-red-700 dark:text-red-300 hover:bg-red-50 hover:text-red-800"
+                              >
+                                <X className="h-3 w-3" />
+                                Reject
+                              </Button>
+                            </>
+                          )}
+                          {canPay && (
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              className="cursor-pointer"
+                              onClick={() => {
+                                resetPayForm();
+                                setPayingId(w.withdrawal_id);
+                              }}
+                            >
+                              <Banknote className="h-3 w-3" />
+                              Mark Paid
+                            </Button>
+                          )}
+                          {w.status === "paid" && (
+                            <span className="inline-flex items-center gap-1 text-[11px] text-emerald-700 dark:text-emerald-300">
+                              <CheckCircle2 className="h-3 w-3" />
+                              Sent
+                              {w.proof_url && (
+                                <a
+                                  href={w.proof_url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="cursor-pointer text-muted-foreground hover:text-foreground"
+                                  title="Proof of payment"
+                                >
+                                  <Paperclip className="h-3 w-3" />
+                                </a>
+                              )}
+                            </span>
+                          )}
+                          {w.status === "failed" && (
+                            <span className="text-[11px] text-red-600 dark:text-red-400">Failed</span>
+                          )}
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              );
+            })}
           </table>
         </div>
         <div className="flex items-center justify-between border-t bg-muted/30 px-4 py-2 text-[11px] text-muted-foreground">

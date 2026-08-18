@@ -744,7 +744,7 @@ export default function DepositsPage() {
                         </div>
                       </td>
                       <td className="px-3 pt-2.5 pb-2.5">
-                        <div className="flex min-h-7 items-center">
+                        <div className="flex min-h-7 flex-wrap items-center gap-x-2">
                         <span className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium whitespace-nowrap">
                           {d.bank_name}
                           {d.receipt_url && (
@@ -758,31 +758,33 @@ export default function DepositsPage() {
                             </button>
                           )}
                         </span>
-                        </div>
                         {d.bank_account_holder && (
-                          <div className="mt-1 text-[11px] leading-tight">
+                          <span className="text-[11px] leading-tight">
                             {d.bank_account_holder}
-                          </div>
+                          </span>
                         )}
                         {d.bank_account_number && (
-                          <div className="text-[10px] font-mono text-muted-foreground">
+                          <span className="font-mono text-[10px] text-muted-foreground">
                             {d.bank_account_number}
-                          </div>
+                          </span>
                         )}
+                        </div>
                       </td>
                       {/* Deposit, bonus and total stacked in one column — three
                           separate ones were the widest part of the old row and
                           are only ever read together. */}
                       <td className="px-3 pt-2.5 pb-2.5 text-right whitespace-nowrap">
+                        {/* Stacked, and the total carries the emphasis — it is
+                            the figure that actually gets credited. */}
                         <div className="flex min-h-7 items-center justify-end font-medium">
                           {formatRM(d.deposit_amount)}
                         </div>
                         {d.bonus_amount > 0 && (
                           <>
-                            <div className="text-[11px] text-emerald-700 dark:text-emerald-400">
-                              + {formatRM(d.bonus_amount)}
+                            <div className="text-[11px] text-muted-foreground">
+                              + {formatRM(d.bonus_amount)} bonus
                             </div>
-                            <div className="text-[12px] font-semibold">
+                            <div className="text-[13px] font-bold text-emerald-600 dark:text-emerald-400">
                               {formatRM(d.total_amount)}
                             </div>
                           </>
