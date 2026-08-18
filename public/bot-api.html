@@ -984,12 +984,14 @@
         <h2>Resource</h2>
         <div class="block-title">Withdrawals</div>
         <div class="prose"><p>Player cashouts. Lifecycle: <code>requested → credits_pulled → paid</code> (or <code>failed</code>). The two action endpoints move money and run in a single database transaction.</p>
-        <p><strong>Listing and creating are merged into <code>/api/bot/transactions</code>:</strong> list with <code>GET /api/bot/transactions?type=withdrawal</code>, create with <code>POST /api/bot/transactions</code> and <code>{"type":"withdrawal", …}</code>. The old <code>GET</code>/<code>POST /api/bot/withdrawals</code> collection routes were removed. The lifecycle routes below (<code>/:id/*</code>) are unchanged.</p></div>
+        <p><strong>Listing and creating are merged into <code>/api/bot/transactions</code>:</strong> list with <code>GET /api/bot/transactions?type=withdrawal</code>, create with <code>POST /api/bot/transactions</code> and <code>{"type":"withdrawal", …}</code>. The old <code>GET</code>/<code>POST /api/bot/withdrawals</code> collection routes were removed. The lifecycle routes below (<code>/:id/*</code>) are unchanged.</p>
+        <p><strong><code>withdraw_all</code></strong> — when a withdrawal carries <code>"withdraw_all": true</code>, empty the player's wallet for that game and report what you found: <code>POST /api/bot/withdrawals/:id/pull</code> with <code>{"amount": &lt;what you pulled&gt;}</code>. Such a request has <code>requested_amount: 0</code> — the figure is not known when CS raises it, which is the whole point of the flag.</p>
+        <p>Our <code>game_credits</code> is a <strong>cache you refresh</strong>, so treat it as a hint, never a limit: a request may legitimately ask for more than the balance we hold, and your reported <code>amount</code> is always taken as the truth.</p></div>
 
         <div class="ep">
           <div class="ep-head"><span class="m post">Post</span><span class="ep-path">/api/bot/transactions</span><span class="use-tag">Create withdrawal</span></div>
           <div class="ep-body">
-            <div class="prose"><p>Set <code>type: "withdrawal"</code>. Body: <code>player_id</code>, <code>requested_amount</code>, <code>game_name</code>, optional <code>bank_name</code>, <code>bank_account_number</code>. Starts as <code>requested</code>.</p></div>
+            <div class="prose"><p>Set <code>type: "withdrawal"</code>. Body: <code>player_id</code>, <code>requested_amount</code>, <code>game_name</code>, optional <code>bank_name</code>, <code>bank_account_number</code>. Starts as <code>requested</code>. Requests raised in the CRM may instead carry <code>withdraw_all: true</code> with <code>requested_amount: 0</code> — see the note above.</p></div>
             <div class="code" data-copy>
               <button class="copy">Copy</button>
               <pre><code><span class="k">curl</span> -X POST <span class="s">"$BASE/api/bot/transactions"</span> -H <span class="s">"X-API-Key: $KEY"</span> \
@@ -1017,11 +1019,18 @@
         <div class="ep">
           <div class="ep-head"><span class="m post">Post</span><span class="ep-path">/api/bot/withdrawals/:id/pull</span><span class="use-tag">Action</span></div>
           <div class="ep-body">
-            <div class="prose"><p>Deducts the player's <code>game_name</code> balance (up to <code>requested_amount</code>) and moves to <code>credits_pulled</code>.</p></div>
+            <div class="prose"><p>Deducts the player's <code>game_name</code> balance and moves to <code>credits_pulled</code>.</p>
+            <p>Optional body <code>{"amount": N}</code> — <strong>what you actually pulled from the wallet</strong>. It overrides our cached balance, so send it whenever you know the real figure. Without a body: the whole balance when <code>withdraw_all</code> is set, otherwise up to <code>requested_amount</code>.</p></div>
+            <div class="code" data-copy>
+              <button class="copy">Copy</button>
+              <pre><code><span class="k">curl</span> -X POST <span class="s">"$BASE/api/bot/withdrawals/7/pull"</span> -H <span class="s">"X-API-Key: $KEY"</span> \
+  -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{ "amount": 100 }'</span></code></pre>
+            </div>
             <div class="codes">
               <div><span class="sc ok">200</span><span>Pulled; response has <code>credit_pulled_amount</code>.</span></div>
               <div><span class="sc warn">409</span><span>Not in <code>requested</code> state.</span></div>
-              <div><span class="sc warn">422</span><span>No game balance to pull.</span></div>
+              <div><span class="sc warn">422</span><span>Nothing to pull (no reported <code>amount</code> and no cached balance).</span></div>
             </div>
           </div>
         </div>
