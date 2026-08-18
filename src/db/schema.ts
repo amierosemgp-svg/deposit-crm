@@ -453,11 +453,20 @@ export const withdrawals = pgTable("withdrawals", {
   player_id: integer("player_id")
     .notNull()
     .references(() => players.player_id),
+  // 0 when withdraw_all is set — the figure isn't known until the agent looks.
   requested_amount: numeric("requested_amount", {
     precision: 12,
     scale: 2,
     mode: "number",
   }).notNull(),
+  /**
+   * Empty the wallet, whatever is in it.
+   *
+   * game_credits is a cache that lags the provider, so an amount typed against
+   * it can be wrong in both directions. This says "take the lot" and leaves the
+   * figure to be discovered at pull time.
+   */
+  withdraw_all: boolean("withdraw_all").notNull().default(false),
   game_name: varchar("game_name", { length: 60 }).notNull(),
   credit_pulled_amount: numeric("credit_pulled_amount", {
     precision: 12,

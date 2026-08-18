@@ -226,8 +226,11 @@ export type WithdrawalStatus = "requested" | "credits_pulled" | "paid" | "failed
 export type Withdrawal = {
   withdrawal_id: number;
   player_id: number;
+  /** 0 when withdraw_all is set — not known until the credits are pulled. */
   requested_amount: number;
   game_name: string;
+  /** Take whatever is in the wallet; the amount is discovered at pull time. */
+  withdraw_all?: boolean;
   credit_pulled_amount: number;
   status: WithdrawalStatus;
   source?: TransactionSource;

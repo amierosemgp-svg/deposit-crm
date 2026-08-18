@@ -18,6 +18,13 @@ export async function POST(
   const { id } = await params;
   const withdrawalId = Number(id);
 
+  // Optional { amount }: what the agent really found in the wallet. Our
+  // game_credits is a cache and can be behind, so a reported figure wins over
+  // anything computed from it.
+  const body = (await request.json().catch(() => null)) as { amount?: unknown } | null;
+  const reported =
+    typeof body?.amount === "number" && body.amount > 0 ? body.amount : null;
+
   try {
     const result = await db.transaction(async (txn) => {
       const [row] = await txn
@@ -46,7 +53,11 @@ export async function POST(
         )
         .for("update");
       const balance = credit?.current_balance ?? 0;
-      const pulled = Math.min(balance, row.requested_amount);
+      // A withdraw-all takes the lot; a fixed request takes what it asked for,
+      // capped by what is actually there.
+      const pulled =
+        reported ??
+        (row.withdraw_all ? balance : Math.min(balance, row.requested_amount));
       if (pulled <= 0) {
         throw new BotError(422, `No ${row.game_name} balance to pull for this player`);
       }
@@ -55,7 +66,9 @@ export async function POST(
       await txn
         .update(gameCredits)
         .set({
-          current_balance: +(balance - pulled).toFixed(2),
+          // A reported pull can exceed our cached figure — that is the point of
+          // reporting it. The wallet is empty either way, never negative.
+          current_balance: +Math.max(0, balance - pulled).toFixed(2),
           last_updated_at: nowIso,
         })
         .where(

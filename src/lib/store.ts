@@ -176,7 +176,9 @@ type Store = {
   }) => Promise<MutationResult>;
   createWithdrawal: (input: {
     player_id: number;
-    requested_amount: number;
+    /** Omit when withdraw_all is set — the agent discovers the figure. */
+    requested_amount?: number;
+    withdraw_all?: boolean;
     game_name: string;
     bank_name?: string;
     bank_account_number?: string;

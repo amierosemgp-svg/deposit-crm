@@ -61,7 +61,11 @@ export async function POST(
         )
         .for("update");
       const balance = credit?.current_balance ?? 0;
-      const pulled = Math.min(balance, row.requested_amount);
+      // A withdraw-all takes the lot; a fixed request takes what it asked for,
+      // capped by what is actually there.
+      const pulled = row.withdraw_all
+        ? balance
+        : Math.min(balance, row.requested_amount);
       if (pulled <= 0) {
         throw new AuthError(422, `No ${row.game_name} balance to pull for this player`);
       }

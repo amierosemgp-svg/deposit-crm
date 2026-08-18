@@ -132,6 +132,9 @@ export function withdrawalJson(w: typeof withdrawals.$inferSelect) {
     withdrawal_id: w.withdrawal_id,
     player_id: w.player_id,
     requested_amount: w.requested_amount,
+    // true = empty the wallet; requested_amount is 0 and the agent reports
+    // what it actually pulled.
+    withdraw_all: w.withdraw_all,
     game_name: w.game_name,
     credit_pulled_amount: w.credit_pulled_amount,
     status: w.status,

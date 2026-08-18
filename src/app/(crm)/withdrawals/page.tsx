@@ -193,12 +193,13 @@ export default function WithdrawalsPage() {
     .sort((a, b) => a.localeCompare(b));
   const newBalance =
     newPlayer && newGame ? getBalance(newPlayer.player_id, newGame) : 0;
-  // "Withdraw all" derives the amount from the live balance rather than
-  // stamping it into the field, so switching game or a refreshed balance can't
-  // leave a stale number behind.
-  const newAmt = newAll ? newBalance : Number(newAmount) || 0;
-  const newValid =
-    !!newPlayer && !!newGame && newAmt > 0 && newAmt <= newBalance;
+  // "Withdraw all" is sent as a flag, not a number: game_credits is a cache
+  // that lags the provider wallet, so turning it into an amount here would ask
+  // the agent to pull the stale figure instead of emptying the wallet.
+  const newAmt = Number(newAmount) || 0;
+  // Deliberately not capped at newBalance — the wallet can hold more than we
+  // last saw, and CS has to be able to raise what the player is looking at.
+  const newValid = !!newPlayer && !!newGame && (newAll || newAmt > 0);
 
   // Only rows still needing work are worth claiming; a paid withdrawal has
   // nobody left to handle it.
@@ -331,7 +332,8 @@ export default function WithdrawalsPage() {
     setNewSubmitting(true);
     const res = await createWithdrawal({
       player_id: newPlayer.player_id,
-      requested_amount: newAmt,
+      requested_amount: newAll ? undefined : newAmt,
+      withdraw_all: newAll,
       game_name: newGame,
       bank_name: newBankName.trim() || undefined,
       bank_account_number: newBankAccount.trim() || undefined,
@@ -669,7 +671,16 @@ export default function WithdrawalsPage() {
                     </td>
                     <td className="px-3 pt-2.5 pb-2.5 text-right whitespace-nowrap">
                       <div className="flex min-h-7 items-center justify-end font-semibold">
-                        {formatRM(w.requested_amount)}
+                        {w.withdraw_all && w.requested_amount === 0 ? (
+                          <span
+                            className="text-[12px] font-medium text-violet-700 dark:text-violet-300"
+                            title="Empty the wallet — the amount is whatever the agent finds"
+                          >
+                            All
+                          </span>
+                        ) : (
+                          formatRM(w.requested_amount)
+                        )}
                       </div>
                     </td>
                     <td className="px-3 pt-2.5 pb-2.5 text-right whitespace-nowrap">
@@ -882,8 +893,10 @@ export default function WithdrawalsPage() {
               />
               {newPlayer && newGame && (
                 <p className="text-[11px] text-muted-foreground">
-                  Current {newGame} balance:{" "}
-                  <span className="font-medium">{formatRM(newBalance)}</span>
+                  Last known {newGame} balance:{" "}
+                  <span className="font-medium">{formatRM(newBalance)}</span> — the
+                  wallet may hold more
+
                 </p>
               )}
             </div>
@@ -896,7 +909,7 @@ export default function WithdrawalsPage() {
                     type="checkbox"
                     className="cursor-pointer"
                     checked={newAll}
-                    disabled={!newPlayer || !newGame || newBalance <= 0}
+                    disabled={!newPlayer || !newGame}
                     onChange={(e) => setNewAll(e.target.checked)}
                   />
                   Withdraw all
@@ -905,16 +918,16 @@ export default function WithdrawalsPage() {
               <Input
                 id="wd-amount"
                 type="number"
-                value={newAll ? newBalance.toFixed(2) : newAmount}
+                value={newAll ? "" : newAmount}
                 onChange={(e) => setNewAmount(e.target.value)}
                 disabled={newAll}
-                placeholder="0.00"
+                placeholder={newAll ? "Whatever is in the wallet" : "0.00"}
                 min={0}
-                max={newBalance}
               />
-              {newPlayer && newGame && newAmt > newBalance && (
-                <p className="text-[11px] text-red-600 dark:text-red-400">
-                  Exceeds current {newGame} balance
+              {newPlayer && newGame && !newAll && newAmt > newBalance && (
+                <p className="text-[11px] text-amber-700 dark:text-amber-400">
+                  More than the {formatRM(newBalance)} we last saw — the agent
+                  pulls what is actually there.
                 </p>
               )}
             </div>

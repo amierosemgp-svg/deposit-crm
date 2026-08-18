@@ -7,7 +7,10 @@ import { jsonError } from "@/lib/api-helpers";
 
 const createSchema = z.object({
   player_id: z.number().int().positive(),
-  requested_amount: z.number().positive(),
+  // Optional when withdraw_all is set — the figure isn't known until the
+  // agent opens the wallet.
+  requested_amount: z.number().positive().optional(),
+  withdraw_all: z.boolean().optional(),
   game_name: z.string().min(1),
   bank_name: z.string().optional(),
   bank_account_number: z.string().optional(),
@@ -37,8 +40,11 @@ export async function POST(request: Request) {
 
     // A player can't withdraw more game credit than they hold. The UI already
     // caps the field, but this is the only check the bot and any direct API
-    // caller pass through — without it an over-balance request reaches the
-    // pull-credits step and fails there, after CS has told the player yes.
+    // The balance is read for context only. game_credits is a cache the agent
+    // refreshes, so it lags the real provider wallet — a player showing RM 17
+    // here may hold RM 100 there. Refusing on it would block CS from acting on
+    // what the player can actually see, so the request stands and the pull step
+    // deals with whatever is really in the wallet.
     const [credit] = await db
       .select()
       .from(gameCredits)
@@ -49,18 +55,20 @@ export async function POST(request: Request) {
         ),
       );
     const balance = credit?.current_balance ?? 0;
-    if (body.requested_amount > balance) {
-      return jsonError(
-        `Insufficient ${body.game_name} balance (${balance.toFixed(2)})`,
-        422,
-      );
+
+    const withdrawAll = body.withdraw_all ?? false;
+    if (!withdrawAll && !body.requested_amount) {
+      return jsonError("Enter an amount, or tick withdraw all");
     }
+    // 0 is the placeholder for "as much as is there"; the pull writes the truth.
+    const requested = withdrawAll ? 0 : body.requested_amount!;
 
     const [created] = await db
       .insert(withdrawals)
       .values({
         player_id: body.player_id,
-        requested_amount: body.requested_amount,
+        requested_amount: requested,
+        withdraw_all: withdrawAll,
         game_name: body.game_name,
         bank_name: body.bank_name,
         bank_account_number: body.bank_account_number,
@@ -74,11 +82,18 @@ export async function POST(request: Request) {
       player_id: body.player_id,
       entity_id: player.company_entity_id,
       type: "withdrawal",
-      amount: body.requested_amount,
+      amount: requested,
       game_name: body.game_name,
       reference_id: created.withdrawal_id,
       user_id: user.user_id,
-      details: { action: "requested", source: "manual" },
+      details: {
+        action: "requested",
+        source: "manual",
+        withdraw_all: withdrawAll,
+        // What the CRM believed the wallet held at the time. Kept because it
+        // is a cache — when the pulled figure differs, this says by how much.
+        known_balance: balance,
+      },
     });
 
     return Response.json({ withdrawal: created }, { status: 201 });
