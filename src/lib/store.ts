@@ -706,16 +706,60 @@ export const useStore = create<Store>((set, get) => {
       }),
 
     setAssignment: async ({ kind, id, ids, assign = true }) => {
+      // Optimistic, for the same reason updateDepositDraft is: awaiting a full
+      // /api/state here made one click cost ~14 queries, two write sweeps and
+      // the entire player list — seconds of spinner for a claim the server
+      // settles in under 10ms. The row is updated here, the POST confirms it,
+      // and the 10s poll reconciles anything this got wrong.
+      const targetIds = ids ?? (id !== undefined ? [id] : []);
+      const me = get().me;
+      const claimed = new Set(targetIds);
+      const patch = {
+        assigned_to_user_id: assign ? (me?.user_id ?? null) : null,
+        assigned_at: assign ? new Date().toISOString() : null,
+      };
+
+      if (me && targetIds.length) {
+        if (kind === "deposit") {
+          set({
+            deposits: get().deposits.map((d) =>
+              claimed.has(d.deposit_id) ? { ...d, ...patch } : d,
+            ),
+          });
+        } else if (kind === "withdrawal") {
+          set({
+            withdrawals: get().withdrawals.map((w) =>
+              claimed.has(w.withdrawal_id) ? { ...w, ...patch } : w,
+            ),
+          });
+        } else {
+          set({
+            gameTransfers: get().gameTransfers.map((t) =>
+              claimed.has(t.transfer_id) ? { ...t, ...patch } : t,
+            ),
+          });
+        }
+      }
+
       const res = await api<{ changed: number; skipped: number }>(
         "/api/assignments",
         { method: "POST", body: JSON.stringify({ kind, id, ids, assign }) },
       );
-      if (!res.ok) return { ok: false, error: res.error };
-      await get().refresh();
+      if (!res.ok) {
+        await get().refresh(); // the claim was refused — put the rows back
+        return { ok: false, error: res.error };
+      }
+
+      // Rows the server wouldn't move (someone else holds them, or they're past
+      // the point of release) are now wrong on screen — that, and only that,
+      // is worth paying for a reconcile.
+      const skipped = res.data?.skipped ?? 0;
+      if (skipped > 0) await get().refresh();
+
       return {
         ok: true,
         changed: res.data?.changed ?? 0,
-        skipped: res.data?.skipped ?? 0,
+        skipped,
       };
     },
 
