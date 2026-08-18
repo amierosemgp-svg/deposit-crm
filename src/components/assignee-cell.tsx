@@ -22,12 +22,15 @@ export function AssigneeCell({
   assignedToUserId,
   locked = false,
   lockedTitle,
+  showLabel = false,
 }: {
   kind: Kind;
   id: number;
   assignedToUserId?: number | null;
   locked?: boolean;
   lockedTitle?: string;
+  /** Prefix with "Handled by:" — for tables with no Handled-by column of their own. */
+  showLabel?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const me = useStore((s) => s.me);
@@ -49,10 +52,15 @@ export function AssigneeCell({
     return (
       <div className="flex items-center gap-1.5">
         <span
-          className={`text-[12px] ${isMine ? "font-medium" : ""}`}
+          className="text-[12px]"
           title={isMine && locked ? lockedTitle : undefined}
         >
-          {isMine ? "You" : userName(assignedToUserId)}
+          {showLabel && (
+            <span className="text-muted-foreground">Handled by: </span>
+          )}
+          <span className={isMine ? "font-medium" : ""}>
+            {isMine ? "You" : userName(assignedToUserId)}
+          </span>
         </span>
         {isMine && !isViewer && !locked && (
           <button

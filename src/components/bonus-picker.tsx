@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { AlertTriangle, Check, ChevronDown, Loader2, ShieldAlert } from "lucide-react";
 import { useStore } from "@/lib/store";
 import { formatRM } from "@/lib/format";
@@ -59,6 +60,17 @@ export function BonusPicker({
   const [overriding, setOverriding] = useState<BonusOption | null>(null);
   const [reason, setReason] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  // Where to draw the menu, in viewport coordinates. The deposits table scrolls
+  // inside a container with overflow-x, which clips on both axes — so the menu
+  // is portalled to the body and positioned against the trigger by hand.
+  const [pos, setPos] = useState<{
+    top: number;
+    left: number;
+    width: number;
+    above: boolean;
+  } | null>(null);
 
   const canOverride = me?.role === "super_admin" || me?.role === "company_leader";
   const plan = bonusPlanById(planId);
@@ -73,22 +85,55 @@ export function BonusPicker({
     setOpen(false);
     setOverriding(null);
     setReason("");
+    setPos(null);
+  }
+
+  const MENU_WIDTH = 290;
+  const MENU_MAX_HEIGHT = 340;
+
+  function place() {
+    const el = triggerRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const width = Math.max(r.width, MENU_WIDTH);
+    const spaceBelow = window.innerHeight - r.bottom;
+    // Flip up only when below genuinely can't hold it and above can do better.
+    const above = spaceBelow < MENU_MAX_HEIGHT && r.top > spaceBelow;
+    const left = align === "end" ? r.right - width : r.left;
+    setPos({
+      top: above ? r.top - 4 : r.bottom + 4,
+      // Keep it on screen on narrow viewports.
+      left: Math.max(8, Math.min(left, window.innerWidth - width - 8)),
+      width,
+      above,
+    });
   }
 
   useEffect(() => {
     if (!open) return;
     function onPointerDown(e: MouseEvent) {
-      if (!rootRef.current?.contains(e.target as Node)) close();
+      const t = e.target as Node;
+      // The menu lives outside this subtree now, so it has to be checked too.
+      if (!rootRef.current?.contains(t) && !menuRef.current?.contains(t)) close();
     }
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") close();
     }
+    // Capture, so scrolling the table's own container repositions it too.
+    function reposition() {
+      place();
+    }
     document.addEventListener("mousedown", onPointerDown);
     document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
     return () => {
       document.removeEventListener("mousedown", onPointerDown);
       document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("resize", reposition);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   async function load() {
@@ -115,6 +160,7 @@ export function BonusPicker({
 
   function toggle() {
     if (open) return close();
+    place();
     setOpen(true);
     void load();
   }
@@ -128,8 +174,9 @@ export function BonusPicker({
   }
 
   return (
-    <div ref={rootRef} className="relative">
+    <div ref={rootRef} className="relative w-full">
       <button
+        ref={triggerRef}
         type="button"
         disabled={disabled}
         onClick={toggle}
@@ -152,12 +199,17 @@ export function BonusPicker({
         </span>
       </button>
 
-      {open && (
+      {open && pos && createPortal(
         <div
-          className={cn(
-            "absolute z-50 mt-1 w-[290px] overflow-hidden rounded-md border bg-popover shadow-md",
-            align === "end" ? "right-0" : "left-0",
-          )}
+          ref={menuRef}
+          style={{
+            position: "fixed",
+            top: pos.top,
+            left: pos.left,
+            width: pos.width,
+            transform: pos.above ? "translateY(-100%)" : undefined,
+          }}
+          className="z-50 overflow-hidden rounded-md border bg-popover shadow-md"
         >
           <button
             type="button"
@@ -221,7 +273,7 @@ export function BonusPicker({
                           <span className="truncate text-[13px] font-medium">
                             {option.name}
                           </span>
-                          <span className="shrink-0 rounded-full border px-1.5 py-px text-[10px] text-muted-foreground">
+                          <span className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[10px] text-muted-foreground">
                             {option.period
                               ? BONUS_PERIOD_LABELS[option.period]
                               : BONUS_TYPE_LABELS[option.type]}
@@ -310,7 +362,8 @@ export function BonusPicker({
                 );
               })}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
