@@ -12,6 +12,7 @@ const patchSchema = z.object({
   account_number: z.string().min(4).optional(),
   account_holder: z.string().min(1).optional(),
   label: z.string().nullable().optional(),
+  login_company_id: z.string().max(80).nullable().optional(),
   login_id: z.string().nullable().optional(),
   login_password: z.string().nullable().optional(),
   login_pin: z.string().nullable().optional(),

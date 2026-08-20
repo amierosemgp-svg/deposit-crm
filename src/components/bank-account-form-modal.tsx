@@ -33,6 +33,7 @@ type FormState = {
   account_number: string;
   account_holder: string;
   label: string;
+  login_company_id: string;
   login_id: string;
   login_password: string;
   login_pin: string;
@@ -49,6 +50,7 @@ const EMPTY: FormState = {
   account_number: "",
   account_holder: "",
   label: "",
+  login_company_id: "",
   login_id: "",
   login_password: "",
   login_pin: "",
@@ -102,6 +104,7 @@ export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
           account_number: account.account_number,
           account_holder: account.account_holder,
           label: account.label ?? "",
+          login_company_id: account.login_company_id ?? "",
           login_id: account.login_id ?? "",
           login_password: account.login_password ?? "",
           login_pin: account.login_pin ?? "",
@@ -149,6 +152,7 @@ export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
         account_number: form.account_number.trim(),
         account_holder: form.account_holder.trim(),
         label: form.label.trim() || undefined,
+        login_company_id: form.login_company_id.trim() || null,
         login_id: form.login_id.trim() || null,
         login_password: form.login_password.trim() || null,
         login_pin: form.login_pin.trim() || null,
@@ -163,6 +167,7 @@ export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
         account_number: form.account_number.trim(),
         account_holder: form.account_holder.trim(),
         label: form.label.trim() || undefined,
+        login_company_id: form.login_company_id.trim() || undefined,
         login_id: form.login_id.trim() || undefined,
         login_password: form.login_password.trim() || undefined,
         login_pin: form.login_pin.trim() || undefined,
@@ -361,6 +366,23 @@ export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
                 </p>
                 <p className="text-[11px] text-muted-foreground mt-0.5">
                   Used by the AI agent to log in and query this account.
+                </p>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="ba-company-id" className="text-[11px]">
+                  Company ID
+                </Label>
+                <Input
+                  id="ba-company-id"
+                  value={form.login_company_id}
+                  onChange={(e) => update("login_company_id", e.target.value)}
+                  placeholder="Enterprise accounts only — e.g. CLCMIKE01"
+                  autoComplete="off"
+                  className="h-8"
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  Business banking asks for this before the user ID. Leave empty
+                  for a personal account.
                 </p>
               </div>
               <div className="grid grid-cols-2 gap-2">

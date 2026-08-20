@@ -13,6 +13,7 @@ const createSchema = z.object({
   account_number: z.string().min(4),
   account_holder: z.string().min(1),
   label: z.string().optional(),
+  login_company_id: z.string().max(80).optional(),
   login_id: z.string().optional(),
   login_password: z.string().optional(),
   login_pin: z.string().optional(),

@@ -92,6 +92,9 @@ export function bankAccountJson(a: typeof bankAccounts.$inferSelect) {
     label: a.label,
     // Online-banking login the agent uses to query the account. Named to match
     // the kiosk endpoint (username/password/pin); login_* kept as aliases.
+    // Enterprise accounts ask for this before the user ID; null on personal ones.
+    company_id: a.login_company_id,
+    login_company_id: a.login_company_id,
     username: a.login_id,
     password: a.login_password,
     pin: a.login_pin,

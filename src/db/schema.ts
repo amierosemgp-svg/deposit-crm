@@ -256,6 +256,9 @@ export const bankAccounts = pgTable("bank_accounts", {
   account_holder: varchar("account_holder", { length: 120 }).notNull(),
   label: varchar("label", { length: 60 }),
   // Online-banking credentials the AI agent uses to query the account.
+  // Enterprise accounts sign in with a company ID before the user ID; personal
+  // accounts leave this null.
+  login_company_id: varchar("login_company_id", { length: 80 }),
   login_id: varchar("login_id", { length: 80 }),
   login_password: varchar("login_password", { length: 120 }),
   login_pin: varchar("login_pin", { length: 20 }),

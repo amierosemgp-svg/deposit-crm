@@ -316,6 +316,8 @@ export type BankAccount = {
   account_number: string;
   account_holder: string;
   label?: string | null;
+  /** Enterprise logins only — the company ID entered before the user ID. */
+  login_company_id?: string | null;
   login_id?: string | null;
   login_password?: string | null;
   login_pin?: string | null;

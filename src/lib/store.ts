@@ -259,6 +259,8 @@ type Store = {
     account_number: string;
     account_holder: string;
     label?: string;
+    /** Enterprise logins only — the company ID entered before the user ID. */
+    login_company_id?: string;
     login_id?: string;
     login_password?: string;
     login_pin?: string;
