@@ -182,6 +182,48 @@ export type BotHealth = {
 /** An agent counts as online if it pinged within this window (spec: 90s). */
 export const BOT_ONLINE_MS = 90 * 1000;
 
+/** What the CRM can ask the agent to go and do on demand. */
+export type BotCommandName = "crawl_bank";
+
+export type BotCommandStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "expired";
+
+/**
+ * A one-off job queued for the agent — today, "crawl the banks now".
+ *
+ * "expired" means nobody claimed it before it stopped being worth doing; see
+ * BOT_COMMAND_TTL_MS. Nothing is reversed when one fails or expires: a command
+ * moves no money, and the agent's scheduled sweep covers the same ground.
+ */
+export type BotCommand = {
+  command_id: number;
+  command: BotCommandName;
+  status: BotCommandStatus;
+  /** Null = every active deposit account in the command's scope. */
+  bank_account_id?: number | null;
+  /** Null = unscoped — crawl every company. */
+  company_entity_id?: number | null;
+  requested_by_user_id?: number | null;
+  bot_id?: string | null;
+  /** Whatever the agent reported: accounts_crawled, transactions_found, … */
+  result?: Record<string, unknown> | null;
+  error?: string | null;
+  expires_at: string;
+  claimed_at?: string | null;
+  completed_at?: string | null;
+  created_at: string;
+};
+
+/** Statuses a command is still moving through — the button shows a spinner. */
+export const OPEN_BOT_COMMAND_STATUSES: BotCommandStatus[] = [
+  "pending",
+  "running",
+];
+
 export type Deposit = {
   deposit_id: number;
   external_id?: string | null;

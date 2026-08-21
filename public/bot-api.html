@@ -305,6 +305,7 @@
         <a href="#withdrawals">Withdrawals</a>
         <a href="#game-credits">Game credits</a>
         <a href="#game-transfers">Game transfers</a>
+        <a href="#commands">On-demand commands</a>
         <a href="#game-account-pool">Game account pool</a>
         <a href="#events">Live feed</a>
         <a href="#transfers">Bank transfers</a>
@@ -1176,6 +1177,102 @@
               <pre><code><span class="k">curl</span> -X POST <span class="s">"$BASE/api/bot/game-transfers"</span> -H <span class="s">"X-API-Key: $KEY"</span> \
   -H <span class="s">"Content-Type: application/json"</span> \
   -d <span class="s">'{ "player_id": 1001, "from_game": "918kiss", "to_game": "mega888", "amount": 50 }'</span></code></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="commands">
+        <h2>Resource</h2>
+        <div class="block-title">On-demand commands</div>
+        <div class="prose">
+          <p><b>Your second work queue, alongside game transfers.</b> This one is CS pressing a button and waiting: <i>"the player says they've paid — go and look now."</i></p>
+          <p>You already sweep the banks on your own cycle. Sometimes that cycle is too slow, so the Deposits page has a <b>Crawl banks</b> button that queues a command here. Poll it on your normal loop, claim what you take, report what you found.</p>
+        </div>
+
+        <pre class="ascii-flow"><code>pending ──you claim──▶ running ──▶ completed
+                          └───────▶ failed
+   (nobody claimed in time) ───────▶ expired</code></pre>
+
+        <div class="note warn">
+          <span class="ic">!</span>
+          <div><b>A command has a 10-minute shelf life.</b> A crawl requested at 09:00 must not fire at 14:00 when you come back from an outage — by then the scheduled sweep has read those transactions and the CS who pressed the button has stopped waiting. Unclaimed commands past <code>expires_at</code> are swept to <code>expired</code> automatically, so you are never handed a stale one. A command you claim and go quiet on for 10 minutes is failed for you, with a reason.</div>
+        </div>
+
+        <div class="prose"><p>Nothing on a command moves money. A failed or expired crawl costs nothing but the wait until your next scheduled sweep.</p></div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m get">Get</span><span class="ep-path">/api/bot/commands</span><span class="use-tag">Poll</span></div>
+          <div class="ep-body">
+            <div class="prose"><p>Defaults to <code>?status=pending</code> — what a polling agent wants. <code>?status=</code> also takes a comma-separated list (<code>pending</code>, <code>running</code>, <code>completed</code>, <code>failed</code>, <code>expired</code>) or <code>all</code>; an unknown status is a <span class="sc warn">400</span> rather than a silently unfiltered list. <code>?command=crawl_bank</code> narrows by kind, <code>?limit=</code> caps the page (default 20, max 100). Oldest first — whoever has been waiting longest gets served first.</p></div>
+            <div class="code" data-copy>
+              <button class="copy">Copy</button>
+              <pre><code><span class="k">curl</span> <span class="s">"$BASE/api/bot/commands?status=pending"</span> -H <span class="s">"X-API-Key: $KEY"</span>
+
+<span class="cmt"># → 200 OK</span>
+{ <span class="k">"count"</span>: <span class="n">1</span>, <span class="k">"commands"</span>: [
+  { <span class="k">"command_id"</span>: <span class="n">7</span>, <span class="k">"command"</span>: <span class="s">"crawl_bank"</span>, <span class="k">"status"</span>: <span class="s">"pending"</span>,
+    <span class="k">"bank_account_id"</span>: <span class="s">null</span>, <span class="k">"company_entity_id"</span>: <span class="n">3</span>,
+    <span class="k">"requested_by_user_id"</span>: <span class="n">5</span>, <span class="k">"bot_id"</span>: <span class="s">null</span>,
+    <span class="k">"result"</span>: <span class="s">null</span>, <span class="k">"error"</span>: <span class="s">null</span>,
+    <span class="k">"expires_at"</span>: <span class="s">"2026-08-21T03:46:24.282Z"</span>,
+    <span class="k">"claimed_at"</span>: <span class="s">null</span>, <span class="k">"completed_at"</span>: <span class="s">null</span>,
+    <span class="k">"created_at"</span>: <span class="s">"2026-08-21T03:36:24.282Z"</span>,
+    <span class="k">"targets"</span>: [
+      { <span class="k">"account_id"</span>: <span class="n">1</span>, <span class="k">"bank_name"</span>: <span class="s">"Maybank"</span>,
+        <span class="k">"account_number"</span>: <span class="s">"512345678901"</span>,
+        <span class="k">"account_holder"</span>: <span class="s">"MPG SDN BHD"</span>,
+        <span class="k">"company_id"</span>: <span class="s">null</span>, <span class="k">"username"</span>: <span class="s">"maybank_user"</span>,
+        <span class="k">"password"</span>: <span class="s">"…"</span>, <span class="k">"pin"</span>: <span class="s">"…"</span>,
+        <span class="k">"device_id"</span>: <span class="s">"SM-A155F"</span> } ] } ] }</code></pre>
+            </div>
+            <div class="note">
+              <span class="ic">i</span>
+              <div><code>targets</code> is the resolved list of accounts to read — the same shape <a href="#bank-accounts">/api/bot/bank-accounts</a> returns, logins included, so there is no second call to make. It is resolved at read time, so an account added or deactivated since the button was pressed is handled correctly. <code>bank_account_id</code> set → just that account; <code>null</code> → every <b>active <code>deposit</code></b> account in the command's company scope (a crawl is about money coming in, so payout accounts aren't in it).</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="ep">
+          <div class="ep-head"><span class="m patch">Patch</span><span class="ep-path">/api/bot/commands/:id/status</span><span class="use-tag">Claim &amp; report</span></div>
+          <div class="ep-body">
+            <div class="prose">
+              <p>Body: <code>status</code> (<code>running</code> | <code>completed</code> | <code>failed</code>), optional <code>bot_id</code>, <code>result</code>, <code>error</code>.</p>
+              <ul>
+                <li><code>running</code> — <b>claim it.</b> Send <code>bot_id</code> so a command that then goes quiet points at the process to look at. Claiming one you already hold is a no-op, not an error.</li>
+                <li><code>completed</code> — you did the work. Put the counters in <code>result</code>.</li>
+                <li><code>failed</code> — say why in <code>error</code>. Nothing is reversed; the scheduled sweep covers the same ground shortly.</li>
+              </ul>
+              <p>Claiming is <b>optional</b> — <code>pending</code> straight to <code>completed</code> works. You only lose the "someone is on this" signal CS sees while you work.</p>
+            </div>
+            <div class="code" data-copy>
+              <button class="copy">Copy</button>
+              <pre><code><span class="cmt"># 1. claim it — you're looking now</span>
+<span class="k">curl</span> -X PATCH <span class="s">"$BASE/api/bot/commands/7/status"</span> -H <span class="s">"X-API-Key: $KEY"</span> \
+  -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{ "status": "running", "bot_id": "bank-crawler-1" }'</span>
+
+<span class="cmt"># 2. push what you found through POST /api/bot/transactions as usual,</span>
+<span class="cmt">#    then close the command out with the counts</span>
+<span class="k">curl</span> -X PATCH <span class="s">"$BASE/api/bot/commands/7/status"</span> -H <span class="s">"X-API-Key: $KEY"</span> \
+  -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{ "status": "completed", "bot_id": "bank-crawler-1",
+       "result": { "accounts_crawled": 2, "transactions_found": 7, "deposits_created": 2 } }'</span>
+
+<span class="cmt"># ...or say why it didn't work</span>
+<span class="k">curl</span> -X PATCH <span class="s">"$BASE/api/bot/commands/7/status"</span> -H <span class="s">"X-API-Key: $KEY"</span> \
+  -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{ "status": "failed", "error": "Maybank2u asked for a TAC" }'</span></code></pre>
+            </div>
+            <div class="note">
+              <span class="ic">i</span>
+              <div><b>Always send a <code>result</code>, even an empty one.</b> It is free-form JSON; the CRM reads <code>deposits_created</code> and falls back to <code>transactions_found</code> for the line shown next to the button. Send <code>{ "deposits_created": 0 }</code> rather than nothing when you found nothing — otherwise a crawl that found nothing and a crawl that reported nothing look identical to the person who pressed the button.</div>
+            </div>
+            <div class="codes">
+              <div><span class="sc ok">200</span><span>Transitioned; returns the updated command.</span></div>
+              <div><span class="sc warn">403</span><span>A company-scoped key acting on another company's command.</span></div>
+              <div><span class="sc warn">404</span><span>No such command.</span></div>
+              <div><span class="sc warn">409</span><span>Already <code>completed</code>, <code>failed</code> or <code>expired</code> — it can't be changed. Expired is a <span class="sc warn">409</span> on purpose: nobody is waiting for it any more, and reporting work against it would put a stale result in front of CS.</span></div>
             </div>
           </div>
         </div>

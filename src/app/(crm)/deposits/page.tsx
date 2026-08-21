@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
-import { formatRM, formatShortDateTime } from "@/lib/format";
+import { formatRM, formatRelative, formatShortDateTime } from "@/lib/format";
 import {
   Select,
   SelectContent,
@@ -33,6 +33,7 @@ import {
   Download,
   Filter,
   Plus,
+  Radar,
   Search,
   Zap,
   CheckCircle2,
@@ -45,7 +46,8 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { Deposit } from "@/lib/types";
+import type { BotCommand, Deposit } from "@/lib/types";
+import { OPEN_BOT_COMMAND_STATUSES } from "@/lib/types";
 import { extractSenderName } from "@/lib/bank-remark";
 
 const STATUS_FILTERS: { value: string; tab: string }[] = [
@@ -74,6 +76,43 @@ function RejectDepositButton({ onClick }: { onClick: () => void }) {
   );
 }
 
+/**
+ * The Crawl banks tooltip — what the last crawl did, in one line.
+ *
+ * The button itself can only say "Crawling…"; this is where "and the last one
+ * found nothing" lives, so an empty crawl and a productive one are told apart
+ * without opening the system log. Counters come from whatever the agent put in
+ * `result`, which is free-form: read the two we name and ignore the rest.
+ */
+function crawlHint(cmd: BotCommand | null): string {
+  if (!cmd) {
+    return "Re-read the banks now instead of waiting for the agent's next sweep";
+  }
+  const when = formatRelative(cmd.completed_at ?? cmd.created_at);
+  switch (cmd.status) {
+    case "pending":
+      return `Queued ${when} — waiting for an agent to pick it up`;
+    case "running":
+      return `Crawling since ${when}${cmd.bot_id ? ` · ${cmd.bot_id}` : ""}`;
+    case "completed": {
+      const found = Number(cmd.result?.deposits_created ?? NaN);
+      const seen = Number(cmd.result?.transactions_found ?? NaN);
+      const detail = Number.isFinite(found)
+        ? found === 1
+          ? "1 new deposit"
+          : `${found} new deposits`
+        : Number.isFinite(seen)
+          ? `${seen} transactions read`
+          : "nothing reported";
+      return `Last crawl finished ${when} — ${detail}`;
+    }
+    case "failed":
+      return `Last crawl failed ${when}${cmd.error ? ` — ${cmd.error}` : ""}`;
+    case "expired":
+      return `Last crawl expired ${when} — no agent picked it up`;
+  }
+}
+
 export default function DepositsPage() {
   const deposits = useStore((s) => s.deposits);
   const me = useStore((s) => s.me);
@@ -92,6 +131,8 @@ export default function DepositsPage() {
   const playerById = useStore((s) => s.playerById);
   const setAssignment = useStore((s) => s.setAssignment);
   const bonusPlanById = useStore((s) => s.bonusPlanById);
+  const botCommands = useStore((s) => s.botCommands);
+  const requestBankCrawl = useStore((s) => s.requestBankCrawl);
 
   const banks = banksFn();
   const isViewer = me?.role === "viewer";
@@ -116,6 +157,7 @@ export default function DepositsPage() {
   const [bulkSettingGame, setBulkSettingGame] = useState(false);
   const [bulkAssigning, setBulkAssigning] = useState(false);
   const [manualDepositOpen, setManualDepositOpen] = useState(false);
+  const [crawlRequesting, setCrawlRequesting] = useState(false);
 
   const scopedDeposits = useMemo(
     () =>
@@ -369,6 +411,48 @@ export default function DepositsPage() {
     if (!res.ok) toast.error(res.error ?? "Failed to update deposit");
   }
 
+  // The crawl that matters to what's on screen: the newest one covering the
+  // selected company. Unscoped commands crawl every bank, this one included.
+  const latestCrawl = useMemo(
+    () =>
+      botCommands.find(
+        (c) =>
+          c.command === "crawl_bank" &&
+          (c.company_entity_id === null || companyInScope(c.company_entity_id)),
+      ) ?? null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [botCommands, selectedCompanyId, selectedLeaderId],
+  );
+  const crawlOpen =
+    latestCrawl !== null &&
+    OPEN_BOT_COMMAND_STATUSES.includes(latestCrawl.status);
+  // Requesting covers the gap between the click and the server answering, so
+  // the button can't be pressed twice on a slow connection.
+  const crawling = crawlRequesting || crawlOpen;
+
+  async function handleCrawl() {
+    setCrawlRequesting(true);
+    const res = await requestBankCrawl({ company_entity_id: selectedCompanyId });
+    setCrawlRequesting(false);
+    if (!res.ok) {
+      toast.error(res.error ?? "Couldn't request a bank crawl");
+      return;
+    }
+    if (res.deduped) {
+      toast.info("A bank crawl is already in progress");
+      return;
+    }
+    if (!res.agentOnline) {
+      // Queued all the same — but say so, rather than letting someone watch a
+      // spinner that nothing is listening to.
+      toast.warning(
+        "Crawl queued, but no agent is online. It runs as soon as one is back, or expires in 10 minutes.",
+      );
+      return;
+    }
+    toast.success("Bank crawl requested — the agent picks it up within ~30s");
+  }
+
   async function handleRefresh() {
     setRefreshing(true);
     await refresh();
@@ -456,13 +540,33 @@ export default function DepositsPage() {
             </div>
           )}
           {!isViewer && (
-            <Button
-              onClick={() => setManualDepositOpen(true)}
-              className="cursor-pointer"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              Manual deposit
-            </Button>
+            <>
+              <Button
+                variant="outline"
+                onClick={handleCrawl}
+                disabled={crawling}
+                title={crawlHint(latestCrawl)}
+                className="cursor-pointer"
+              >
+                {crawling ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Radar className="h-3.5 w-3.5" />
+                )}
+                {crawling
+                  ? latestCrawl?.status === "running"
+                    ? "Crawling…"
+                    : "Queued…"
+                  : "Crawl banks"}
+              </Button>
+              <Button
+                onClick={() => setManualDepositOpen(true)}
+                className="cursor-pointer"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Manual deposit
+              </Button>
+            </>
           )}
         </div>
       </div>

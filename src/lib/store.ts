@@ -7,6 +7,7 @@ import type {
   BankTransfer,
   BonusOption,
   BonusPlan,
+  BotCommand,
   CompanyView,
   BotHealth,
   Deposit,
@@ -77,6 +78,7 @@ type StateResponse = {
   bonusPlans: BonusPlan[];
   expenses: Expense[];
   botHealth: BotHealth[];
+  botCommands: BotCommand[];
   gameAccountStock: GameAccountStock[];
   settings: ServerSettings;
 };
@@ -98,6 +100,8 @@ type Store = {
   bonusPlans: BonusPlan[];
   expenses: Expense[];
   botHealth: BotHealth[];
+  /** Recent on-demand agent commands — drives the Crawl banks button. */
+  botCommands: BotCommand[];
   gameAccountStock: GameAccountStock[];
   settings: ServerSettings;
   notifications: Notification[];
@@ -162,6 +166,13 @@ type Store = {
   completeDeposit: (depositId: number) => Promise<MutationResult>;
   rejectDeposit: (depositId: number) => Promise<MutationResult>;
   reprocessDeposit: (depositId: number) => Promise<MutationResult>;
+  /** Ask the agent to re-read the banks now instead of waiting for its sweep. */
+  requestBankCrawl: (input?: {
+    company_entity_id?: number | null;
+    bank_account_id?: number | null;
+  }) => Promise<
+    MutationResult & { deduped?: boolean; agentOnline?: boolean }
+  >;
   createDepositIntent: (input: {
     player_id: number;
     amount: number;
@@ -430,6 +441,7 @@ export const useStore = create<Store>((set, get) => {
     bonusPlans: [],
     expenses: [],
     botHealth: [],
+    botCommands: [],
     gameAccountStock: [],
     settings: {},
     notifications: [],
@@ -662,6 +674,42 @@ export const useStore = create<Store>((set, get) => {
       });
       if (!result.ok) await get().refresh();
       return result;
+    },
+
+    requestBankCrawl: async (input) => {
+      const res = await api<{
+        command: BotCommand;
+        deduped: boolean;
+        agent_online: boolean;
+      }>("/api/bot-commands", {
+        method: "POST",
+        body: JSON.stringify({
+          command: "crawl_bank",
+          company_entity_id: input?.company_entity_id ?? null,
+          bank_account_id: input?.bank_account_id ?? null,
+        }),
+      });
+      if (!res.ok) return { ok: false, error: res.error };
+
+      // Put the queued command into state now rather than waiting up to 10s for
+      // the next poll — the button has to show "Crawling…" on the click that
+      // caused it, or the user presses it again.
+      const command = res.data?.command;
+      if (command) {
+        set({
+          botCommands: [
+            command,
+            ...get().botCommands.filter(
+              (c) => c.command_id !== command.command_id,
+            ),
+          ],
+        });
+      }
+      return {
+        ok: true,
+        deduped: res.data?.deduped ?? false,
+        agentOnline: res.data?.agent_online ?? false,
+      };
     },
 
     createDepositIntent: (input) =>

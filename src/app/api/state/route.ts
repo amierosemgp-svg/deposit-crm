@@ -4,6 +4,7 @@ import {
   bankAccounts,
   bankTransfers,
   bonusPlans,
+  botCommands,
   botHealth,
   deposits,
   expenses,
@@ -25,6 +26,7 @@ import {
   visibleEntityTree,
 } from "@/lib/api-helpers";
 import { poolStock } from "@/lib/game-account-pool";
+import { expireStaleBotCommands } from "@/lib/bot-commands";
 
 /**
  * GET /api/state — the CRM's single scoped hydration endpoint.
@@ -39,6 +41,9 @@ export async function GET() {
     // window expired, and restart any game transfer the agent has gone quiet on.
     await autoConfirmExpiredTransfers();
     await retryStuckGameTransfers();
+    // …and settle any on-demand agent command nobody picked up or finished, so
+    // a crawl requested while the agent was down never fires hours late.
+    await expireStaleBotCommands();
 
     const entityTree = await visibleEntityTree(user);
     const entityIds = await visibleEntityIds(user);
@@ -200,6 +205,26 @@ export async function GET() {
       .from(botHealth)
       .orderBy(desc(botHealth.last_heartbeat_at));
 
+    // On-demand commands (the Crawl banks button). Only the recent tail: the UI
+    // needs the one in flight and the last outcome, not the history. Unscoped
+    // commands crawl every bank, this user's included, so they come too.
+    const scopedCommands = await db
+      .select()
+      .from(botCommands)
+      .where(
+        user.companyIds === null
+          ? undefined
+          : or(
+              isNull(botCommands.company_entity_id),
+              inArray(
+                botCommands.company_entity_id,
+                companyIds.length ? companyIds : [-1],
+              ),
+            ),
+      )
+      .orderBy(desc(botCommands.command_id))
+      .limit(20);
+
     // Operational expenses are admin-only.
     const scopedExpenses =
       user.role === "super_admin"
@@ -238,6 +263,7 @@ export async function GET() {
       bonusPlans: scopedBonusPlans,
       expenses: scopedExpenses,
       botHealth: bots,
+      botCommands: scopedCommands,
       // Counts only — how many pre-registered accounts are left per game, so
       // the UI can warn before the pool runs dry. The accounts themselves are
       // never shipped to the browser.

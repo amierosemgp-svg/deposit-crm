@@ -57,6 +57,37 @@ snapshots the percentage and amount it was given.
 An existing database needs `migrations/2026-08-16-bonus-plans.sql`; a fresh
 `pnpm db:push` creates it all.
 
+## Crawl banks (on-demand agent commands)
+
+The agent sweeps the banks on its own cycle. When that is too slow — a player
+says they've paid and CS is watching the Deposits page — the **Crawl banks**
+button queues a one-off job in `bot_commands` for the agent to pick up.
+
+The CRM never calls into the agent; this is still a pull. CS queues, the agent
+polls `GET /api/bot/commands?status=pending`, claims it with
+`PATCH /api/bot/commands/:id/status`, and reports counts back in `result` —
+which is what the button's tooltip shows ("2 new deposits").
+
+| Status | Means |
+|---|---|
+| `pending` | queued, no agent has taken it |
+| `running` | an agent claimed it (`bot_id` says which) |
+| `completed` / `failed` | the agent reported back |
+| `expired` | nobody claimed it inside 10 minutes |
+
+**The 10-minute TTL is the point.** A crawl requested while the agent is down
+must not fire hours later: by then the scheduled sweep has covered it and nobody
+is waiting on it. The sweep in `src/lib/bot-commands.ts` runs lazily on the
+CRM's state poll and on every agent poll — no cron needed. A command claimed and
+then abandoned for 10 minutes is failed rather than expired: that one is a fault
+worth seeing, and leaving it `running` would block the next crawl of the same
+target.
+
+Pressing the button twice does not queue two crawls — the second request returns
+the open one. Nothing on a command moves money, so a failure reverses nothing.
+
+An existing database needs `migrations/2026-08-21-bot-commands.sql`.
+
 ## System log
 
 Three tables hold "what happened", and the **System Log** page (leaders and the

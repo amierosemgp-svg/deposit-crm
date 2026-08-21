@@ -120,6 +120,38 @@ export const botEventLevelEnum = pgEnum("bot_event_level", [
   "error",
 ]);
 
+/**
+ * What the CRM is asking the agent to go and do, right now.
+ *
+ *   crawl_bank — re-read the online-banking transaction list for the target
+ *   account(s) immediately, instead of waiting for the next scheduled sweep.
+ *
+ * One value today; it is an enum because the next on-demand job (re-check a
+ * kiosk balance, re-read a provider back-office) belongs in the same queue and
+ * should not need a second table.
+ */
+export const botCommandEnum = pgEnum("bot_command", ["crawl_bank"]);
+
+/**
+ * An on-demand command's lifecycle:
+ *
+ *   pending ──agent claims──▶ running ──▶ completed
+ *      │                         └──────▶ failed
+ *      └── nobody claimed in time ──────▶ expired
+ *
+ * "expired" is the one that matters operationally: a crawl someone asked for at
+ * 09:00 must not fire at 14:00 when the agent finally comes back up. By then
+ * the scheduled sweep has long since covered it, and the CS who pressed the
+ * button has stopped waiting. See BOT_COMMAND_TTL_MS.
+ */
+export const botCommandStatusEnum = pgEnum("bot_command_status", [
+  "pending",
+  "running",
+  "completed",
+  "failed",
+  "expired",
+]);
+
 export const poolAccountStatusEnum = pgEnum("pool_account_status", [
   // Registered at the provider, not yet handed to a player.
   "available",
@@ -887,6 +919,55 @@ export const botEvents = pgTable("bot_events", {
   occurred_at: timestamp("occurred_at", { withTimezone: true, mode: "string" })
     .notNull()
     .defaultNow(),
+  created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .notNull()
+    .defaultNow(),
+});
+
+/**
+ * On-demand work the CRM has asked the agent to do — a queue of one-off jobs,
+ * not a schedule.
+ *
+ * The agent already sweeps the banks on its own cycle. This table exists for
+ * the moments that cycle is too slow: a player says "I've paid", CS presses
+ * Crawl banks on the Deposits page, and the agent goes and looks now rather
+ * than at the top of the next sweep.
+ *
+ * Deliberately shaped like `game_transfers`: the agent polls for `pending`,
+ * claims one by moving it to `running`, then reports `completed`/`failed`.
+ * Unlike a transfer, a command carries no money and nothing is reversed when
+ * one fails — the worst case is that the sweep picks the transactions up a few
+ * minutes later.
+ */
+export const botCommands = pgTable("bot_commands", {
+  command_id: serial("command_id").primaryKey(),
+  command: botCommandEnum("command").notNull(),
+  status: botCommandStatusEnum("status").notNull().default("pending"),
+  // Null = every active deposit account in scope. Set to crawl one account.
+  bank_account_id: integer("bank_account_id").references(
+    () => bankAccounts.account_id,
+  ),
+  // The company the request was made under, from the requester's scope. Null =
+  // unscoped (a super admin with no company selected) — crawl everything.
+  company_entity_id: integer("company_entity_id").references(
+    () => entities.entity_id,
+  ),
+  // Null when the system queued it rather than a person.
+  requested_by_user_id: integer("requested_by_user_id").references(
+    () => users.user_id,
+  ),
+  // Which agent process claimed it, so a command stuck in "running" points at
+  // the bot to go and look at.
+  bot_id: varchar("bot_id", { length: 80 }),
+  // Whatever the agent wants to report back: accounts crawled, transactions
+  // seen, deposits created. Free-form so a new counter needs no migration.
+  result: jsonb("result").$type<Record<string, unknown>>(),
+  error: text("error"),
+  // Past this, an unclaimed command is swept to "expired" — see the enum note.
+  expires_at: timestamp("expires_at", { withTimezone: true, mode: "string" })
+    .notNull(),
+  claimed_at: timestamp("claimed_at", { withTimezone: true, mode: "string" }),
+  completed_at: timestamp("completed_at", { withTimezone: true, mode: "string" }),
   created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
     .notNull()
     .defaultNow(),
