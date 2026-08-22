@@ -1001,23 +1001,44 @@ export default function DepositsPage() {
                       <td className="px-3 pt-2.5 pb-2.5">
                         <div className="flex min-h-7 flex-wrap items-center gap-1.5">
                           {d.player_id !== null ? (
-                            <PlayerNameLink playerId={d.player_id}>
-                              {d.player_username ?? `P-${d.player_id}`}
-                            </PlayerNameLink>
+                            <>
+                              <PlayerNameLink playerId={d.player_id}>
+                                {d.player_username ?? `P-${d.player_id}`}
+                              </PlayerNameLink>
+                              {/* Already matched — swapping the player is a
+                                  correction, not the row's main business, so it
+                                  stays a quiet inline link. */}
+                              {editable && (
+                                <button
+                                  type="button"
+                                  onClick={() => setAssignTargets([d.deposit_id])}
+                                  title="Change the player"
+                                  className="cursor-pointer text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                                >
+                                  change
+                                </button>
+                              )}
+                            </>
+                          ) : editable ? (
+                            // Nothing else can happen to an unmatched deposit
+                            // until someone picks the player — it can't be
+                            // approved, bonused or topped up. That makes this
+                            // the row's one blocking action, so it gets a
+                            // button rather than a word to spot.
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              onClick={() => setAssignTargets([d.deposit_id])}
+                              title="Assign a player to this deposit"
+                              className="cursor-pointer"
+                            >
+                              <UserPlus className="h-3 w-3" />
+                              Assign player
+                            </Button>
                           ) : (
                             <span className="text-[12px] italic text-muted-foreground">
                               Unmatched
                             </span>
-                          )}
-                          {editable && (
-                            <button
-                              type="button"
-                              onClick={() => setAssignTargets([d.deposit_id])}
-                              title={d.player_id === null ? "Assign a player" : "Change the player"}
-                              className="cursor-pointer text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-                            >
-                              {d.player_id === null ? "assign" : "change"}
-                            </button>
                           )}
                         </div>
 
