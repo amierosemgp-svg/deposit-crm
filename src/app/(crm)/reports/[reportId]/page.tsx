@@ -189,6 +189,14 @@ export default function ReportDetailPage() {
       ),
       csv: iso.slice(0, 16).replace("T", " "),
     });
+    /** when(), for a moment that may not have arrived — an unapproved deposit. */
+    const whenOrNever = (iso: string | null | undefined): Cell =>
+      iso
+        ? when(iso)
+        : {
+            node: <span className="text-muted-foreground">—</span>,
+            csv: "",
+          };
     const badge = (s: DepositStatus | WithdrawalStatus): Cell => ({
       node: <StatusBadge status={s} />,
       csv: s,
@@ -200,6 +208,7 @@ export default function ReportDetailPage() {
           key: d.deposit_id,
           cells: [
             when(d.deposit_date),
+            whenOrNever(d.approved_at),
             mono(d.transaction_ref),
             text(playerLabelOf(d.player_id, d.player_username)),
             text(companyNameOf(d.company_entity_id)),
@@ -226,6 +235,7 @@ export default function ReportDetailPage() {
         return {
           headers: [
             { label: "Date" },
+            { label: "Approved" },
             { label: "Ref" },
             { label: "Player" },
             { label: "Company" },
@@ -239,6 +249,7 @@ export default function ReportDetailPage() {
           rows,
           totals: [
             "Totals",
+            null,
             null,
             null,
             null,

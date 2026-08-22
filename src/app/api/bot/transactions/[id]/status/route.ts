@@ -177,6 +177,14 @@ export async function PATCH(
         await maybeCreateReferralBonus(txn, locked.deposit_id);
       }
 
+      // The agent can approve too — driving a deposit out of pending/matched is
+      // the same decision CS makes with the Approve button, so it stamps the
+      // same column. Only when there isn't one already: the first approval
+      // wins, so a later processing → completed never rewrites the moment.
+      const approvesNow =
+        (locked.status === "pending" || locked.status === "matched") &&
+        ["approved", "processing", "completed"].includes(body.status);
+
       const [saved] = await txn
         .update(deposits)
         .set({
@@ -184,6 +192,7 @@ export async function PATCH(
           ...(body.game_topup_reference
             ? { game_topup_reference: body.game_topup_reference }
             : {}),
+          ...(approvesNow && !locked.approved_at ? { approved_at: nowIso } : {}),
           updated_at: nowIso,
         })
         .where(eq(deposits.deposit_id, locked.deposit_id))

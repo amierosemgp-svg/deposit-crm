@@ -248,6 +248,10 @@ async function main() {
   ]);
 
   console.log("Seeding deposits…");
+  // Anything past approval (approved/processing/completed/failed) carries an
+  // approved_at a realistic queue-wait after matched_at — that gap is what the
+  // Deposits page and the Daily Deposits report read. Rows still waiting on CS
+  // (matched, pending, pending_match) deliberately have none.
   const depositRows = [
     {
       external_id: "05_Jul_2026_Hello_AHMAD_FAIZAL_*Fund_Transfer_1.0",
@@ -268,6 +272,7 @@ async function main() {
       selected_game: "Mega888",
       status: "completed" as const,
       matched_at: day(5, 10, 13),
+      approved_at: day(5, 10, 31),
       handled_by_user_id: cs1.user_id,
       game_topup_reference: "MG-TOPUP-88121",
     },
@@ -290,6 +295,7 @@ async function main() {
       selected_game: "Pussy888",
       status: "completed" as const,
       matched_at: day(8, 21, 42),
+      approved_at: day(8, 22, 15),
       handled_by_user_id: cs1.user_id,
       game_topup_reference: "PS-TOPUP-40233",
     },
@@ -312,6 +318,7 @@ async function main() {
       selected_game: "918Kiss",
       status: "completed" as const,
       matched_at: day(12, 15, 6),
+      approved_at: day(12, 15, 20),
       handled_by_user_id: cs1.user_id,
       game_topup_reference: "KS-TOPUP-77410",
     },
@@ -334,6 +341,7 @@ async function main() {
       selected_game: "XE88",
       status: "approved" as const,
       matched_at: day(16, 12, 33),
+      approved_at: day(16, 12, 47),
       handled_by_user_id: cs1.user_id,
     },
     {
@@ -355,6 +363,7 @@ async function main() {
       selected_game: "Mega888",
       status: "processing" as const,
       matched_at: day(18, 9, 18),
+      approved_at: day(18, 9, 26),
       handled_by_user_id: cs1.user_id,
     },
     {
@@ -413,6 +422,7 @@ async function main() {
       selected_game: "Pussy888",
       status: "failed" as const,
       matched_at: day(14, 22, 12),
+      approved_at: day(14, 22, 29),
       handled_by_user_id: cs1.user_id,
     },
     {

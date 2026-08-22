@@ -467,6 +467,23 @@ export const deposits = pgTable("deposits", {
   // a human approves → processing → completes (or rejects) it.
   skip_bot: boolean("skip_bot").notNull().default(false),
   matched_at: timestamp("matched_at", { withTimezone: true, mode: "string" }),
+  /**
+   * When the deposit stopped waiting on a human — the moment it was approved
+   * and dispatched, whether by CS pressing Approve or by the agent driving it
+   * out of pending/matched itself.
+   *
+   * Distinct from `updated_at`, which every later transition overwrites, and
+   * from `deposit_date`, which is when the money arrived. The gap between the
+   * two is the queue time CS is measured on, so it needs a column of its own.
+   *
+   * Set once and only once: the *first* approval wins, so a later
+   * processing→completed never rewrites it. Cleared by a reprocess, because a
+   * deposit sent back to pending is genuinely waiting on a human again.
+   *
+   * Null on deposits that have never been approved — and on ones approved
+   * before this column existed whose ledger left no trace of the moment.
+   */
+  approved_at: timestamp("approved_at", { withTimezone: true, mode: "string" }),
   handled_by_user_id: integer("handled_by_user_id").references(() => users.user_id),
   // The CS agent who claimed this deposit ("Assign to me").
   assigned_to_user_id: integer("assigned_to_user_id").references(

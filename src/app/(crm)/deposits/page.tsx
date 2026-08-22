@@ -2,7 +2,12 @@
 
 import { useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
-import { formatRM, formatRelative, formatShortDateTime } from "@/lib/format";
+import {
+  formatDuration,
+  formatRM,
+  formatRelative,
+  formatShortDateTime,
+} from "@/lib/format";
 import {
   Select,
   SelectContent,
@@ -143,6 +148,13 @@ export default function DepositsPage() {
   // what it was.
   const [sourceFilter, setSourceFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("pending");
+  // Which timestamp the date range applies to. "deposit" = when the money
+  // landed, "approved" = when CS let it go. They answer different questions —
+  // "what came in yesterday" vs "what did we clear yesterday" — so the range is
+  // useless without saying which one it means.
+  const [dateBasis, setDateBasis] = useState<"deposit" | "approved">("deposit");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [approvingId, setApprovingId] = useState<number | null>(null);
   // Deposit awaiting a confirmed approve (skip-agent rows) / reject / bulk approve.
@@ -179,6 +191,19 @@ export default function DepositsPage() {
         (d) => sourceFilter === "all" || (d.source ?? "bot") === sourceFilter,
       )
       .filter((d) => {
+        if (!dateFrom && !dateTo) return true;
+        const stamp =
+          dateBasis === "approved" ? d.approved_at : d.deposit_date;
+        // Filtering by approval date means "show me what was approved" — a
+        // deposit still waiting for CS has no answer, so it is out of every
+        // range rather than silently counted as day zero.
+        if (!stamp) return false;
+        const day = stamp.slice(0, 10);
+        if (dateFrom && day < dateFrom) return false;
+        if (dateTo && day > dateTo) return false;
+        return true;
+      })
+      .filter((d) => {
         if (!q) return true;
         return [
           d.transaction_ref,
@@ -196,7 +221,15 @@ export default function DepositsPage() {
           .toLowerCase()
           .includes(q);
       });
-  }, [scopedDeposits, bankFilter, sourceFilter, searchQuery]);
+  }, [
+    scopedDeposits,
+    bankFilter,
+    sourceFilter,
+    searchQuery,
+    dateBasis,
+    dateFrom,
+    dateTo,
+  ]);
 
   const statusCounts = useMemo(() => {
     const m = new Map<string, number>();
@@ -463,6 +496,7 @@ export default function DepositsPage() {
     const header = [
       "Deposit ID",
       "Date",
+      "Approved",
       "Transaction Ref",
       "Player",
       "Bank Description",
@@ -482,6 +516,7 @@ export default function DepositsPage() {
     const rows = filtered.map((d) => [
       d.deposit_id,
       d.deposit_date,
+      d.approved_at ?? "",
       d.transaction_ref,
       d.player_username ?? "",
       d.bank_description ?? "",
@@ -612,6 +647,56 @@ export default function DepositsPage() {
               <SelectItem value="manual">Manual</SelectItem>
             </SelectContent>
           </Select>
+          <Select
+            value={dateBasis}
+            onValueChange={(v) =>
+              setDateBasis((v as "deposit" | "approved") ?? "deposit")
+            }
+            items={[
+              { value: "deposit", label: "Deposit date" },
+              { value: "approved", label: "Approval date" },
+            ]}
+          >
+            <SelectTrigger className="h-8 w-[135px] cursor-pointer">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="deposit">Deposit date</SelectItem>
+              <SelectItem value="approved">Approval date</SelectItem>
+            </SelectContent>
+          </Select>
+          <Input
+            type="date"
+            value={dateFrom}
+            max={dateTo || undefined}
+            onChange={(e) => setDateFrom(e.target.value)}
+            aria-label={`From ${dateBasis === "approved" ? "approval" : "deposit"} date`}
+            className="h-8 w-[135px] cursor-pointer"
+          />
+          <span className="text-[11px] text-muted-foreground">to</span>
+          <Input
+            type="date"
+            value={dateTo}
+            min={dateFrom || undefined}
+            onChange={(e) => setDateTo(e.target.value)}
+            aria-label={`To ${dateBasis === "approved" ? "approval" : "deposit"} date`}
+            className="h-8 w-[135px] cursor-pointer"
+          />
+          {(dateFrom || dateTo) && (
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() => {
+                setDateFrom("");
+                setDateTo("");
+              }}
+              className="cursor-pointer text-muted-foreground"
+              title="Clear the date range"
+            >
+              <X className="h-3 w-3" />
+              Clear
+            </Button>
+          )}
           <div className="relative">
             <Search className="absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -843,8 +928,22 @@ export default function DepositsPage() {
                         </td>
                       )}
                       <td className="px-3 pt-2.5 pb-2.5 whitespace-nowrap">
-                        <div className="flex min-h-7 items-center text-[12px] font-medium">
-                          {formatShortDateTime(d.deposit_date)}
+                        <div className="flex min-h-7 flex-col justify-center">
+                          <span className="text-[12px] font-medium">
+                            {formatShortDateTime(d.deposit_date)}
+                          </span>
+                          {/* Approved-at only once there is one. A deposit
+                              still in the queue shows nothing rather than an
+                              em-dash — the blank row IS the "not yet". */}
+                          {d.approved_at && (
+                            <span
+                              className="flex items-center gap-1 text-[10.5px] leading-tight font-medium text-emerald-700 dark:text-emerald-300"
+                              title={`Approved ${formatShortDateTime(d.approved_at)} · ${formatDuration(d.deposit_date, d.approved_at)} after the deposit landed`}
+                            >
+                              <CheckCircle2 className="h-2.5 w-2.5 shrink-0" />
+                              {formatShortDateTime(d.approved_at)}
+                            </span>
+                          )}
                         </div>
                       </td>
                       <td className="px-3 pt-2.5 pb-2.5">

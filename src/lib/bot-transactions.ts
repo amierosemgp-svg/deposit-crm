@@ -152,6 +152,7 @@ export function depositToBotJson(
     game_accounts: gameAccounts,
     game_topup_reference: d.game_topup_reference,
     matched_at: d.matched_at,
+    approved_at: d.approved_at,
     receipt_url: d.receipt_url,
     created_at: d.created_at,
     updated_at: d.updated_at,

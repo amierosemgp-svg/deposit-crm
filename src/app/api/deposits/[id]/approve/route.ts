@@ -61,6 +61,9 @@ export async function POST(
         .set({
           status: "processing",
           handled_by_user_id: user.user_id,
+          // The moment it stopped waiting on a human. Kept apart from
+          // updated_at, which the completion overwrites minutes later.
+          approved_at: nowIso,
           updated_at: nowIso,
         })
         .where(eq(deposits.deposit_id, depositId))

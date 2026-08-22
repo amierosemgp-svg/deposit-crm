@@ -252,6 +252,11 @@ export type Deposit = {
   source?: TransactionSource;
   skip_bot?: boolean;
   matched_at?: string | null;
+  /**
+   * When it stopped waiting on a human. Null until approved — and on deposits
+   * approved before the column existed. Cleared by a reprocess.
+   */
+  approved_at?: string | null;
   handled_by_user_id?: number | null;
   /** The CS agent who claimed it. Null until someone assigns it. */
   assigned_to_user_id?: number | null;

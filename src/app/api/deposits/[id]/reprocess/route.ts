@@ -44,6 +44,10 @@ export async function POST(
         .set({
           status: "pending",
           game_topup_reference: null,
+          // It is genuinely waiting on a human again, so the old approval no
+          // longer describes it. Re-approving stamps a fresh one; leaving the
+          // stale time would make the queue-time figures nonsense.
+          approved_at: null,
           updated_at: nowIso,
         })
         .where(eq(deposits.deposit_id, depositId))
