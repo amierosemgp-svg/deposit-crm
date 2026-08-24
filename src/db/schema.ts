@@ -415,6 +415,11 @@ export const deposits = pgTable("deposits", {
   deposit_date: timestamp("deposit_date", { withTimezone: true, mode: "string" })
     .notNull()
     .defaultNow(),
+  // Did the agent report a time of day, or only a calendar date? A date-only
+  // report ("25 Jun 2026") is stored as midnight UTC, and showing that back as
+  // a clock reading invents precision nobody supplied — the UI renders just the
+  // date when this is false.
+  deposit_time_known: boolean("deposit_time_known").notNull().default(true),
   player_id: integer("player_id").references(() => players.player_id),
   player_username: varchar("player_username", { length: 60 }),
   company_entity_id: integer("company_entity_id").references(

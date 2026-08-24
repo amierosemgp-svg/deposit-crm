@@ -76,9 +76,12 @@ export async function PATCH(
       bank_description: body.description ?? row.bank_description,
       external_id: body.external_id ?? row.external_id,
       receipt_url: body.receipt_url ?? row.receipt_url,
-      deposit_date: body.date
-        ? parseBotDate(body.date, body.extracted_at)
-        : row.deposit_date,
+      ...(body.date
+        ? (() => {
+            const d = parseBotDate(body.date, body.extracted_at);
+            return { deposit_date: d.iso, deposit_time_known: d.timeKnown };
+          })()
+        : {}),
       updated_at: nowIso,
     })
     .where(eq(deposits.deposit_id, row.deposit_id))

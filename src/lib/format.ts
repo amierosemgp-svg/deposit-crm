@@ -25,6 +25,12 @@ export function formatShortDateTime(iso: string): string {
 }
 
 /** Wall-clock only (18:42) — for when the date is already on the row. */
+/** Calendar day only (20 Aug) — for a deposit that reported no time of day. */
+export function formatShortDate(iso: string): string {
+  const d = new Date(iso);
+  return `${String(d.getDate()).padStart(2, "0")} ${d.toLocaleString("en-US", { month: "short" })}`;
+}
+
 export function formatClock(iso: string): string {
   const d = new Date(iso);
   const hh = String(d.getHours()).padStart(2, "0");

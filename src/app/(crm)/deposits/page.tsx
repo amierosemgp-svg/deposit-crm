@@ -6,6 +6,7 @@ import {
   formatDuration,
   formatRM,
   formatRelative,
+  formatShortDate,
   formatShortDateTime,
 } from "@/lib/format";
 import {
@@ -863,7 +864,9 @@ export default function DepositsPage() {
                     />
                   </th>
                 )}
-                <th className="px-3 py-2.5 text-left font-medium">When</th>
+                <th className="px-3 py-2.5 text-left font-medium">Created at</th>
+                <th className="px-3 py-2.5 text-left font-medium">Deposit at</th>
+                <th className="px-3 py-2.5 text-left font-medium">Approved at</th>
                 <th className="px-3 py-2.5 text-left font-medium">Bank</th>
                 <th className="px-3 py-2.5 text-right font-medium">Amount</th>
                 <th className="px-3 py-2.5 text-left font-medium">Status</th>
@@ -927,17 +930,44 @@ export default function DepositsPage() {
                           </div>
                         </td>
                       )}
+                      {/* When the CRM wrote the row down. Always known and
+                          always ours, so it is the one column that can be
+                          trusted to be exact. */}
                       <td className="px-3 pt-2.5 pb-2.5 whitespace-nowrap">
-                        <div className="flex min-h-7 flex-col justify-center">
-                          <span className="text-[12px] font-medium">
-                            {formatShortDateTime(d.deposit_date)}
+                        <div className="flex min-h-7 items-center">
+                          <span className="text-[12px] text-muted-foreground">
+                            {formatShortDateTime(d.created_at)}
                           </span>
-                          {/* Approved-at only once there is one. A deposit
-                              still in the queue shows nothing rather than an
-                              em-dash — the blank row IS the "not yet". */}
+                        </div>
+                      </td>
+                      {/* When the money actually reached the bank, per the
+                          agent. Date-only reports print the date alone rather
+                          than a midnight-parse dressed up as a clock reading. */}
+                      <td className="px-3 pt-2.5 pb-2.5 whitespace-nowrap">
+                        <div className="flex min-h-7 items-center gap-1">
+                          <span className="text-[12px] font-medium">
+                            {d.deposit_time_known
+                              ? formatShortDateTime(d.deposit_date)
+                              : formatShortDate(d.deposit_date)}
+                          </span>
+                          {!d.deposit_time_known && (
+                            <span
+                              className="text-[10px] text-muted-foreground"
+                              title="The bank statement gave a date but no time of day"
+                            >
+                              no time
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      {/* Approved-at only once there is one. A deposit still in
+                          the queue shows nothing rather than an em-dash — the
+                          blank cell IS the "not yet". */}
+                      <td className="px-3 pt-2.5 pb-2.5 whitespace-nowrap">
+                        <div className="flex min-h-7 items-center">
                           {d.approved_at && (
                             <span
-                              className="flex items-center gap-1 text-[10.5px] leading-tight font-medium text-emerald-700 dark:text-emerald-300"
+                              className="flex items-center gap-1 text-[12px] leading-tight font-medium text-emerald-700 dark:text-emerald-300"
                               title={`Approved ${formatShortDateTime(d.approved_at)} · ${formatDuration(d.deposit_date, d.approved_at)} after the deposit landed`}
                             >
                               <CheckCircle2 className="h-2.5 w-2.5 shrink-0" />
@@ -1110,11 +1140,11 @@ export default function DepositsPage() {
                     {/* Second row: how the deposit arrived — badges, reference,
                         then the bank remark in full — with every action on the
                         right. Indented past the checkbox so it lines up under
-                        the When column, and set in its own card rather than
-                        ruled off, so the pair reads as one item. */}
+                        the timestamp columns, and set in its own card rather
+                        than ruled off, so the pair reads as one item. */}
                     <tr>
                       {!isViewer && <td className="px-3" />}
-                      <td colSpan={7} className="px-3 pb-2.5">
+                      <td colSpan={9} className="px-3 pb-2.5">
                         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-lg bg-muted/50 px-3 py-2">
                           <div className="min-w-0 flex-1 basis-[280px]">
                             <p className="text-[12px] leading-snug break-words">

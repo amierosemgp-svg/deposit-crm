@@ -452,6 +452,7 @@ export async function POST(request: Request) {
   const account = await resolveReceivingAccount(input);
 
   const nowIso = new Date().toISOString();
+  const depositDate = parseBotDate(input.date, input.extracted_at);
   const [created] = await db
     .insert(deposits)
     .values({
@@ -459,7 +460,8 @@ export async function POST(request: Request) {
       transaction_ref: input.external_id
         ? `BOT-${input.external_id.slice(0, 60)}`
         : `BOT-${Date.now()}`,
-      deposit_date: parseBotDate(input.date, input.extracted_at),
+      deposit_date: depositDate.iso,
+      deposit_time_known: depositDate.timeKnown,
       player_id: player?.player_id ?? null,
       player_username: player?.username ?? null,
       // Explicit agent-stated entity wins; then the matched player's company, the

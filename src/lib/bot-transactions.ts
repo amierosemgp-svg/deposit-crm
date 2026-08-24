@@ -24,16 +24,64 @@ export type BotTransactionInput = {
   company_entity_id?: number; // which company the deposit belongs to, if the bot knows
 };
 
-export function parseBotDate(date?: string, extractedAt?: string): string {
+/**
+ * The agent runs on Malaysian time and sends wall-clock strings with no offset
+ * ("2026-06-29T13:38:04.268528"). JS reads those in the *server's* zone, and the
+ * server is UTC — so every one of them landed 8 hours in the future, stamping
+ * deposits as arriving after the CRM had already recorded them. Naive strings
+ * are therefore read as MYT; anything carrying its own offset is trusted as-is.
+ */
+const MYT_OFFSET = "+08:00";
+
+/** Has an explicit zone: trailing Z, or ±HH:MM after the time part. */
+function hasTimezone(value: string): boolean {
+  return /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value.trim());
+}
+
+/** "2026-06-29T13:38:04" / "2026-06-29 13:38:04" — a time, but no zone. */
+function isNaiveDateTime(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(value.trim());
+}
+
+function parseAsMyt(value: string): Date | null {
+  const raw = value.trim();
+  const candidate =
+    isNaiveDateTime(raw) && !hasTimezone(raw)
+      ? `${raw.replace(" ", "T")}${MYT_OFFSET}`
+      : raw;
+  const parsed = new Date(candidate);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+export type BotDate = {
+  /** The instant, in ISO/UTC — what goes in the column. */
+  iso: string;
+  /**
+   * Did the agent actually report a time of day? A date-only report ("25 Jun
+   * 2026") carries none, and rendering the parse artefact as a clock reading
+   * invents precision that was never there.
+   */
+  timeKnown: boolean;
+};
+
+export function parseBotDate(date?: string, extractedAt?: string): BotDate {
   if (date && date.toLowerCase() !== "today") {
-    const parsed = new Date(date);
-    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+    // Date-only ("25 Jun 2026", "2026-06-25"): keep the existing convention of
+    // midnight UTC. It renders as the right MYT calendar day, and the deposits
+    // filter buckets on the UTC date — moving it to MYT midnight would shift
+    // every such deposit into the previous day for filtering.
+    const parsed = parseAsMyt(date);
+    if (parsed) {
+      return { iso: parsed.toISOString(), timeKnown: isNaiveDateTime(date) || hasTimezone(date) };
+    }
   }
   if (extractedAt) {
-    const parsed = new Date(extractedAt);
-    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+    const parsed = parseAsMyt(extractedAt);
+    // When the agent scraped it — a close proxy for when the money landed, and
+    // the only time-of-day on offer for a date-only transaction.
+    if (parsed) return { iso: parsed.toISOString(), timeKnown: true };
   }
-  return new Date().toISOString();
+  return { iso: new Date().toISOString(), timeKnown: true };
 }
 
 /** Try to identify the player from the bank description (e.g. "MBB CT- TAN KIEN HUAT *Fund Transfer"). */

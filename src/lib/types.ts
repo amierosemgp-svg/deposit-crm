@@ -229,6 +229,8 @@ export type Deposit = {
   external_id?: string | null;
   transaction_ref: string;
   deposit_date: string;
+  /** False when only a calendar date was reported — render the date alone. */
+  deposit_time_known: boolean;
   player_id: number | null;
   player_username: string | null;
   company_entity_id: number | null;
