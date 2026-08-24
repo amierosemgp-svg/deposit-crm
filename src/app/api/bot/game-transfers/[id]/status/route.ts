@@ -17,6 +17,9 @@ import {
 const bodySchema = z.object({
   status: z.enum(["processing", "completed", "failed"]),
   note: z.string().max(500).optional(),
+  // What you actually moved. Authoritative — it wins over our cached balance,
+  // and it is the only way a transfer_all transfer learns its real figure.
+  amount: z.number().nonnegative().optional(),
 });
 
 /** Statuses a transfer can still be driven out of. */
@@ -34,7 +37,10 @@ const OPEN_STATUSES = ["pending", "solving", "processing"] as const;
  *     "pending" or "solving" only; claiming twice is a no-op, not an error, so
  *     a retried claim after a timeout is safe.
  *   - completed: credits move from_game → to_game atomically (validated under a
- *     row lock — the balance may have changed since the request).
+ *     row lock — the balance may have changed since the request). Send
+ *     `amount` — what you really moved; it overwrites our figure. Required in
+ *     practice for `transfer_all` transfers, which carry 0 until you say
+ *     otherwise.
  *   - failed: no credits move, nothing to reverse. Send a `note` saying why.
  *
  * Claiming is optional: an agent that goes straight from pending to completed
@@ -81,7 +87,12 @@ export async function PATCH(
       // only "go do something in the back-office" queue the agent polls.
       // POST /api/game-transfers rejects from === to, so nothing else can
       // produce this shape.
-      const creditIn = row.from_game === row.to_game;
+      const creditIn = row.from_game.toLowerCase() === row.to_game.toLowerCase();
+
+      // What actually moved. Starts as the requested figure and is replaced by
+      // the agent's own once it reports one; persisted onto the row below so
+      // the ledger and the CRM show the real number, not the placeholder.
+      let moved = row.transfer_amount;
 
       // Claiming: mark that the agent has started, and restart the stall clock so
       // the 5-minute sweep measures from "work began", not "CS asked".
@@ -119,11 +130,12 @@ export async function PATCH(
             .from(players)
             .where(eq(players.player_id, row.player_id));
           try {
+            moved = body.amount ?? row.transfer_amount;
             await creditRecommendBonus(txn, {
               playerId: row.player_id,
               companyEntityId: owner?.company_entity_id ?? null,
               gameName: row.to_game,
-              amount: row.transfer_amount,
+              amount: moved,
               nowIso,
             });
           } catch (e) {
@@ -134,49 +146,82 @@ export async function PATCH(
           }
         } else {
           // Re-validate the source balance atomically — it may have moved since
-          // the CS request created this transfer.
+          // the CS request created this transfer. Case-insensitive, matching the
+          // unique index on game_credits: the row may be spelled differently
+          // from the transfer that draws on it.
           const [fromCredit] = await txn
             .select()
             .from(gameCredits)
             .where(
               and(
                 eq(gameCredits.player_id, row.player_id),
-                eq(gameCredits.game_name, row.from_game),
+                sql`lower(${gameCredits.game_name}) = lower(${row.from_game})`,
               ),
             )
             .for("update");
           const fromBalance = fromCredit?.current_balance ?? 0;
-          if (fromBalance < row.transfer_amount) {
+
+          // What moved, in order of authority: the agent's own figure, then —
+          // for transfer_all, which carries no figure of its own — the whole
+          // source balance, then the amount CS asked for.
+          moved =
+            body.amount ?? (row.transfer_all ? fromBalance : row.transfer_amount);
+          if (moved <= 0) {
             throw new BotError(
               422,
-              `Insufficient ${row.from_game} balance (${fromBalance.toFixed(2)} available, ${row.transfer_amount.toFixed(2)} needed)`,
+              `Nothing to transfer from ${row.from_game} (balance ${fromBalance.toFixed(2)})`,
+            );
+          }
+          if (fromBalance < moved) {
+            throw new BotError(
+              422,
+              `Insufficient ${row.from_game} balance (${fromBalance.toFixed(2)} available, ${moved.toFixed(2)} needed)`,
             );
           }
 
+          // Write back under the spelling already on file, so a case variant in
+          // the transfer row can't fork the balance the index now forbids.
+          const fromName = fromCredit?.game_name ?? row.from_game;
           await txn
             .update(gameCredits)
             .set({
-              current_balance: +(fromBalance - row.transfer_amount).toFixed(2),
+              current_balance: +(fromBalance - moved).toFixed(2),
               last_updated_at: nowIso,
             })
             .where(
               and(
                 eq(gameCredits.player_id, row.player_id),
-                eq(gameCredits.game_name, row.from_game),
+                eq(gameCredits.game_name, fromName),
               ),
             );
+
+          // Same for the destination: resolve to the existing row's spelling
+          // before upserting, or the case-sensitive primary key would miss the
+          // conflict and the case-insensitive unique index would reject the
+          // insert outright.
+          const [toCredit] = await txn
+            .select({ game_name: gameCredits.game_name })
+            .from(gameCredits)
+            .where(
+              and(
+                eq(gameCredits.player_id, row.player_id),
+                sql`lower(${gameCredits.game_name}) = lower(${row.to_game})`,
+              ),
+            )
+            .for("update");
+          const toName = toCredit?.game_name ?? row.to_game;
           await txn
             .insert(gameCredits)
             .values({
               player_id: row.player_id,
-              game_name: row.to_game,
-              current_balance: row.transfer_amount,
+              game_name: toName,
+              current_balance: moved,
               last_updated_at: nowIso,
             })
             .onConflictDoUpdate({
               target: [gameCredits.player_id, gameCredits.game_name],
               set: {
-                current_balance: sql`${gameCredits.current_balance} + ${row.transfer_amount}`,
+                current_balance: sql`${gameCredits.current_balance} + ${moved}`,
                 last_updated_at: nowIso,
               },
             });
@@ -187,6 +232,9 @@ export async function PATCH(
         .update(gameTransfers)
         .set({
           status: body.status,
+          // Replace the placeholder with what was really moved, so the list,
+          // the ledger and any later reprocess all read the same number.
+          ...(body.status === "completed" ? { transfer_amount: moved } : {}),
           completed_at: nowIso,
           // Keep the reason on the row itself, not just buried in the audit
           // trail — CS reads it off the transfer list.
@@ -212,7 +260,7 @@ export async function PATCH(
         // A credit-in carries the bonus that queued it, so it lands in the
         // ledger under the same type as the hand-credited path.
         type: creditIn ? "recommend_bonus" : "game_transfer",
-        amount: row.transfer_amount,
+        amount: body.status === "completed" ? moved : row.transfer_amount,
         game_name: creditIn ? row.to_game : `${row.from_game} → ${row.to_game}`,
         reference_id: row.transfer_id,
         details: {
@@ -220,6 +268,11 @@ export async function PATCH(
           action: body.status,
           api_key_label: auth.label,
           note: body.note ?? null,
+          ...(row.transfer_all ? { transfer_all: true } : {}),
+          // Present when the agent's figure differed from the one requested.
+          ...(body.status === "completed" && moved !== row.transfer_amount
+            ? { requested_amount: row.transfer_amount, reported_amount: moved }
+            : {}),
         },
       });
 

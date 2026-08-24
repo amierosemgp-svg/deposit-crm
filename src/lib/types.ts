@@ -319,8 +319,11 @@ export type GameTransfer = {
   player_id: number;
   from_game: string;
   to_game: string;
+  /** 0 while transfer_all is set — not known until the agent reads the wallet. */
   transfer_amount: number;
   from_game_balance_before: number;
+  /** Move the whole source balance; the agent discovers the real figure. */
+  transfer_all: boolean;
   status: GameTransferStatus;
   /** The agent's reason for the outcome — why it failed, when it failed. */
   note: string | null;

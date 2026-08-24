@@ -185,7 +185,14 @@ export function gameTransferJson(
       accts?.find((g) => g.game_name === t.from_game)?.game_username ?? null,
     to_game_username:
       accts?.find((g) => g.game_name === t.to_game)?.game_username ?? null,
+    // 0 while transfer_all is true and the transfer is still open — the real
+    // figure is whatever you find in the wallet, and it lands here once you
+    // report completion.
     transfer_amount: t.transfer_amount,
+    // Move the WHOLE from_game balance, not transfer_amount. Our figure is a
+    // cache that lags the provider; yours is the truth. Send the amount you
+    // actually moved on PATCH /:id/status.
+    transfer_all: t.transfer_all,
     from_game_balance_before: t.from_game_balance_before,
     status: t.status,
     // Why it ended this way — the reason it failed, when it failed.

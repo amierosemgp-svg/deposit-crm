@@ -740,6 +740,12 @@ export const gameTransfers = pgTable("game_transfers", {
     scale: 2,
     mode: "number",
   }).notNull(),
+  // "Move the whole source wallet." game_credits is a cache that lags the
+  // provider, so resolving "all" to a number at request time posts a stale
+  // figure — the flag travels to the agent instead, which reads the real
+  // balance and reports back what it actually moved. transfer_amount stays 0
+  // until then. Mirrors withdrawals.withdraw_all.
+  transfer_all: boolean("transfer_all").notNull().default(false),
   status: gameTransferStatusEnum("status").notNull().default("completed"),
   // Why a transfer ended the way it did — the agent's `note` on
   // PATCH /:id/status. Its reason for failing, most usefully.

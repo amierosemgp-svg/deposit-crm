@@ -27,7 +27,7 @@ import { Label } from "@/components/ui/label";
 import { PlayerNameLink } from "@/components/player-name-link";
 import { StatusBadge } from "@/components/status-badge";
 import { ListLoading } from "@/components/list-loading";
-import { ArrowLeftRight, Loader2, Search, UserCheck, X } from "lucide-react";
+import { ArrowLeftRight, Loader2, RotateCw, Search, UserCheck, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /** Transfers the agent still has in hand — the only ones worth claiming. */
@@ -92,12 +92,14 @@ export default function GameTransferPage() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [bulkAssigning, setBulkAssigning] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [reprocessingId, setReprocessingId] = useState<number | null>(null);
 
   const transfers = useStore((s) => s.gameTransfers);
   const hydrated = useStore((s) => s.hydrated);
   const players = useStore((s) => s.players);
   const getBalance = useStore((s) => s.getCreditBalance);
   const createTransfer = useStore((s) => s.createGameTransfer);
+  const reprocessTransfer = useStore((s) => s.reprocessGameTransfer);
   const playerById = useStore((s) => s.playerById);
   const userName = useStore((s) => s.userName);
   const gamesFn = useStore((s) => s.games);
@@ -196,8 +198,15 @@ export default function GameTransferPage() {
   // Derived, not stamped into the field — switching the source game or a
   // refreshed balance keeps "transfer all" meaning the whole current balance.
   const amt = transferAll ? fromBal : Number(amount) || 0;
+  // Under "transfer all" the cached balance is not a gate — the agent moves
+  // whatever is really there, and an empty wallet comes back as a failure with
+  // a reason rather than a button that silently won't press.
   const canTransfer =
-    !!player && amt > 0 && amt <= fromBal && !!fromGame && !!toGame && fromGame !== toGame;
+    !!player &&
+    (transferAll || (amt > 0 && amt <= fromBal)) &&
+    !!fromGame &&
+    !!toGame &&
+    fromGame !== toGame;
 
   async function handleTransfer() {
     if (!player || !canTransfer || submitting) return;
@@ -206,7 +215,10 @@ export default function GameTransferPage() {
       playerId: player.player_id,
       fromGame,
       toGame,
-      amount: amt,
+      // Under "transfer all" the amount is deliberately not sent: the agent
+      // reads the real wallet, which our cached balance only approximates.
+      amount: transferAll ? undefined : amt,
+      transferAll,
     });
     setSubmitting(false);
     if (!res.ok) {
@@ -214,10 +226,33 @@ export default function GameTransferPage() {
       return;
     }
     toast.success(
-      `Transfer queued — ${formatRM(amt)} from ${fromGame} to ${toGame}, waiting for the agent`,
+      transferAll
+        ? `Transfer queued — all ${fromGame} credits to ${toGame}, waiting for the agent`
+        : `Transfer queued — ${formatRM(amt)} from ${fromGame} to ${toGame}, waiting for the agent`,
     );
     setAmount("");
     setTransferAll(false);
+  }
+
+  /**
+   * Re-queue a failed transfer. Nothing moved when it failed, so this is the
+   * same request again rather than a correction — the server re-checks the
+   * balance, which may have changed since.
+   */
+  async function handleReprocess(t: GameTransfer) {
+    if (reprocessingId !== null) return;
+    setReprocessingId(t.transfer_id);
+    const res = await reprocessTransfer(t.transfer_id);
+    setReprocessingId(null);
+    if (!res.ok) {
+      toast.error(res.error ?? "Could not reprocess");
+      return;
+    }
+    toast.success(
+      t.transfer_all
+        ? `Transfer re-queued — all ${t.from_game} credits to ${t.to_game}, waiting for the agent`
+        : `Transfer re-queued — ${formatRM(t.transfer_amount)} from ${t.from_game} to ${t.to_game}, waiting for the agent`,
+    );
   }
 
   return (
@@ -317,8 +352,16 @@ export default function GameTransferPage() {
 
               <div className="space-y-2">
                 <div className="flex items-center justify-between gap-3">
-                  <Label>Amount (RM)</Label>
-                  <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground select-none">
+                  {/* "Transfer all" means the whole current balance, which is
+                      already shown under From Game — so the field it would
+                      duplicate is dropped rather than filled in and disabled. */}
+                  {!transferAll && <Label>Amount (RM)</Label>}
+                  <label
+                    className={cn(
+                      "flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground select-none",
+                      transferAll && "ml-auto",
+                    )}
+                  >
                     <input
                       type="checkbox"
                       className="cursor-pointer"
@@ -329,17 +372,20 @@ export default function GameTransferPage() {
                     Transfer all
                   </label>
                 </div>
-                <Input
-                  type="number"
-                  value={transferAll ? fromBal.toFixed(2) : amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  disabled={transferAll}
-                  placeholder="0.00"
-                  min={0}
-                  max={fromBal}
-                />
-                {player && amt > fromBal && (
-                  <p className="text-[11px] text-red-600 dark:text-red-400">Exceeds current balance</p>
+                {!transferAll && (
+                  <>
+                    <Input
+                      type="number"
+                      value={amount}
+                      onChange={(e) => setAmount(e.target.value)}
+                      placeholder="0.00"
+                      min={0}
+                      max={fromBal}
+                    />
+                    {player && amt > fromBal && (
+                      <p className="text-[11px] text-red-600 dark:text-red-400">Exceeds current balance</p>
+                    )}
+                  </>
                 )}
               </div>
 
@@ -491,7 +537,19 @@ export default function GameTransferPage() {
                       <td className="px-3 py-2 text-[12px]">{t.from_game}</td>
                       <td className="px-3 py-2 text-[12px]">{t.to_game}</td>
                       <td className="px-3 py-2 text-right font-medium whitespace-nowrap">
-                        {formatRM(t.transfer_amount)}
+                        {/* 0 is a placeholder until the agent reports what it
+                            actually moved — showing RM 0.00 would read as a
+                            transfer of nothing. */}
+                        {t.transfer_all && t.transfer_amount === 0 ? (
+                          <span className="text-muted-foreground italic">All</span>
+                        ) : (
+                          <>
+                            {formatRM(t.transfer_amount)}
+                            {t.transfer_all && (
+                              <span className="ml-1 text-[10px] text-muted-foreground">all</span>
+                            )}
+                          </>
+                        )}
                       </td>
                       <td className="px-3 py-2 text-[12px] text-muted-foreground">
                         {userName(t.handled_by_user_id)}
@@ -537,6 +595,25 @@ export default function GameTransferPage() {
                           <p className="mt-1 text-[11px] italic text-muted-foreground">
                             No reason given
                           </p>
+                        )}
+                        {/* Sits under the reason it answers. A failed transfer
+                            moved nothing, so this re-queues the same move. */}
+                        {t.status === "failed" && !isViewer && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => void handleReprocess(t)}
+                            disabled={reprocessingId !== null}
+                            title="Queue this transfer for the agent again — nothing was moved when it failed"
+                            className="mt-1.5 h-7 cursor-pointer px-2 text-[11px]"
+                          >
+                            {reprocessingId === t.transfer_id ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <RotateCw className="h-3 w-3" />
+                            )}
+                            Reprocess
+                          </Button>
                         )}
                       </td>
                       <td className="px-3 py-2 align-top whitespace-nowrap text-[12px]">

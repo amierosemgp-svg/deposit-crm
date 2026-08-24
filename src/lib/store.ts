@@ -205,8 +205,15 @@ type Store = {
     playerId: number;
     fromGame: string;
     toGame: string;
-    amount: number;
+    /** Omit when transferAll is set — the agent discovers the figure. */
+    amount?: number;
+    transferAll?: boolean;
   }) => Promise<MutationResult>;
+  /**
+   * Put a failed transfer back in the agent's queue. Nothing moved when it
+   * failed, so this re-requests the same move rather than reversing anything.
+   */
+  reprocessGameTransfer: (transferId: number) => Promise<MutationResult>;
   /**
    * Claim transactions so other agents can see who's on them (or release
    * them). Pass `id` for one or `ids` for a batch; returns how many actually
@@ -746,7 +753,7 @@ export const useStore = create<Store>((set, get) => {
         { kind: "withdrawal", message: "Withdrawal marked as paid" },
       ),
 
-    createGameTransfer: ({ playerId, fromGame, toGame, amount }) =>
+    createGameTransfer: ({ playerId, fromGame, toGame, amount, transferAll }) =>
       mutate("/api/game-transfers", {
         method: "POST",
         body: JSON.stringify({
@@ -754,8 +761,12 @@ export const useStore = create<Store>((set, get) => {
           from_game: fromGame,
           to_game: toGame,
           amount,
+          transfer_all: transferAll ?? false,
         }),
       }),
+
+    reprocessGameTransfer: (transferId) =>
+      mutate(`/api/game-transfers/${transferId}/reprocess`, { method: "POST" }),
 
     setAssignment: async ({ kind, id, ids, assign = true }) => {
       // Optimistic, for the same reason updateDepositDraft is: awaiting a full
