@@ -3,7 +3,8 @@ import { z } from "zod";
 import { db } from "@/db";
 import { entities, players } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
-import { isUniqueViolation, jsonError, playerJson } from "@/lib/bot-crud";
+import { loadGameCatalogue, normaliseGameAccounts } from "@/lib/game-name";
+import { botErrorResponse, isUniqueViolation, jsonError, playerJson } from "@/lib/bot-crud";
 import {
   assignAccountFromPool,
   PoolError,
@@ -113,7 +114,9 @@ export async function POST(request: Request) {
         wechat_id: body.wechat_id,
         notes: body.notes,
         bank_accounts: body.bank_accounts,
-        game_accounts: body.game_accounts,
+        game_accounts: body.game_accounts
+          ? normaliseGameAccounts(body.game_accounts, await loadGameCatalogue())
+          : body.game_accounts,
       })
       .returning();
 
@@ -151,6 +154,8 @@ export async function POST(request: Request) {
     );
   } catch (e) {
     if (isUniqueViolation(e)) return jsonError("Username already exists", 409);
+    const domain = botErrorResponse(e);
+    if (domain) return domain;
     console.error(e);
     return jsonError("Server error", 500);
   }

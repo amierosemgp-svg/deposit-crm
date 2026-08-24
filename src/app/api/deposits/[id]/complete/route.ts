@@ -10,6 +10,7 @@ import {
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import { maybeCreateReferralBonus } from "@/lib/referral";
+import { balanceSyncedSince, canonicalise } from "@/lib/game-name";
 
 /**
  * POST /api/deposits/:id/complete — manual completion of a skip-agent deposit.
@@ -82,21 +83,33 @@ export async function POST(
         }
       }
 
-      await txn
-        .insert(gameCredits)
-        .values({
-          player_id: row.player_id,
-          game_name: row.selected_game,
-          current_balance: row.total_amount,
-          last_updated_at: nowIso,
-        })
-        .onConflictDoUpdate({
-          target: [gameCredits.player_id, gameCredits.game_name],
-          set: {
-            current_balance: sql`${gameCredits.current_balance} + ${row.total_amount}`,
+      // Same two rules as the agent's completion path: one canonical spelling
+      // per game, and never add a delta on top of a balance the agent has
+      // already read off the provider.
+      const gameName = await canonicalise(row.selected_game, txn);
+      const alreadySynced = await balanceSyncedSince(txn, {
+        playerId: row.player_id,
+        gameName,
+        sinceIso: row.approved_at ?? row.updated_at ?? row.created_at,
+      });
+
+      if (!alreadySynced) {
+        await txn
+          .insert(gameCredits)
+          .values({
+            player_id: row.player_id,
+            game_name: gameName,
+            current_balance: row.total_amount,
             last_updated_at: nowIso,
-          },
-        });
+          })
+          .onConflictDoUpdate({
+            target: [gameCredits.player_id, gameCredits.game_name],
+            set: {
+              current_balance: sql`${gameCredits.current_balance} + ${row.total_amount}`,
+              last_updated_at: nowIso,
+            },
+          });
+      }
 
       await txn
         .update(players)
@@ -116,10 +129,21 @@ export async function POST(
         entity_id: row.company_entity_id,
         type: "game_topup",
         amount: row.total_amount,
-        game_name: row.selected_game,
+        game_name: gameName,
         reference_id: row.deposit_id,
         user_id: user.user_id,
-        details: { source: "manual", action: "manual_complete" },
+        details: {
+          source: "manual",
+          action: "manual_complete",
+          ...(alreadySynced
+            ? {
+                balance_credited: false,
+                reason: "agent had already synced the provider balance",
+                synced_at: alreadySynced.created_at,
+                synced_balance: alreadySynced.balance_after,
+              }
+            : { balance_credited: true }),
+        },
       });
 
       // Inside the same transaction, so a bonus can't survive a rollback.

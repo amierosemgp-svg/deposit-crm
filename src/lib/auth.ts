@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { entities, users } from "@/db/schema";
+import { DuplicateGameAccountError } from "./game-name";
 import {
   SESSION_COOKIE,
   SESSION_HOURS,
@@ -103,6 +104,10 @@ export class AuthError extends Error {
 export function authErrorResponse(e: unknown): Response | null {
   if (e instanceof AuthError) {
     return Response.json({ error: e.message }, { status: e.status });
+  }
+  // A player may hold one account per game; the message names the offenders.
+  if (e instanceof DuplicateGameAccountError) {
+    return Response.json({ error: e.message }, { status: 409 });
   }
   return null;
 }

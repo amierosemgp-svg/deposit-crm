@@ -1,6 +1,7 @@
 /* Shared helpers for the bot CRUD endpoints (/api/bot/*).
  * Agent requests authenticate with an API key and act system-wide — there is no
  * per-request role scope, unlike the human/session API. */
+import { DuplicateGameAccountError } from "./game-name";
 import type {
   bankAccounts,
   bankTransfers,
@@ -28,6 +29,8 @@ export class BotError extends Error {
 /** Maps a thrown BotError to a JSON response; returns null for anything else. */
 export function botErrorResponse(e: unknown): Response | null {
   if (e instanceof BotError) return jsonError(e.message, e.status);
+  // A player may hold one account per game; the message names the offenders.
+  if (e instanceof DuplicateGameAccountError) return jsonError(e.message, 409);
   return null;
 }
 

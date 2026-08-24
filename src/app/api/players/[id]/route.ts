@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { players } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
+import { loadGameCatalogue, normaliseGameAccounts } from "@/lib/game-name";
 import { describeChanges, diffFields, logActivity } from "@/lib/activity-log";
 import { recordGameAccountChanges } from "@/lib/game-account-audit";
 
@@ -52,9 +53,17 @@ export async function PATCH(
     const parsed = patchSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return jsonError("Invalid payload");
 
+    const patch = { ...parsed.data };
+    if (patch.game_accounts !== undefined) {
+      patch.game_accounts = normaliseGameAccounts(
+        patch.game_accounts,
+        await loadGameCatalogue(),
+      );
+    }
+
     const [updated] = await db
       .update(players)
-      .set(parsed.data)
+      .set(patch)
       .where(eq(players.player_id, playerId))
       .returning();
 

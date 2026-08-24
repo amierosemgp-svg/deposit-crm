@@ -4,6 +4,7 @@ import { entities, players, transactions } from "@/db/schema";
 import { inArray } from "drizzle-orm";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
+import { loadGameCatalogue, normaliseGameAccounts } from "@/lib/game-name";
 
 const playerSchema = z.object({
   username: z.string().min(2),
@@ -64,8 +65,15 @@ export async function POST(request: Request) {
       return jsonError(`Entity ${notCompany} is not a company`);
     }
 
+    // One account per game, in the catalogue's spelling. Done before the
+    // insert so an import that carries a duplicate is rejected whole rather
+    // than half-landing a player whose accounts are ambiguous.
+    const catalogue = await loadGameCatalogue();
     const values = rows.map((r) => ({
       ...r,
+      ...(r.game_accounts
+        ? { game_accounts: normaliseGameAccounts(r.game_accounts, catalogue) }
+        : {}),
       telegram_username: !r.telegram_username
         ? null
         : r.telegram_username.startsWith("@")

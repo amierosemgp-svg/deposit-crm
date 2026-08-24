@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { gameCredits, players, transactions } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
 import { gameCreditJson, jsonError } from "@/lib/bot-crud";
+import { canonicalise } from "@/lib/game-name";
 
 /** GET /api/bot/game-credits?player_id=&game_name= */
 export async function GET(request: Request) {
@@ -54,6 +55,11 @@ export async function POST(request: Request) {
     .where(eq(players.player_id, body.player_id));
   if (!player) return jsonError("Player not found", 404);
 
+  // The name decides the row. Posting "918kiss" where the CRM holds "918Kiss"
+  // used to open a second balance for the same real account and split the
+  // player's money in two; resolve to the catalogue's spelling first.
+  const gameName = await canonicalise(body.game_name, db);
+
   const nowIso = new Date().toISOString();
   const [before] = await db
     .select()
@@ -61,7 +67,7 @@ export async function POST(request: Request) {
     .where(
       and(
         eq(gameCredits.player_id, body.player_id),
-        eq(gameCredits.game_name, body.game_name),
+        eq(gameCredits.game_name, gameName),
       ),
     );
 
@@ -69,7 +75,7 @@ export async function POST(request: Request) {
     .insert(gameCredits)
     .values({
       player_id: body.player_id,
-      game_name: body.game_name,
+      game_name: gameName,
       current_balance: body.current_balance,
       last_updated_at: nowIso,
     })
@@ -84,7 +90,7 @@ export async function POST(request: Request) {
     entity_id: player.company_entity_id,
     type: "bo_adjustment",
     amount: +(body.current_balance - (before?.current_balance ?? 0)).toFixed(2),
-    game_name: body.game_name,
+    game_name: gameName,
     details: {
       action: "balance_sync",
       balance_before: before?.current_balance ?? 0,
@@ -111,7 +117,8 @@ export async function DELETE(request: Request) {
 
   const parsed = deleteSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return jsonError("Provide player_id and game_name");
-  const { player_id, game_name } = parsed.data;
+  const { player_id } = parsed.data;
+  const game_name = await canonicalise(parsed.data.game_name, db);
 
   const [row] = await db
     .select()

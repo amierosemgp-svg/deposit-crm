@@ -12,6 +12,7 @@ import { requireBotKey } from "@/lib/bot-auth";
 import { depositToBotJson, playerGameInfoMap } from "@/lib/bot-transactions";
 import { BotError, botErrorResponse, jsonError } from "@/lib/bot-crud";
 import { maybeCreateReferralBonus } from "@/lib/referral";
+import { balanceSyncedSince, canonicalise } from "@/lib/game-name";
 
 /** Allowed forward transitions the agent may drive. */
 const ALLOWED: Record<string, string[]> = {
@@ -109,6 +110,20 @@ export async function PATCH(
 
       // Book the ledger only when the top-up is confirmed completed.
       if (body.status === "completed" && locked.player_id && locked.selected_game) {
+        // Spelling is decided once, here — game_credits is keyed on the name,
+        // so "918kiss" and "918Kiss" would otherwise be two balances.
+        const gameName = await canonicalise(locked.selected_game, txn);
+
+        // Has the agent already reported the real post-top-up balance? Then the
+        // CRM's own +amount would count the same money twice. See
+        // balanceSyncedSince — this is the bug that inflated 6 accounts.
+        const alreadySynced = await balanceSyncedSince(txn, {
+          playerId: locked.player_id,
+          gameName,
+          // From when the deposit was handed to the agent: a sync older than
+          // that describes a balance before this top-up existed.
+          sinceIso: locked.approved_at ?? locked.updated_at ?? locked.created_at,
+        });
         if (locked.company_entity_id) {
           const [bo] = await txn
             .select()
@@ -137,21 +152,27 @@ export async function PATCH(
           }
         }
 
-        await txn
-          .insert(gameCredits)
-          .values({
-            player_id: locked.player_id,
-            game_name: locked.selected_game,
-            current_balance: locked.total_amount,
-            last_updated_at: nowIso,
-          })
-          .onConflictDoUpdate({
-            target: [gameCredits.player_id, gameCredits.game_name],
-            set: {
-              current_balance: sql`${gameCredits.current_balance} + ${locked.total_amount}`,
+        // The credit itself — unless the agent's sync already carried it.
+        // Everything else below (BO pool, total_deposits, the ledger) still
+        // runs: those track the deposit, not the game balance, and a sync
+        // says nothing about them.
+        if (!alreadySynced) {
+          await txn
+            .insert(gameCredits)
+            .values({
+              player_id: locked.player_id,
+              game_name: gameName,
+              current_balance: locked.total_amount,
               last_updated_at: nowIso,
-            },
-          });
+            })
+            .onConflictDoUpdate({
+              target: [gameCredits.player_id, gameCredits.game_name],
+              set: {
+                current_balance: sql`${gameCredits.current_balance} + ${locked.total_amount}`,
+                last_updated_at: nowIso,
+              },
+            });
+        }
 
         await txn
           .update(players)
@@ -165,11 +186,21 @@ export async function PATCH(
           entity_id: locked.company_entity_id,
           type: "game_topup",
           amount: locked.total_amount,
-          game_name: locked.selected_game,
+          game_name: gameName,
           reference_id: locked.deposit_id,
           details: {
             source: "bot",
             topup_reference: body.game_topup_reference ?? locked.game_topup_reference ?? null,
+            // Say so out loud. A top-up row whose amount never reached the
+            // balance is exactly the thing someone reconciling needs to see.
+            ...(alreadySynced
+              ? {
+                  balance_credited: false,
+                  reason: "agent had already synced the provider balance",
+                  synced_at: alreadySynced.created_at,
+                  synced_balance: alreadySynced.balance_after,
+                }
+              : { balance_credited: true }),
           },
         });
 

@@ -3,7 +3,8 @@ import { z } from "zod";
 import { db } from "@/db";
 import { players } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
-import { isFkViolation, jsonError, playerJson } from "@/lib/bot-crud";
+import { loadGameCatalogue, normaliseGameAccounts } from "@/lib/game-name";
+import { botErrorResponse, isFkViolation, jsonError, playerJson } from "@/lib/bot-crud";
 import { recordGameAccountChanges } from "@/lib/game-account-audit";
 
 /** Resolve a player by numeric id or username. */
@@ -63,6 +64,20 @@ export async function PATCH(
   const patch = { ...parsed.data };
   if (patch.telegram_username && !patch.telegram_username.startsWith("@")) {
     patch.telegram_username = `@${patch.telegram_username}`;
+  }
+  if (patch.game_accounts !== undefined) {
+    try {
+      patch.game_accounts = normaliseGameAccounts(
+        patch.game_accounts,
+        await loadGameCatalogue(),
+      );
+    } catch (e) {
+      // This handler has no outer catch, so the 409 is raised here rather than
+      // escaping as an unhandled rejection and surfacing as a 500.
+      const domain = botErrorResponse(e);
+      if (domain) return domain;
+      throw e;
+    }
   }
 
   const [updated] = await db

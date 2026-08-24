@@ -46,7 +46,15 @@ export async function assignAccountFromPool(
     if (!player) throw new PoolError(404, "Player not found");
 
     const existing = player.game_accounts ?? [];
-    if (existing.some((g) => g.game_name === gameName)) return null;
+    // Case-insensitive: a player holding "918kiss" must not be handed a second
+    // account because the pool spells it "918Kiss".
+    if (
+      existing.some(
+        (g) => g.game_name.toLowerCase() === gameName.toLowerCase(),
+      )
+    ) {
+      return null;
+    }
 
     const [candidate] = await txn
       .select()
