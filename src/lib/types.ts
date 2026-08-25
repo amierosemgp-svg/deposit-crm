@@ -59,6 +59,39 @@ export const BANKS: string[] = [
  *  - recurring — claimable once per period (daily/weekly/monthly)
  *  - rebate    — a share of what they lost over the period, once per period
  */
+export type ReferralBonusStatus = "pending" | "assigned" | "cancelled";
+
+/**
+ * A "recommend bonus": what an upline earns when a player they referred makes
+ * their first deposit. Distinct from a deposit's own bonus — this one is paid
+ * to a *different* player than the one who deposited, which is why it needs its
+ * own row in the payout report rather than folding into the deposit's figure.
+ */
+export type ReferralBonus = {
+  bonus_id: number;
+  /** Who earns it. */
+  upline_player_id: number;
+  /** Whose first deposit triggered it. */
+  downline_player_id: number;
+  downline_username: string | null;
+  downline_full_name: string | null;
+  deposit_id: number | null;
+  /** The downline's qualifying deposit. */
+  deposit_amount: number;
+  bonus_percentage: number;
+  bonus_amount: number;
+  status: ReferralBonusStatus;
+  /** Which of the upline's games the credit went to. Null until assigned. */
+  game_name: string | null;
+  skip_bot: boolean;
+  game_transfer_id: number | null;
+  assigned_by_user_id: number | null;
+  /** When it was actually credited. Null while still pending. */
+  assigned_at: string | null;
+  note: string | null;
+  created_at: string;
+};
+
 export type BonusPlanType = "welcome" | "recurring" | "rebate";
 
 export type BonusPeriod = "daily" | "weekly" | "monthly";

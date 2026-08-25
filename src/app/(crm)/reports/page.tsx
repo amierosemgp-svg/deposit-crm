@@ -25,6 +25,7 @@ const SCHEDULED: ScheduledReport[] = [];
 export default function ReportsPage() {
   const deposits = useStore((s) => s.deposits);
   const withdrawals = useStore((s) => s.withdrawals);
+  const referralBonuses = useStore((s) => s.referralBonuses);
   const users = useStore((s) => s.users);
   const companies = useStore((s) => s.companies)();
 
@@ -33,7 +34,11 @@ export default function ReportsPage() {
     daily_withdrawals: withdrawals.length,
     ggr_summary: companies.length,
     cs_performance: users.length,
-    bonus_payout: deposits.filter((d) => d.bonus_amount > 0).length,
+    // Both kinds of payout the report covers: a deposit's own bonus, and the
+    // recommend bonus an upline earns. Cancelled ones were written off.
+    bonus_payout:
+      deposits.filter((d) => d.bonus_amount > 0).length +
+      referralBonuses.filter((b) => b.status !== "cancelled").length,
     bank_reconciliation: deposits.length,
   };
 

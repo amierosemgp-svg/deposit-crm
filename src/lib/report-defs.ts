@@ -77,7 +77,7 @@ export const REPORT_DEFS: ReportDef[] = [
     shortTitle: "Bonus Payout",
     title: "Bonus Payout Report",
     description:
-      "Total bonuses issued — broken down by bonus %, game provider, and company.",
+      "Every bonus issued — deposit bonuses and recommend bonuses paid to uplines — by bonus %, game provider, and company.",
     icon: Gift,
     tone: "rose",
   },

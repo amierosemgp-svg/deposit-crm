@@ -21,6 +21,7 @@ import type {
   Player,
   ProviderBoAccount,
   ProviderBoAdjustment,
+  ReferralBonus,
   ServerSettings,
   User,
   Withdrawal,
@@ -76,6 +77,7 @@ type StateResponse = {
   boAccounts: ProviderBoAccount[];
   boAdjustments: ProviderBoAdjustment[];
   bonusPlans: BonusPlan[];
+  referralBonuses: ReferralBonus[];
   expenses: Expense[];
   botHealth: BotHealth[];
   botCommands: BotCommand[];
@@ -98,6 +100,7 @@ type Store = {
   boAccounts: ProviderBoAccount[];
   boAdjustments: ProviderBoAdjustment[];
   bonusPlans: BonusPlan[];
+  referralBonuses: ReferralBonus[];
   expenses: Expense[];
   botHealth: BotHealth[];
   /** Recent on-demand agent commands — drives the Crawl banks button. */
@@ -446,6 +449,7 @@ export const useStore = create<Store>((set, get) => {
     boAccounts: [],
     boAdjustments: [],
     bonusPlans: [],
+    referralBonuses: [],
     expenses: [],
     botHealth: [],
     botCommands: [],

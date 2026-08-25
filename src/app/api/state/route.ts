@@ -1,4 +1,4 @@
-import { asc, desc, inArray, isNull, or } from "drizzle-orm";
+import { aliasedTable, asc, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import { db } from "@/db";
 import {
   bankAccounts,
@@ -13,6 +13,7 @@ import {
   players,
   providerBoAccounts,
   providerBoAdjustments,
+  referralBonuses,
   settings,
   users,
   withdrawals,
@@ -245,6 +246,47 @@ export async function GET() {
           .limit(200)
       : [];
 
+    // Recommend (referral) bonuses, keyed on the *upline* — the player who
+    // earns them. Scoped the same way the player list is, so a leader sees
+    // exactly the bonuses belonging to players they can already see. The
+    // downline's name is joined here rather than looked up in the browser
+    // because the downline may sit outside the viewer's scope entirely.
+    const downlinePlayer = aliasedTable(players, "downline_player");
+    const scopedReferralBonuses = playerIds.length || user.companyIds === null
+      ? await db
+          .select({
+            bonus_id: referralBonuses.bonus_id,
+            upline_player_id: referralBonuses.upline_player_id,
+            downline_player_id: referralBonuses.downline_player_id,
+            downline_username: downlinePlayer.username,
+            downline_full_name: downlinePlayer.full_name,
+            deposit_id: referralBonuses.deposit_id,
+            deposit_amount: referralBonuses.deposit_amount,
+            bonus_percentage: referralBonuses.bonus_percentage,
+            bonus_amount: referralBonuses.bonus_amount,
+            status: referralBonuses.status,
+            game_name: referralBonuses.game_name,
+            skip_bot: referralBonuses.skip_bot,
+            game_transfer_id: referralBonuses.game_transfer_id,
+            assigned_by_user_id: referralBonuses.assigned_by_user_id,
+            assigned_at: referralBonuses.assigned_at,
+            note: referralBonuses.note,
+            created_at: referralBonuses.created_at,
+          })
+          .from(referralBonuses)
+          .leftJoin(
+            downlinePlayer,
+            eq(referralBonuses.downline_player_id, downlinePlayer.player_id),
+          )
+          .where(
+            user.companyIds === null
+              ? undefined
+              : inArray(referralBonuses.upline_player_id, playerIds),
+          )
+          .orderBy(desc(referralBonuses.bonus_id))
+          .limit(500)
+      : [];
+
     return Response.json({
       me: user,
       entities: entityTree,
@@ -261,6 +303,7 @@ export async function GET() {
       boAccounts: scopedBoAccounts,
       boAdjustments: scopedAdjustments,
       bonusPlans: scopedBonusPlans,
+      referralBonuses: scopedReferralBonuses,
       expenses: scopedExpenses,
       botHealth: bots,
       botCommands: scopedCommands,

@@ -3,6 +3,7 @@ import type {
   BankTransferStatus,
   DepositStatus,
   GameTransferStatus,
+  ReferralBonusStatus,
   WithdrawalStatus,
 } from "@/lib/types";
 
@@ -11,6 +12,7 @@ type Kind =
   | WithdrawalStatus
   | BankTransferStatus
   | GameTransferStatus
+  | ReferralBonusStatus
   | "active"
   | "inactive"
   | "suspended";
@@ -33,6 +35,9 @@ const STYLES: Record<string, string> = {
   requested: "bg-amber-500/10 text-amber-700 dark:text-amber-300",
   credits_pulled: "bg-blue-500/10 text-blue-700 dark:text-blue-300",
   paid: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+  // Recommend bonuses: credited to one of the upline's games, or written off.
+  assigned: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+  cancelled: "bg-zinc-500/10 text-zinc-700 dark:text-zinc-300",
   active: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
   inactive: "bg-zinc-500/10 text-zinc-700 dark:text-zinc-300",
   suspended: "bg-red-500/10 text-red-700 dark:text-red-300",

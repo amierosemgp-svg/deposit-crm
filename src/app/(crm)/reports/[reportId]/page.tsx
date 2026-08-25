@@ -32,7 +32,11 @@ import { useStore } from "@/lib/store";
 import { formatRM, formatShortDateTime } from "@/lib/format";
 import { REPORT_DEFS, REPORT_TONE_CLASSES } from "@/lib/report-defs";
 import { cn } from "@/lib/utils";
-import type { DepositStatus, WithdrawalStatus } from "@/lib/types";
+import type {
+  DepositStatus,
+  ReferralBonusStatus,
+  WithdrawalStatus,
+} from "@/lib/types";
 
 const DEPOSIT_STATUSES: DepositStatus[] = [
   "pending_match",
@@ -83,6 +87,7 @@ export default function ReportDetailPage() {
   const deposits = useStore((s) => s.deposits);
   const hydrated = useStore((s) => s.hydrated);
   const withdrawals = useStore((s) => s.withdrawals);
+  const referralBonuses = useStore((s) => s.referralBonuses);
   const players = useStore((s) => s.players);
   const users = useStore((s) => s.users);
   const companies = useStore((s) => s.companies)();
@@ -146,6 +151,51 @@ export default function ReportDetailPage() {
     [deposits, dateFrom, dateTo, companyId, status, q, playerById],
   );
 
+  /**
+   * Recommend bonuses in range, scoped and searched like the deposits are.
+   *
+   * Dated on `assigned_at` when there is one — that is when the credit was
+   * actually handed over — falling back to when it was earned for one still
+   * pending. Cancelled bonuses are written off and never paid, so they are out
+   * of a payout report entirely.
+   *
+   * The company is the *upline's*: they are the player being paid, even though
+   * it was the downline's deposit that triggered it.
+   */
+  const filteredReferralBonuses = useMemo(
+    () =>
+      referralBonuses
+        .filter((b) => b.status !== "cancelled")
+        .filter((b) => {
+          if (!inRange(b.assigned_at ?? b.created_at, dateFrom, dateTo)) {
+            return false;
+          }
+          const upline = playerById.get(b.upline_player_id);
+          if (
+            companyId !== "all" &&
+            String(upline?.company_entity_id ?? "") !== companyId
+          ) {
+            return false;
+          }
+          if (q) {
+            const hay = [
+              `REC-${b.bonus_id}`,
+              upline?.full_name,
+              upline?.username,
+              b.downline_full_name,
+              b.downline_username,
+              b.game_name,
+              b.note,
+            ]
+              .map(norm)
+              .join(" ");
+            if (!hay.includes(q)) return false;
+          }
+          return true;
+        }),
+    [referralBonuses, dateFrom, dateTo, companyId, q, playerById],
+  );
+
   const filteredWithdrawals = useMemo(
     () =>
       withdrawals.filter((w) => {
@@ -197,7 +247,9 @@ export default function ReportDetailPage() {
             node: <span className="text-muted-foreground">—</span>,
             csv: "",
           };
-    const badge = (s: DepositStatus | WithdrawalStatus): Cell => ({
+    const badge = (
+      s: DepositStatus | WithdrawalStatus | ReferralBonusStatus,
+    ): Cell => ({
       node: <StatusBadge status={s} />,
       csv: s,
     });
@@ -500,25 +552,107 @@ export default function ReportDetailPage() {
 
       case "bonus_payout": {
         const withBonus = filteredDeposits.filter((d) => d.bonus_amount > 0);
-        const rows = withBonus.map((d) => ({
-          key: d.deposit_id,
+        // A deposit-status filter is a statement about deposits; recommend
+        // bonuses have their own three states and none of them can satisfy it,
+        // so they step aside rather than being silently dropped to zero.
+        const showRecommend = status === "all";
+        const recommend = showRecommend ? filteredReferralBonuses : [];
+
+        // One shape for two different payouts, so they sort and total together.
+        // "Player" is who receives the money — the depositor for a deposit
+        // bonus, the *upline* for a recommend bonus — which is the whole reason
+        // these cannot be folded into the deposit's own figure.
+        type Payout = {
+          key: string;
+          date: string;
+          kind: "Deposit" | "Recommend";
+          ref: string;
+          player: string;
+          company: string;
+          game: string;
+          statusNode: Cell;
+          pct: number;
+          basis: number;
+          bonus: number;
+        };
+
+        const payouts: Payout[] = [
+          ...withBonus.map((d) => ({
+            key: `dep-${d.deposit_id}`,
+            date: d.deposit_date,
+            kind: "Deposit" as const,
+            ref: d.transaction_ref,
+            player: playerLabelOf(d.player_id, d.player_username),
+            company: companyNameOf(d.company_entity_id),
+            game: d.selected_game ?? "—",
+            statusNode: badge(d.status),
+            pct: d.bonus_percentage,
+            basis: d.deposit_amount,
+            bonus: d.bonus_amount,
+          })),
+          ...recommend.map((b) => {
+            const upline = playerById.get(b.upline_player_id);
+            const downline =
+              b.downline_full_name ?? b.downline_username ?? `#${b.downline_player_id}`;
+            return {
+              key: `rec-${b.bonus_id}`,
+              // When the credit was handed over, or when it was earned if it
+              // is still waiting for CS.
+              date: b.assigned_at ?? b.created_at,
+              kind: "Recommend" as const,
+              ref: `REC-${b.bonus_id}`,
+              player: upline?.full_name ?? upline?.username ?? `#${b.upline_player_id}`,
+              company: companyNameOf(upline?.company_entity_id),
+              game: b.game_name ?? "—",
+              statusNode: badge(b.status),
+              pct: b.bonus_percentage,
+              // The downline's qualifying deposit — the figure the percentage
+              // was taken from, so the arithmetic on the row still reads.
+              basis: b.deposit_amount,
+              bonus: b.bonus_amount,
+              referredBy: downline,
+            };
+          }),
+        ].sort((a, b) => b.date.localeCompare(a.date));
+
+        const rows = payouts.map((p) => ({
+          key: p.key,
           cells: [
-            when(d.deposit_date),
-            mono(d.transaction_ref),
-            text(playerLabelOf(d.player_id, d.player_username)),
-            text(companyNameOf(d.company_entity_id)),
-            text(d.selected_game ?? "—"),
-            badge(d.status),
-            { node: `${d.bonus_percentage}%`, csv: d.bonus_percentage },
-            money(d.deposit_amount),
-            money(d.bonus_amount),
+            when(p.date),
+            {
+              node: (
+                <span
+                  className={cn(
+                    "inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium",
+                    p.kind === "Recommend"
+                      ? "bg-purple-500/10 text-purple-700 dark:text-purple-300"
+                      : "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+                  )}
+                >
+                  {p.kind}
+                </span>
+              ),
+              csv: p.kind,
+            },
+            mono(p.ref),
+            text(p.player),
+            text(p.company),
+            text(p.game),
+            p.statusNode,
+            { node: `${p.pct}%`, csv: p.pct },
+            money(p.basis),
+            money(p.bonus),
           ],
         }));
-        const sum = (f: (d: (typeof withBonus)[number]) => number) =>
-          withBonus.reduce((acc, d) => acc + f(d), 0);
+
+        const sum = (f: (p: Payout) => number) =>
+          payouts.reduce((acc, p) => acc + f(p), 0);
+        const recommendTotal = recommend.reduce((a, b) => a + b.bonus_amount, 0);
+
         return {
           headers: [
             { label: "Date" },
+            { label: "Type" },
             { label: "Ref" },
             { label: "Player" },
             { label: "Company" },
@@ -537,10 +671,13 @@ export default function ReportDetailPage() {
             null,
             null,
             null,
-            formatRM(sum((d) => d.deposit_amount)),
-            formatRM(sum((d) => d.bonus_amount)),
+            null,
+            formatRM(sum((p) => p.basis)),
+            formatRM(sum((p) => p.bonus)),
           ],
-          summary: "Deposits with no bonus are excluded.",
+          summary: showRecommend
+            ? `Deposits with no bonus are excluded. Includes ${recommend.length} recommend bonus${recommend.length === 1 ? "" : "es"} (${formatRM(recommendTotal)}) paid to uplines — dated when credited, or when earned if still pending. Cancelled ones are written off and excluded.`
+            : "Deposits with no bonus are excluded. Recommend bonuses are hidden while a deposit status filter is applied — set Status to “All” to include them.",
         };
       }
 
@@ -614,7 +751,16 @@ export default function ReportDetailPage() {
     // playerLabelOf/companyNameOf/agentNameOf are stable derivations of the
     // deps already listed, so they are intentionally omitted.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [def, filteredDeposits, filteredWithdrawals, companies, playerById, userById]);
+  }, [
+    def,
+    filteredDeposits,
+    filteredWithdrawals,
+    filteredReferralBonuses,
+    status,
+    companies,
+    playerById,
+    userById,
+  ]);
 
   // Summary tiles shown above the table for the transaction-style reports.
   const summaryTiles: {
@@ -668,18 +814,33 @@ export default function ReportDetailPage() {
       }
       case "bonus_payout": {
         const withBonus = filteredDeposits.filter((d) => d.bonus_amount > 0);
-        const total = withBonus.reduce((s, d) => s + d.bonus_amount, 0);
+        const recommend = status === "all" ? filteredReferralBonuses : [];
+        const depositTotal = withBonus.reduce((s, d) => s + d.bonus_amount, 0);
+        const recommendTotal = recommend.reduce((s, b) => s + b.bonus_amount, 0);
         return [
-          { title: "Total Bonus Amount", value: formatRM(total), icon: Gift },
+          {
+            title: "Total Bonus Amount",
+            value: formatRM(depositTotal + recommendTotal),
+            sub: `${formatRM(depositTotal)} deposit · ${formatRM(recommendTotal)} recommend`,
+            icon: Gift,
+          },
           {
             title: "Unique Players",
-            value: String(uniquePlayers(withBonus.map((d) => d.player_id))),
+            value: String(
+              uniquePlayers([
+                ...withBonus.map((d) => d.player_id),
+                // The upline is the one paid, so they are the player who
+                // "claimed" a recommend bonus.
+                ...recommend.map((b) => b.upline_player_id),
+              ]),
+            ),
             sub: "claimed a bonus",
             icon: Users,
           },
           {
             title: "Bonus Transactions",
-            value: withBonus.length.toLocaleString(),
+            value: (withBonus.length + recommend.length).toLocaleString(),
+            sub: `${withBonus.length} deposit · ${recommend.length} recommend`,
             icon: Hash,
           },
         ];
@@ -687,7 +848,7 @@ export default function ReportDetailPage() {
       default:
         return [];
     }
-  }, [def, filteredDeposits, filteredWithdrawals]);
+  }, [def, filteredDeposits, filteredWithdrawals, filteredReferralBonuses, status]);
 
   if (!def || !table) {
     return (
