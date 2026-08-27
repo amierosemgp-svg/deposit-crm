@@ -216,6 +216,16 @@ export function TopNav() {
                   {visibleCompanies.map((c) => (
                     <SelectItem key={c.company_id} value={String(c.company_id)}>
                       {c.company_name}
+                      {/* Whose company it is. Earns its place most in the
+                          all-leaders view, where the list spans several leaders
+                          and the names alone don't say who owns what. The
+                          trigger is unaffected — it renders `companyLabel`, so
+                          the collapsed chip stays just the company name. */}
+                      {c.leader_name && (
+                        <span className="text-muted-foreground">
+                          {c.leader_name}
+                        </span>
+                      )}
                     </SelectItem>
                   ))}
                 </SelectContent>
