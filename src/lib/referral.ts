@@ -1,6 +1,7 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
+  bonusPlans,
   deposits,
   gameCredits,
   players,
@@ -17,11 +18,19 @@ type Txn = Parameters<Parameters<typeof db.transaction>[0]>[0];
  * Bring a downline's referral bonus in line with the facts, whichever order
  * they arrived in.
  *
- * The rule is one sentence: **the upline earns 20% of the downline's earliest
- * completed deposit.** Both halves can land in either order — CS often learns
- * about a referral after the player has already deposited — so this is called
- * from both the deposit-completion paths and from setting the upline, and
- * simply reconciles whatever is true now:
+ * The rule: **the upline earns 20% of the downline's earliest completed deposit
+ * that did not carry a welcome bonus.**
+ *
+ * A first deposit taking the welcome bonus is already being paid for once; the
+ * house does not also pay the referrer for it. That does not cancel the
+ * referral, it defers it — the downline's next completed deposit qualifies,
+ * whatever bonus (if any) that one carries. Only the *welcome* type disqualifies:
+ * a recurring or rebate bonus is unrelated to signing up.
+ *
+ * Both halves can land in either order — CS often learns about a referral after
+ * the player has already deposited — so this is called from both the
+ * deposit-completion paths and from setting the upline, and simply reconciles
+ * whatever is true now:
  *
  *   - upline + a completed deposit, no bonus yet  → create it (pending)
  *   - upline changed while still pending          → re-point it at the new upline
@@ -50,33 +59,64 @@ export async function syncReferralBonus(
   // Once the credit has gone out, this is history — leave it alone.
   if (existing && existing.status === "assigned") return;
 
-  // The deposit the bonus is based on: their earliest completed one. Using
-  // "earliest completed" rather than "the one just completed" is what makes
-  // this work when the upline is set long after the player started depositing.
+  // The deposit the bonus is based on: their earliest completed one that did
+  // not carry a welcome bonus. Using "earliest qualifying" rather than "the one
+  // just completed" is what makes this work when the upline is set long after
+  // the player started depositing.
+  //
+  // coalesce, not a plain <>: the join yields NULL both when the deposit has no
+  // plan at all and when it points at a plan row that has since gone. Comparing
+  // NULL to 'welcome' is NULL — falsy — so either case would silently drop a
+  // deposit that ought to qualify.
   const [firstDeposit] = player.upline_player_id
     ? await txn
-        .select()
+        .select({
+          deposit_id: deposits.deposit_id,
+          deposit_amount: deposits.deposit_amount,
+        })
         .from(deposits)
+        .leftJoin(bonusPlans, eq(bonusPlans.plan_id, deposits.bonus_plan_id))
         .where(
           and(
             eq(deposits.player_id, downlinePlayerId),
             eq(deposits.status, "completed"),
+            sql`coalesce(${bonusPlans.type}::text, '') <> 'welcome'`,
           ),
         )
         .orderBy(asc(deposits.deposit_date), asc(deposits.deposit_id))
         .limit(1)
     : [];
 
-  // Nothing to pay: no upline, or nothing deposited yet.
+  // Nothing to pay yet: no upline, or no deposit that qualifies.
   if (!player.upline_player_id || !firstDeposit) {
     if (existing && existing.status === "pending") {
+      // Distinguish "there is nothing" from "there is one but it took the
+      // welcome bonus" — the second is a wait, not a dead end, and CS reads
+      // this note to know whether to expect it back.
+      let reason = "No completed deposit for this downline";
+      if (player.upline_player_id) {
+        const [anyDeposit] = await txn
+          .select({ id: deposits.deposit_id })
+          .from(deposits)
+          .where(
+            and(
+              eq(deposits.player_id, downlinePlayerId),
+              eq(deposits.status, "completed"),
+            ),
+          )
+          .limit(1);
+        if (anyDeposit) {
+          reason =
+            "First deposit took the welcome bonus — the recommend bonus is earned on their next deposit";
+        }
+      }
       await txn
         .update(referralBonuses)
         .set({
           status: "cancelled",
           note: !player.upline_player_id
             ? "Upline removed before the bonus was assigned"
-            : "No completed deposit for this downline",
+            : reason,
         })
         .where(eq(referralBonuses.bonus_id, existing.bonus_id));
     }
