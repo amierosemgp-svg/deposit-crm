@@ -82,7 +82,6 @@ export default function DashboardPage() {
   const entities = useStore((s) => s.entities);
   const boAccounts = useStore((s) => s.boAccounts);
   const bankAccounts = useStore((s) => s.bankAccounts);
-  const expenses = useStore((s) => s.expenses);
   const referralBonuses = useStore((s) => s.referralBonuses);
   const botHealth = useStore((s) => s.botHealth);
   const userName = useStore((s) => s.userName);
@@ -122,11 +121,6 @@ export default function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [boAccounts, selectedCompanyId, selectedLeaderId],
   );
-  const scopedExpenses = useMemo(
-    () => expenses.filter((e) => companyInScope(e.company_entity_id)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [expenses, selectedCompanyId, selectedLeaderId],
-  );
   // Recommend bonuses are paid to the *upline*, so they are scoped by that
   // player's company — and they never appear on a deposit row, which is why
   // the profit line below has to add them separately.
@@ -144,15 +138,12 @@ export default function DashboardPage() {
     [bankAccounts, selectedCompanyId, selectedLeaderId],
   );
 
-  // --- Range-scoped money (deposits by deposit_date, withdrawals/expenses by their date) ---
+  // --- Range-scoped money (deposits by deposit_date, withdrawals by created_at) ---
   const rangeDeposits = scopedDeposits.filter((d) =>
     inRange(d.deposit_date, dateFrom, dateTo),
   );
   const rangeWithdrawals = scopedWithdrawals.filter((w) =>
     inRange(w.created_at, dateFrom, dateTo),
-  );
-  const rangeExpenses = scopedExpenses.filter((e) =>
-    inRange(e.expense_date, dateFrom, dateTo),
   );
 
   const completedDeposits = rangeDeposits.filter((d) => d.status === "completed");
@@ -194,13 +185,13 @@ export default function DashboardPage() {
     .filter((b) => b.status === "assigned" && b.assigned_at)
     .filter((b) => inRange(b.assigned_at!, dateFrom, dateTo))
     .reduce((sum, b) => sum + b.bonus_amount, 0);
-  const totalExpenses = rangeExpenses.reduce((sum, e) => sum + e.amount, 0);
+  // Deposits − withdrawals − bonuses. Operational expenses are deliberately
+  // out: this figure is about the gaming book, and mixing running costs into
+  // it made a trading result and a P&L the same number without saying so.
+  // Both bonus kinds count — a deposit's own, and the recommend bonus paid to
+  // an upline — because both are money given back to players.
   const profit =
-    grossDeposits -
-    grossWithdrawals -
-    grossBonuses -
-    recommendBonuses -
-    totalExpenses;
+    grossDeposits - grossWithdrawals - grossBonuses - recommendBonuses;
 
   // Live states (not range-bound)
   const pendingDeposits = scopedDeposits.filter((d) =>
@@ -360,7 +351,7 @@ export default function DashboardPage() {
             grossBonuses + recommendBonuses > 0
               ? ` − ${formatRM(grossBonuses + recommendBonuses)} bonus`
               : ""
-          }${totalExpenses > 0 ? ` − ${formatRM(totalExpenses)} expenses` : ""}`}
+          }`}
           icon={TrendingUp}
           tone={profit >= 0 ? "success" : "danger"}
           valueClassName={profit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}
