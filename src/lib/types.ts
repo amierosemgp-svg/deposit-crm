@@ -522,6 +522,11 @@ export type Expense = {
 
 export type ServerSettings = {
   transfer_auto_confirm_hours?: number;
+  /**
+   * Smallest balance a player may withdraw against, in RM, measured *excluding*
+   * bonus credit. 0 or absent disables the check.
+   */
+  min_withdrawal_amount?: number;
   games?: string[];
   banks?: string[];
   [key: string]: unknown;

@@ -8,11 +8,19 @@ import { diffFields, logActivity } from "@/lib/activity-log";
 
 const schema = z.object({
   transfer_auto_confirm_hours: z.number().int().min(1).max(168).optional(),
+  // Smallest withdrawable balance, in RM. 0 disables the check, which is the
+  // default so adding this setting changes nothing until someone sets it.
+  min_withdrawal_amount: z.number().min(0).max(1_000_000).optional(),
   games: z.array(z.string().min(1)).optional(),
   banks: z.array(z.string().min(1)).optional(),
 });
 
-const KEYS = ["transfer_auto_confirm_hours", "games", "banks"] as const;
+const KEYS = [
+  "transfer_auto_confirm_hours",
+  "min_withdrawal_amount",
+  "games",
+  "banks",
+] as const;
 
 /** PATCH /api/settings — super_admin edits system configuration. */
 export async function PATCH(request: Request) {

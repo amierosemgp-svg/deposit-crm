@@ -709,6 +709,9 @@ function SystemTab() {
   const updateSetting = useStore((s) => s.updateSetting);
 
   const [hours, setHours] = useState(String(settings.transfer_auto_confirm_hours ?? 24));
+  const [minWithdrawal, setMinWithdrawal] = useState(
+    String(settings.min_withdrawal_amount ?? 0),
+  );
   const [games, setGames] = useState<string[]>(settings.games ?? []);
   const [banks, setBanks] = useState<string[]>(settings.banks ?? []);
   const [busy, setBusy] = useState(false);
@@ -719,16 +722,22 @@ function SystemTab() {
   // means the 10s polling refresh never clobbers in-progress edits, and
   // auto-saving one field never wipes another field's unsaved edit.
   const srvHours = String(settings.transfer_auto_confirm_hours ?? 24);
+  const srvMinWithdrawal = String(settings.min_withdrawal_amount ?? 0);
   const srvGamesSig = JSON.stringify(settings.games ?? []);
   const srvBanksSig = JSON.stringify(settings.banks ?? []);
   const [synced, setSynced] = useState({
     hours: srvHours,
+    minWithdrawal: srvMinWithdrawal,
     games: srvGamesSig,
     banks: srvBanksSig,
   });
   if (srvHours !== synced.hours) {
     setSynced((s) => ({ ...s, hours: srvHours }));
     setHours(srvHours);
+  }
+  if (srvMinWithdrawal !== synced.minWithdrawal) {
+    setSynced((s) => ({ ...s, minWithdrawal: srvMinWithdrawal }));
+    setMinWithdrawal(srvMinWithdrawal);
   }
   if (srvGamesSig !== synced.games) {
     setSynced((s) => ({ ...s, games: srvGamesSig }));
@@ -755,6 +764,7 @@ function SystemTab() {
     setBusy(true);
     const r = await updateSetting({
       transfer_auto_confirm_hours: Number(hours),
+      min_withdrawal_amount: Number(minWithdrawal),
     });
     setBusy(false);
     if (!r.ok) toast.error(r.error ?? "Failed to save");
@@ -773,6 +783,29 @@ function SystemTab() {
         <div className="flex items-center gap-2 max-w-xs">
           <Input type="number" min={1} max={168} value={hours} onChange={(e) => setHours(e.target.value)} />
           <span className="text-sm text-muted-foreground">hours</span>
+        </div>
+      </Card>
+
+      <Card className="p-5 space-y-4">
+        <div>
+          <h2 className="text-sm font-semibold">Withdrawals</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Smallest balance a player may withdraw against, measured{" "}
+            <strong>excluding bonus credit</strong> — a completed deposit credits
+            the deposit plus its bonus, and the bonus is house money the player
+            has not earned out. A request is refused when
+            balance − bonus falls below this. Set 0 to allow any amount.
+          </p>
+        </div>
+        <div className="flex items-center gap-2 max-w-xs">
+          <span className="text-sm text-muted-foreground">RM</span>
+          <Input
+            type="number"
+            min={0}
+            step="0.01"
+            value={minWithdrawal}
+            onChange={(e) => setMinWithdrawal(e.target.value)}
+          />
         </div>
       </Card>
 

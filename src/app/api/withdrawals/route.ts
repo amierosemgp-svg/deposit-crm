@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { gameCredits, players, transactions, withdrawals } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
+import { checkWithdrawalMinimum } from "@/lib/withdrawal-limits";
 
 const createSchema = z.object({
   player_id: z.number().int().positive(),
@@ -60,6 +61,21 @@ export async function POST(request: Request) {
     if (!withdrawAll && !body.requested_amount) {
       return jsonError("Enter an amount, or tick withdraw all");
     }
+
+    // House minimum, measured on the player's own money — bonus credit in the
+    // wallet does not count toward it. Inert until an admin sets one.
+    //
+    // Note this is the one balance-based refusal in this route: the amount
+    // check above it deliberately does not block, because game_credits lags the
+    // provider. The minimum is a house policy rather than a solvency check, so
+    // it is applied to the figure the CRM holds and CS is told what that figure
+    // is, rather than being refused with no explanation.
+    const minCheck = await checkWithdrawalMinimum(db, {
+      playerId: body.player_id,
+      gameName: body.game_name,
+      balance,
+    });
+    if (!minCheck.ok) return jsonError(minCheck.message, 422);
     // 0 is the placeholder for "as much as is there"; the pull writes the truth.
     const requested = withdrawAll ? 0 : body.requested_amount!;
 

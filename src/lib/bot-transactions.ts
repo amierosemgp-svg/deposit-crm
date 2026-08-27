@@ -1,12 +1,14 @@
-import { eq, ilike, inArray } from "drizzle-orm";
+import { and, eq, ilike, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   bankAccounts,
   deposits,
+  gameCredits,
   players,
   transactions,
   withdrawals,
 } from "@/db/schema";
+import { checkWithdrawalMinimum } from "./withdrawal-limits";
 
 /** The agent's native transaction shape (see sources/transaction_queue.json). */
 export type BotTransactionInput = {
@@ -239,6 +241,24 @@ export async function createBotWithdrawal(
     .from(players)
     .where(eq(players.player_id, input.player_id));
   if (!player) return { ok: false, status: 404, error: "Player not found" };
+
+  // Same house minimum the CRM applies. Enforced here too so the rule cannot be
+  // sidestepped by raising the request through the agent API instead.
+  const [credit] = await db
+    .select()
+    .from(gameCredits)
+    .where(
+      and(
+        eq(gameCredits.player_id, input.player_id),
+        sql`lower(${gameCredits.game_name}) = lower(${input.game_name})`,
+      ),
+    );
+  const minCheck = await checkWithdrawalMinimum(db, {
+    playerId: input.player_id,
+    gameName: input.game_name,
+    balance: credit?.current_balance ?? 0,
+  });
+  if (!minCheck.ok) return { ok: false, status: 422, error: minCheck.message };
 
   const [created] = await db
     .insert(withdrawals)

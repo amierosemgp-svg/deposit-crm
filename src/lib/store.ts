@@ -410,6 +410,7 @@ type Store = {
   }) => Promise<MutationResult>;
   updateSetting: (patch: {
     transfer_auto_confirm_hours?: number;
+    min_withdrawal_amount?: number;
     games?: string[];
     banks?: string[];
   }) => Promise<MutationResult>;
