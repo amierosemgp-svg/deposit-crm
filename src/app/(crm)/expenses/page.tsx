@@ -146,7 +146,7 @@ export default function ExpensesPage() {
         <div className="flex flex-wrap items-end gap-3">
           <div className="flex items-end gap-2">
             <div className="space-y-1">
-              <span className="text-[11px] font-medium text-muted-foreground">
+              <span className="block text-[11px] font-medium text-muted-foreground">
                 From
               </span>
               <Input
@@ -157,7 +157,7 @@ export default function ExpensesPage() {
               />
             </div>
             <div className="space-y-1">
-              <span className="text-[11px] font-medium text-muted-foreground">
+              <span className="block text-[11px] font-medium text-muted-foreground">
                 To
               </span>
               <Input
@@ -187,7 +187,7 @@ export default function ExpensesPage() {
           </div>
 
           <div className="space-y-1">
-            <span className="text-[11px] font-medium text-muted-foreground">
+            <span className="block text-[11px] font-medium text-muted-foreground">
               Category
             </span>
             <Select
@@ -218,7 +218,7 @@ export default function ExpensesPage() {
           </div>
 
           <div className="space-y-1">
-            <span className="text-[11px] font-medium text-muted-foreground">
+            <span className="block text-[11px] font-medium text-muted-foreground">
               Company
             </span>
             <Select
@@ -253,7 +253,7 @@ export default function ExpensesPage() {
           </div>
 
           <div className="min-w-[180px] flex-1 space-y-1">
-            <span className="text-[11px] font-medium text-muted-foreground">
+            <span className="block text-[11px] font-medium text-muted-foreground">
               Search
             </span>
             <div className="relative">

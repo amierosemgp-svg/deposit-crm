@@ -1,12 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
   AlertTriangle,
   ArrowLeft,
   CheckCircle2,
+  ChevronRight,
   Download,
   Gift,
   Hash,
@@ -70,9 +71,20 @@ function inRange(iso: string, from: string, to: string) {
 }
 
 type Cell = { node: React.ReactNode; csv: string | number };
+type Row = {
+  key: React.Key;
+  cells: Cell[];
+  /**
+   * Detail rows revealed by expanding this one. A row with children is a
+   * group header: it shows totals and is collapsed until clicked. Children use
+   * the same column grid, so a drilldown stays one table rather than a nested
+   * one.
+   */
+  children?: Row[];
+};
 type PreparedTable = {
   headers: { label: string; align?: "right" }[];
-  rows: { key: React.Key; cells: Cell[] }[];
+  rows: Row[];
   /** Footer cells aligned with headers; null = empty cell. */
   totals?: (React.ReactNode | null)[];
   summary?: string;
@@ -97,6 +109,12 @@ export default function ReportDetailPage() {
   const [companyId, setCompanyId] = useState("all");
   const [status, setStatus] = useState("all");
   const [query, setQuery] = useState("");
+  /** Which group rows are open. Keyed by row key, so it survives a re-sort. */
+  const [expanded, setExpanded] = useState<Set<React.Key>>(new Set());
+  /** Bonus Payout only: deposit bonuses, recommend bonuses, or both. */
+  const [payoutKind, setPayoutKind] = useState<"all" | "Deposit" | "Recommend">(
+    "all",
+  );
 
   const playerById = useMemo(
     () => new Map(players.map((p) => [p.player_id, p])),
@@ -572,7 +590,11 @@ export default function ReportDetailPage() {
         // A deposit-status filter is a statement about deposits; recommend
         // bonuses have their own three states and none of them can satisfy it,
         // so they step aside rather than being silently dropped to zero.
-        const showRecommend = status === "all";
+        // Status holds *deposit* statuses; a recommend bonus can never satisfy
+        // one. When the view is recommend-only the status filter simply does
+        // not apply — otherwise a leftover "completed" would empty the table
+        // and look like there were no recommend bonuses at all.
+        const showRecommend = status === "all" || payoutKind === "Recommend";
         const recommend = showRecommend ? filteredReferralBonuses : [];
 
         // One shape for two different payouts, so they sort and total together.
@@ -630,37 +652,90 @@ export default function ReportDetailPage() {
               referredBy: downline,
             };
           }),
-        ].sort((a, b) => b.date.localeCompare(a.date));
+        ]
+          .filter((p) => payoutKind === "all" || p.kind === payoutKind)
+          .sort((a, b) => b.date.localeCompare(a.date));
 
-        const rows = payouts.map((p) => ({
-          key: p.key,
-          cells: [
-            when(p.date),
-            {
-              node: (
-                <span
-                  className={cn(
-                    "inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium",
-                    p.kind === "Recommend"
-                      ? "bg-purple-500/10 text-purple-700 dark:text-purple-300"
-                      : "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
-                  )}
-                >
-                  {p.kind}
-                </span>
-              ),
-              csv: p.kind,
-            },
-            mono(p.ref),
-            text(p.player),
-            text(p.company),
-            text(p.game),
-            p.statusNode,
-            { node: `${p.pct}%`, csv: p.pct },
-            money(p.basis),
-            money(p.bonus),
-          ],
-        }));
+        // Grouped by game, because "which game is the bonus spend going to"
+        // is the question this report gets asked — a flat list of payouts made
+        // you add it up yourself. Games come from the payouts themselves rather
+        // than the catalogue, so a game with no bonuses this period is absent
+        // instead of a row of zeroes.
+        const NO_GAME = "(no game yet)";
+        const byGame = new Map<string, Payout[]>();
+        for (const p of payouts) {
+          // A recommend bonus has no game until CS credits it, and lumping
+          // those under a real game would misstate that game's spend.
+          const key = p.game && p.game !== "—" ? p.game : NO_GAME;
+          const list = byGame.get(key);
+          if (list) list.push(p);
+          else byGame.set(key, [p]);
+        }
+
+        const money0 = (n: number) => ({ node: formatRM(n), csv: n });
+        const blank: Cell = { node: "", csv: "" };
+
+        const rows = [...byGame.entries()]
+          // Biggest bonus spend first: the top row is the one worth looking at.
+          .map(([game, list]) => ({
+            game,
+            list,
+            bonus: list.reduce((a, p) => a + p.bonus, 0),
+            basis: list.reduce((a, p) => a + p.basis, 0),
+          }))
+          .sort((a, b) => b.bonus - a.bonus)
+          .map(({ game, list, bonus, basis }) => ({
+            key: `game-${game}`,
+            cells: [
+              {
+                node: (
+                  <span className="font-medium">
+                    {game}
+                    <span className="ml-1.5 text-[11px] font-normal text-muted-foreground">
+                      {list.length} payout{list.length === 1 ? "" : "s"}
+                    </span>
+                  </span>
+                ),
+                csv: game,
+              },
+              blank,
+              blank,
+              blank,
+              blank,
+              blank,
+              blank,
+              money0(basis),
+              money0(bonus),
+            ],
+            children: list.map((p) => ({
+              key: p.key,
+              cells: [
+                when(p.date),
+                {
+                  node: (
+                    <span
+                      className={cn(
+                        "inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium",
+                        p.kind === "Recommend"
+                          ? "bg-purple-500/10 text-purple-700 dark:text-purple-300"
+                          : "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+                      )}
+                    >
+                      {p.kind}
+                    </span>
+                  ),
+                  csv: p.kind,
+                },
+                mono(p.ref),
+                text(p.player),
+                text(p.company),
+                p.statusNode,
+                { node: `${p.pct}%`, csv: p.pct },
+                money(p.basis),
+                money(p.bonus),
+              ],
+            })),
+          }));
 
         const sum = (f: (p: Payout) => number) =>
           payouts.reduce((acc, p) => acc + f(p), 0);
@@ -668,12 +743,11 @@ export default function ReportDetailPage() {
 
         return {
           headers: [
-            { label: "Date" },
+            { label: "Game / Date" },
             { label: "Type" },
             { label: "Ref" },
             { label: "Player" },
             { label: "Company" },
-            { label: "Game" },
             { label: "Status" },
             { label: "Bonus %", align: "right" },
             { label: "Deposit", align: "right" },
@@ -688,13 +762,12 @@ export default function ReportDetailPage() {
             null,
             null,
             null,
-            null,
             formatRM(sum((p) => p.basis)),
             formatRM(sum((p) => p.bonus)),
           ],
           summary: showRecommend
-            ? `Deposits with no bonus are excluded. Includes ${recommend.length} recommend bonus${recommend.length === 1 ? "" : "es"} (${formatRM(recommendTotal)}) paid to uplines — dated when credited, or when earned if still pending. Cancelled ones are written off and excluded.`
-            : "Deposits with no bonus are excluded. Recommend bonuses are hidden while a deposit status filter is applied — set Status to “All” to include them.",
+            ? `Grouped by game — click a row to see its payouts. Deposits with no bonus are excluded. Includes ${recommend.length} recommend bonus${recommend.length === 1 ? "" : "es"} (${formatRM(recommendTotal)}) paid to uplines — dated when credited, or when earned if still pending. Cancelled ones are written off and excluded.`
+            : "Grouped by game — click a row to see its payouts. Deposits with no bonus are excluded. Recommend bonuses are hidden while a deposit status filter is applied — set Status to “All” to include them.",
         };
       }
 
@@ -774,6 +847,7 @@ export default function ReportDetailPage() {
     filteredWithdrawals,
     filteredReferralBonuses,
     status,
+    payoutKind,
     companies,
     playerById,
     userById,
@@ -830,8 +904,17 @@ export default function ReportDetailPage() {
         ];
       }
       case "bonus_payout": {
-        const withBonus = filteredDeposits.filter((d) => d.bonus_amount > 0);
-        const recommend = status === "all" ? filteredReferralBonuses : [];
+        // The kind filter applies here too. Tiles that ignored it would
+        // contradict the table right below them, which is exactly how an
+        // unexplained figure starts looking like a bug.
+        const withBonus =
+          payoutKind === "Recommend"
+            ? []
+            : filteredDeposits.filter((d) => d.bonus_amount > 0);
+        const recommend =
+          status === "all" && payoutKind !== "Deposit"
+            ? filteredReferralBonuses
+            : [];
         const depositTotal = withBonus.reduce((s, d) => s + d.bonus_amount, 0);
         const recommendTotal = recommend.reduce((s, b) => s + b.bonus_amount, 0);
         return [
@@ -865,7 +948,14 @@ export default function ReportDetailPage() {
       default:
         return [];
     }
-  }, [def, filteredDeposits, filteredWithdrawals, filteredReferralBonuses, status]);
+  }, [
+    def,
+    filteredDeposits,
+    filteredWithdrawals,
+    filteredReferralBonuses,
+    status,
+    payoutKind,
+  ]);
 
   if (!def || !table) {
     return (
@@ -909,7 +999,15 @@ export default function ReportDetailPage() {
     };
     const lines = [
       table.headers.map((h) => esc(h.label)).join(","),
-      ...table.rows.map((r) => r.cells.map((c) => esc(c.csv)).join(",")),
+      // Flattened: a grouped table exports its detail rows, plus the group
+      // header that owns them. Exporting only the collapsed headers would drop
+      // every individual payout from the file.
+      ...table.rows.flatMap((r) => [
+        r.cells.map((c) => esc(c.csv)).join(","),
+        ...(r.children ?? []).map((child) =>
+          child.cells.map((c) => esc(c.csv)).join(","),
+        ),
+      ]),
     ];
     const blob = new Blob(["\ufeff" + lines.join("\n")], {
       type: "text/csv;charset=utf-8",
@@ -963,7 +1061,7 @@ export default function ReportDetailPage() {
         <div className="flex flex-wrap items-end gap-3">
           <div className="flex items-end gap-2">
             <div className="space-y-1">
-              <span className="text-[11px] font-medium text-muted-foreground">
+              <span className="block text-[11px] font-medium text-muted-foreground">
                 From
               </span>
               <Input
@@ -974,7 +1072,7 @@ export default function ReportDetailPage() {
               />
             </div>
             <div className="space-y-1">
-              <span className="text-[11px] font-medium text-muted-foreground">
+              <span className="block text-[11px] font-medium text-muted-foreground">
                 To
               </span>
               <Input
@@ -1005,7 +1103,7 @@ export default function ReportDetailPage() {
           </div>
 
           <div className="space-y-1">
-            <span className="text-[11px] font-medium text-muted-foreground">
+            <span className="block text-[11px] font-medium text-muted-foreground">
               Company
             </span>
             <Select
@@ -1039,9 +1137,48 @@ export default function ReportDetailPage() {
             </Select>
           </div>
 
-          {statusOptions && (
+          {/* Bonus Payout mixes two genuinely different payouts — a deposit's
+              own bonus and a recommend bonus paid to an upline — so being able
+              to look at one at a time is the point of the Type column. */}
+          {def.id === "bonus_payout" && (
             <div className="space-y-1">
-              <span className="text-[11px] font-medium text-muted-foreground">
+              <span className="block text-[11px] font-medium text-muted-foreground">
+                Type
+              </span>
+              <Select
+                value={payoutKind}
+                onValueChange={(v) =>
+                  setPayoutKind((v as typeof payoutKind) ?? "all")
+                }
+                items={[
+                  { value: "all", label: "All Types" },
+                  { value: "Deposit", label: "Deposit bonus" },
+                  { value: "Recommend", label: "Recommend bonus" },
+                ]}
+              >
+                <SelectTrigger className="h-8 w-[170px] cursor-pointer">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all" className="cursor-pointer">
+                    All Types
+                  </SelectItem>
+                  <SelectItem value="Deposit" className="cursor-pointer">
+                    Deposit bonus
+                  </SelectItem>
+                  <SelectItem value="Recommend" className="cursor-pointer">
+                    Recommend bonus
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          {/* Hidden in recommend-only view: these are deposit statuses, and a
+              recommend bonus has its own (pending/assigned/cancelled). */}
+          {statusOptions && payoutKind !== "Recommend" && (
+            <div className="space-y-1">
+              <span className="block text-[11px] font-medium text-muted-foreground">
                 Status
               </span>
               <Select
@@ -1073,7 +1210,7 @@ export default function ReportDetailPage() {
           )}
 
           <div className="min-w-[200px] flex-1 space-y-1">
-            <span className="text-[11px] font-medium text-muted-foreground">
+            <span className="block text-[11px] font-medium text-muted-foreground">
               Search
             </span>
             <div className="relative">
@@ -1131,22 +1268,83 @@ export default function ReportDetailPage() {
               </tr>
             </thead>
             <tbody>
-              {table.rows.map((r) => (
-                <tr key={r.key} className="border-t hover:bg-muted/30">
-                  {r.cells.map((c, i) => (
-                    <td
-                      key={i}
+              {table.rows.map((r) => {
+                const isGroup = !!r.children?.length;
+                const isOpen = expanded.has(r.key);
+                return (
+                  <Fragment key={r.key}>
+                    <tr
                       className={cn(
-                        "px-3 py-2.5 text-[12px]",
-                        table.headers[i]?.align === "right" &&
-                          "text-right whitespace-nowrap",
+                        "border-t",
+                        isGroup
+                          ? "cursor-pointer bg-muted/20 font-medium hover:bg-muted/40"
+                          : "hover:bg-muted/30",
                       )}
+                      onClick={
+                        isGroup
+                          ? () =>
+                              setExpanded((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(r.key)) next.delete(r.key);
+                                else next.add(r.key);
+                                return next;
+                              })
+                          : undefined
+                      }
                     >
-                      {c.node}
-                    </td>
-                  ))}
-                </tr>
-              ))}
+                      {r.cells.map((c, i) => (
+                        <td
+                          key={i}
+                          className={cn(
+                            "px-3 py-2.5 text-[12px]",
+                            table.headers[i]?.align === "right" &&
+                              "text-right whitespace-nowrap",
+                          )}
+                        >
+                          {/* The chevron rides the first cell so the grid stays
+                              aligned with the detail rows beneath it. */}
+                          {isGroup && i === 0 ? (
+                            <span className="flex items-center gap-1.5">
+                              <ChevronRight
+                                className={cn(
+                                  "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
+                                  isOpen && "rotate-90",
+                                )}
+                              />
+                              {c.node}
+                            </span>
+                          ) : (
+                            c.node
+                          )}
+                        </td>
+                      ))}
+                    </tr>
+                    {isOpen &&
+                      r.children!.map((child) => (
+                        <tr
+                          key={child.key}
+                          className="border-t border-dashed hover:bg-muted/30"
+                        >
+                          {child.cells.map((c, i) => (
+                            <td
+                              key={i}
+                              className={cn(
+                                "px-3 py-2 text-[12px]",
+                                // Indented under the chevron, so a detail row
+                                // reads as belonging to the group above it.
+                                i === 0 && "pl-9",
+                                table.headers[i]?.align === "right" &&
+                                  "text-right whitespace-nowrap",
+                              )}
+                            >
+                              {c.node}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                  </Fragment>
+                );
+              })}
               {table.rows.length === 0 && (
                 <tr>
                   <td
