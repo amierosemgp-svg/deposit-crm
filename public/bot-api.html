@@ -291,6 +291,7 @@
         <a href="#create"><span class="m post">Post</span> Create transaction</a>
         <a href="#list"><span class="m get">Get</span> List pending</a>
         <a href="#get-one"><span class="m get">Get</span> Get one</a>
+        <a href="#manual-deposits"><span class="m get">Get</span> Manual deposits</a>
         <a href="#match"><span class="m patch">Patch</span> Match</a>
         <a href="#status"><span class="m patch">Patch</span> Update status</a>
         <a href="#members"><span class="m get">Get</span> Members</a>
@@ -486,7 +487,7 @@
           </div>
           <div class="ep-body">
             <div class="prose"><p>Fetch transactions the CRM is waiting on. Deposits, withdrawals, bank transfers and game transfers are returned as one stream — every item carries a <code>type</code> field (<code>"deposit"</code>, <code>"withdrawal"</code>, <code>"transfer"</code>, or <code>"game_transfer"</code>). For bank transfers only, the dedicated <a href="#transfers">Transfers</a> resource offers <code>account_id</code>/<code>offset</code> filters.</p>
-            <p><b>Manual items are never returned.</b> Deposits, withdrawals and transfers created with <em>"Handle manually (skip bot)"</em> are excluded from every bot endpoint — a human approves/completes/confirms them in the CRM, so your bot never sees or acts on them.</p></div>
+            <p><b>Manual items are not returned here.</b> Deposits, withdrawals and transfers created with <em>"Handle manually (skip bot)"</em> are excluded from this work queue — a human approves/completes/confirms them in the CRM, so your bot is never asked to act on them. To <em>read</em> manual deposits (any status, for reconciliation), use <a href="#manual-deposits">Manual deposits</a>; acting on them is still refused with a <code>409</code>.</p></div>
             <div class="note">
               <span class="ic">i</span>
               <div><b><code>transfer</code> ≠ <code>game_transfer</code>.</b> <code>type=transfer</code> is a <b>bank</b> transfer between company/leader bank accounts (statuses <code>pending_confirmation</code>, <code>confirmed</code>, …). Credits moving between a player's games are <code>type=game_transfer</code> (statuses <code>pending</code>, <code>solving</code>, <code>processing</code>, …) — see <a href="#game-transfers">Game transfers</a>. <code>?type=transfer&amp;status=processing</code> is a <code>400</code>, and a plain <code>?type=transfer</code> returns bank transfers only, which is usually empty. To find CS-requested game credit moves waiting on you, use <code>?type=game_transfer&amp;status=pending,solving</code>.</div>
@@ -596,6 +597,74 @@
             <div class="codes">
               <div><span class="sc ok">200</span><span>Returns <code>{ "transaction": {…} }</code>.</span></div>
               <div><span class="sc err">404</span><span>No transaction with that id.</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- MANUAL DEPOSITS -->
+      <section id="manual-deposits">
+        <h2>Endpoint</h2>
+        <div class="ep">
+          <div class="ep-head">
+            <span class="m get">Get</span>
+            <span class="ep-path">/api/bot/deposits/manual</span>
+            <span class="use-tag">List</span>
+          </div>
+          <div class="ep-body">
+            <div class="prose">
+              <p><b>Every deposit a human had a hand in, at every status.</b> Read-only.</p>
+              <p><a href="#list">List pending</a> is a <em>work queue</em> — it answers "what should I go and do", so it hides what you may not touch and defaults to a single status. This answers "what happened", so it filters nothing by default: a <code>completed</code> or <code>failed</code> deposit is exactly what a reconciliation needs and exactly what a work queue must leave out.</p>
+              <p>A deposit is returned if <b>either</b> flag says a person was involved. They are independent, which is why both are checked — CS can enter a deposit by hand and still leave the top-up to you, and a credit you detected can be flagged for manual handling.</p>
+            </div>
+            <div class="sub">What counts as manual</div>
+            <table>
+              <tr><th>Field</th><th>Meaning</th></tr>
+              <tr><td><code>source: "manual"</code></td><td>Typed into the CRM by a person, rather than detected in a bank statement.</td></tr>
+              <tr><td><code>skip_bot: true</code></td><td>A human drives it end to end — you must not match, top up or complete it.</td></tr>
+            </table>
+            <div class="note">
+              <span class="ic">i</span>
+              <div><b>Both fields are now on every deposit object</b> — here, in <a href="#list">List pending</a> and in <a href="#get-one">Get one</a> — so you can narrow to whichever sense of "manual" you meant.</div>
+            </div>
+            <div class="sub">Query parameters</div>
+            <table>
+              <tr><th>Param</th><th>Default</th><th>Description</th></tr>
+              <tr><td><code>status</code></td><td><em>none — all statuses</em></td><td>Comma-separated: <code>pending_match</code>, <code>matched</code>, <code>pending</code>, <code>approved</code>, <code>processing</code>, <code>completed</code>, <code>failed</code>. An unknown value is a <code>400</code>, not an empty list.</td></tr>
+              <tr><td><code>player_id</code></td><td>—</td><td>Restrict to one player.</td></tr>
+              <tr><td><code>limit</code></td><td><code>100</code></td><td>Max rows (up to 500).</td></tr>
+              <tr><td><code>offset</code></td><td><code>0</code></td><td>Paging offset.</td></tr>
+            </table>
+            <div class="note">
+              <span class="ic">!</span>
+              <div><b>Listing is not permission to act.</b> A <code>skip_bot</code> deposit returned here is refused with a <code>409</code> by <a href="#status">Update status</a> and <a href="#match">Match</a>. That is enforced server-side — it no longer depends on you simply never having seen the id.</div>
+            </div>
+            <div class="code" data-copy>
+              <button class="copy">Copy</button>
+              <pre><code><span class="c"># everything a person created or handles, any status</span>
+<span class="k">curl</span> <span class="s">"$BASE/api/bot/deposits/manual"</span> -H <span class="s">"X-API-Key: $KEY"</span>
+
+<span class="c"># just the finished ones, for reconciliation</span>
+<span class="k">curl</span> <span class="s">"$BASE/api/bot/deposits/manual?status=completed,failed"</span> -H <span class="s">"X-API-Key: $KEY"</span>
+
+<span class="c"># one player's manual deposits</span>
+<span class="k">curl</span> <span class="s">"$BASE/api/bot/deposits/manual?player_id=2621"</span> -H <span class="s">"X-API-Key: $KEY"</span></code></pre>
+            </div>
+            <div class="sub">Response</div>
+            <div class="code" data-copy>
+              <button class="copy">Copy</button>
+              <pre><code>{ <span class="s">"count"</span>: 2, <span class="s">"deposits"</span>: [
+  { <span class="s">"type"</span>: <span class="s">"deposit"</span>, <span class="s">"id"</span>: 27, <span class="s">"status"</span>: <span class="s">"pending_match"</span>,
+    <span class="s">"source"</span>: <span class="s">"manual"</span>, <span class="s">"skip_bot"</span>: false,
+    <span class="s">"amount"</span>: 11.0, <span class="s">"total_amount"</span>: 11.0, <span class="s">"bank"</span>: <span class="s">"Maybank"</span>,
+    <span class="s">"player_id"</span>: 2621, <span class="s">"selected_game"</span>: <span class="s">"Mega888"</span> }
+] }</code></pre>
+            </div>
+            <div class="sub">Status codes</div>
+            <div class="codes">
+              <div><span class="sc ok">200</span><span>Returns <code>{ "count": n, "deposits": […] }</code>, newest first.</span></div>
+              <div><span class="sc err">400</span><span>Unrecognised <code>status</code> or <code>player_id</code>.</span></div>
+              <div><span class="sc err">401</span><span>Missing or invalid API key.</span></div>
             </div>
           </div>
         </div>

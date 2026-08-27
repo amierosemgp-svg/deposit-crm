@@ -59,6 +59,19 @@ export async function PATCH(
   if (!row) {
     return Response.json({ error: "Transaction not found" }, { status: 404 });
   }
+  // A manual deposit is a human's to drive: CS approves, processes and
+  // completes it. The agent used to be kept away by not being shown it, but
+  // GET /api/bot/deposits/manual now lists these by id, so the rule is enforced
+  // here rather than resting on the agent not knowing the number.
+  if (row.skip_bot) {
+    return Response.json(
+      {
+        error:
+          "This deposit is handled manually (skip_bot) — a human completes it in the CRM. It is listed for reference only.",
+      },
+      { status: 409 },
+    );
+  }
   const gi = await playerGameInfoMap([row.player_id]);
   const player = row.player_id ? gi.get(row.player_id) : null;
 

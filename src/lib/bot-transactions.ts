@@ -199,6 +199,13 @@ export function depositToBotJson(
     // Full list of the player's game accounts, for reference.
     game_accounts: gameAccounts,
     game_topup_reference: d.game_topup_reference,
+    // Who created it: "manual" = typed into the CRM by a person, "bot" = a bank
+    // credit the agent detected.
+    source: d.source,
+    // Who handles it. true = a human drives this one end to end; the agent must
+    // not match, top up or complete it. Independent of `source`: a person can
+    // enter a deposit and still leave it to the agent.
+    skip_bot: d.skip_bot,
     matched_at: d.matched_at,
     approved_at: d.approved_at,
     receipt_url: d.receipt_url,
