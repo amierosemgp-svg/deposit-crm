@@ -222,8 +222,8 @@ export function TopNav() {
                           trigger is unaffected — it renders `companyLabel`, so
                           the collapsed chip stays just the company name. */}
                       {c.leader_name && (
-                        <span className="text-muted-foreground">
-                          {c.leader_name}
+                        <span className="-ml-1 self-center text-[11px] text-muted-foreground/70">
+                          ({c.leader_name})
                         </span>
                       )}
                     </SelectItem>
