@@ -31,7 +31,8 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 /**
  * GET /api/history — server-paginated, filtered audit trail. Unlike the store's
  * capped auditLog (500 rows), this pages through the entire transactions table.
- * Query params: limit, offset, type, user (all|system|<id>), from, to (YYYY-MM-DD),
+ * Query params: limit, offset, type (comma list, or omitted for all),
+ * user (all|system|<id>), from, to (YYYY-MM-DD),
  * q (player name/username/reference), player_id, company_id, leader_id (top-nav
  * scope).
  * Rows are always constrained to what the requesting user is allowed to see.
@@ -89,11 +90,24 @@ export async function GET(request: Request) {
       );
     }
 
+    // Comma-separated, so the UI can tick several types at once. A single
+    // value still works unchanged, which keeps older callers and any saved
+    // links working.
     if (type && type !== "all") {
-      if (!(AUDIT_TYPES as readonly string[]).includes(type)) {
+      const wanted = type
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
+      const valid = wanted.filter((t): t is (typeof AUDIT_TYPES)[number] =>
+        (AUDIT_TYPES as readonly string[]).includes(t),
+      );
+      // Reject an unknown value rather than quietly dropping it: silently
+      // widening the result set reads as "the filter worked", which is worse
+      // than an error.
+      if (!wanted.length || valid.length !== wanted.length) {
         return jsonError("Invalid type");
       }
-      conds.push(eq(transactions.type, type as (typeof AUDIT_TYPES)[number]));
+      conds.push(inArray(transactions.type, valid));
     }
 
     // One player's whole trail — what the player profile's Transactions tab

@@ -6,6 +6,14 @@ import { useStore } from "@/lib/store";
 import type { AuditEntry } from "@/lib/types";
 import { formatRM, formatDateTime } from "@/lib/format";
 import { Card } from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PlayerNameLink } from "@/components/player-name-link";
@@ -22,6 +30,7 @@ import {
   ScrollText,
   Download,
   Loader2,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
 } from "lucide-react";
@@ -147,7 +156,9 @@ export default function HistoryPage() {
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
   const selectedLeaderId = useStore((s) => s.selectedLeaderId);
 
-  const [type, setType] = useState("all");
+  // A set, not a single value: empty means "no filter" (all types), which keeps
+  // the default cheap to express and the URL free of a nine-item list.
+  const [types, setTypes] = useState<Set<AuditType>>(new Set());
   const [handledBy, setHandledBy] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -165,7 +176,7 @@ export default function HistoryPage() {
   );
 
   const hasFilters =
-    type !== "all" ||
+    types.size > 0 ||
     handledBy !== "all" ||
     !!dateFrom ||
     !!dateTo ||
@@ -175,7 +186,9 @@ export default function HistoryPage() {
     const p = new URLSearchParams();
     p.set("limit", String(limit));
     p.set("offset", String(off));
-    if (type !== "all") p.set("type", type);
+    // Omitted entirely when nothing is ticked, so "all" stays the absence of a
+    // filter rather than a value the server has to special-case.
+    if (types.size) p.set("type", [...types].join(","));
     if (handledBy !== "all") p.set("user", handledBy);
     if (dateFrom) p.set("from", dateFrom);
     if (dateTo) p.set("to", dateTo);
@@ -187,7 +200,9 @@ export default function HistoryPage() {
 
   // Reset to the first page whenever a filter (or the top-nav scope) changes.
   const filterKey = JSON.stringify([
-    type,
+    // Sorted, so ticking A then B and B then A are the same filter and don't
+    // trigger a redundant refetch.
+    [...types].sort(),
     handledBy,
     dateFrom,
     dateTo,
@@ -225,7 +240,7 @@ export default function HistoryPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    type,
+    filterKey,
     handledBy,
     dateFrom,
     dateTo,
@@ -329,26 +344,59 @@ export default function HistoryPage() {
       <Card className="overflow-hidden p-0 gap-0">
         <div className="flex flex-wrap items-center gap-2 border-b bg-muted/30 px-4 py-2.5">
           <Filter className="h-3.5 w-3.5 text-muted-foreground" />
-          <Select
-            value={type}
-            onValueChange={(v) => setType(v ?? "all")}
-            items={[
-              { value: "all", label: "All types" },
-              ...TYPE_ORDER.map((t) => ({ value: t, label: TYPE_META[t].label })),
-            ]}
-          >
-            <SelectTrigger className="h-8 w-[150px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All types</SelectItem>
+          {/* Multi-select: the trigger keeps the Select's shape and width so it
+              still reads as one of the filter row's controls, but the menu ticks
+              rather than replaces. Nothing ticked = every type, which is why the
+              label falls back to "All types" instead of "None". */}
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={(props) => (
+                <button
+                  {...props}
+                  className="flex h-8 w-[170px] items-center justify-between gap-1.5 rounded-md border border-input bg-background px-3 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/30 cursor-pointer"
+                >
+                  <span className="truncate">
+                    {types.size === 0
+                      ? "All types"
+                      : types.size === 1
+                        ? TYPE_META[[...types][0]].label
+                        : `${types.size} types`}
+                  </span>
+                  <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                </button>
+              )}
+            />
+            <DropdownMenuContent align="start" className="w-[190px]">
+              <DropdownMenuItem
+                onClick={() => setTypes(new Set())}
+                className="cursor-pointer"
+              >
+                All types
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
               {TYPE_ORDER.map((t) => (
-                <SelectItem key={t} value={t}>
+                <DropdownMenuCheckboxItem
+                  key={t}
+                  checked={types.has(t)}
+                  // Kept open on click: picking several types one at a time is
+                  // the whole point, and a menu that shuts after each tick
+                  // makes that four round trips instead of one.
+                  closeOnClick={false}
+                  onCheckedChange={(checked) =>
+                    setTypes((prev) => {
+                      const next = new Set(prev);
+                      if (checked) next.add(t);
+                      else next.delete(t);
+                      return next;
+                    })
+                  }
+                  className="cursor-pointer"
+                >
                   {TYPE_META[t].label}
-                </SelectItem>
+                </DropdownMenuCheckboxItem>
               ))}
-            </SelectContent>
-          </Select>
+            </DropdownMenuContent>
+          </DropdownMenu>
 
           <Select
             value={handledBy}
