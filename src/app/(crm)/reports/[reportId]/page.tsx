@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
@@ -71,16 +71,32 @@ function inRange(iso: string, from: string, to: string) {
 }
 
 type Cell = { node: React.ReactNode; csv: string | number };
+
+/** One bonus payout, deposit or recommend, as plain data (no JSX). */
+type BonusPayout = {
+  key: string;
+  date: string;
+  kind: "Deposit" | "Recommend";
+  ref: string;
+  playerId: number | null;
+  player: string;
+  company: string;
+  game: string;
+  status: DepositStatus | ReferralBonusStatus;
+  pct: number;
+  basis: number;
+  bonus: number;
+};
 type Row = {
   key: React.Key;
   cells: Cell[];
   /**
-   * Detail rows revealed by expanding this one. A row with children is a
-   * group header: it shows totals and is collapsed until clicked. Children use
-   * the same column grid, so a drilldown stays one table rather than a nested
-   * one.
+   * Makes the row a drilldown link: clicking replaces the whole table with a
+   * narrower view. Preferred over expanding in place because the two levels
+   * answer different questions and want different columns — a game summary and
+   * a payout list have almost nothing in common to share a grid with.
    */
-  children?: Row[];
+  onClick?: () => void;
 };
 type PreparedTable = {
   headers: { label: string; align?: "right" }[];
@@ -109,8 +125,12 @@ export default function ReportDetailPage() {
   const [companyId, setCompanyId] = useState("all");
   const [status, setStatus] = useState("all");
   const [query, setQuery] = useState("");
-  /** Which group rows are open. Keyed by row key, so it survives a re-sort. */
-  const [expanded, setExpanded] = useState<Set<React.Key>>(new Set());
+  /**
+   * Bonus Payout only: the game being drilled into, or null for the summary.
+   * Cleared whenever a filter moves — a game that no longer has payouts would
+   * otherwise strand you on an empty table.
+   */
+  const [drillGame, setDrillGame] = useState<string | null>(null);
   /** Bonus Payout only: deposit bonuses, recommend bonuses, or both. */
   const [payoutKind, setPayoutKind] = useState<"all" | "Deposit" | "Recommend">(
     "all",
@@ -240,6 +260,110 @@ export default function ReportDetailPage() {
         return true;
       }),
     [withdrawals, dateFrom, dateTo, companyId, status, q, playerById],
+  );
+
+  /** A game with no name yet — a recommend bonus CS has not credited. */
+  const NO_GAME = "(no game yet)";
+
+  /**
+   * Every bonus payout in range, deposit and recommend alike, as plain data.
+   *
+   * Hoisted out of the table builder so the summary cards read the exact same
+   * list: they used to recompute it independently, which is how a card and the
+   * table under it can quietly disagree.
+   */
+  const bonusPayouts = useMemo(() => {
+    if (def?.id !== "bonus_payout") return [];
+
+    const withBonus =
+      payoutKind === "Recommend"
+        ? []
+        : filteredDeposits.filter((d) => d.bonus_amount > 0);
+    // Status holds *deposit* statuses; a recommend bonus can never satisfy one.
+    // In recommend-only view the status filter simply does not apply, or a
+    // leftover "completed" would empty the table and read as "no recommend
+    // bonuses" rather than "that filter doesn't apply here".
+    const showRecommend =
+      (status === "all" || payoutKind === "Recommend") &&
+      payoutKind !== "Deposit";
+    const recommend = showRecommend ? filteredReferralBonuses : [];
+
+    // One shape for two different payouts, so they sort and total together.
+    // "Player" is who receives the money — the depositor for a deposit bonus,
+    // the *upline* for a recommend bonus — which is the whole reason these
+    // cannot be folded into the deposit's own figure.
+    const rows: BonusPayout[] = [
+      ...withBonus.map((d) => ({
+        key: `dep-${d.deposit_id}`,
+        date: d.deposit_date,
+        kind: "Deposit" as const,
+        ref: d.transaction_ref,
+        playerId: d.player_id,
+        player: playerLabelOf(d.player_id, d.player_username),
+        company: companyNameOf(d.company_entity_id),
+        game: d.selected_game || NO_GAME,
+        status: d.status as BonusPayout["status"],
+        pct: d.bonus_percentage,
+        basis: d.deposit_amount,
+        bonus: d.bonus_amount,
+      })),
+      ...recommend.map((b) => {
+        const upline = playerById.get(b.upline_player_id);
+        return {
+          key: `rec-${b.bonus_id}`,
+          // When the credit was handed over, or when it was earned if it is
+          // still waiting for CS.
+          date: b.assigned_at ?? b.created_at,
+          kind: "Recommend" as const,
+          ref: `REC-${b.bonus_id}`,
+          // The upline is the one paid, so they are the "player" here.
+          playerId: b.upline_player_id,
+          player:
+            upline?.full_name ?? upline?.username ?? `#${b.upline_player_id}`,
+          company: companyNameOf(upline?.company_entity_id),
+          // No game until CS credits it; lumping those under a real game would
+          // misstate that game's spend.
+          game: b.game_name || NO_GAME,
+          status: b.status as BonusPayout["status"],
+          pct: b.bonus_percentage,
+          // The downline's qualifying deposit — the figure the percentage was
+          // taken from, so the arithmetic on the row still reads.
+          basis: b.deposit_amount,
+          bonus: b.bonus_amount,
+        };
+      }),
+    ];
+
+    return rows
+      .filter((p) => payoutKind === "all" || p.kind === payoutKind)
+      .sort((a, b) => b.date.localeCompare(a.date));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    def,
+    filteredDeposits,
+    filteredReferralBonuses,
+    status,
+    payoutKind,
+    playerById,
+  ]);
+
+  // Drop the drill when a filter moves: the game may no longer have any
+  // payouts, and an empty table with no explanation reads as a bug. Derived
+  // during render rather than in an effect, so it settles before paint.
+  const drillKey = JSON.stringify([dateFrom, dateTo, companyId, status, payoutKind, q]);
+  const [prevDrillKey, setPrevDrillKey] = useState(drillKey);
+  if (drillKey !== prevDrillKey) {
+    setPrevDrillKey(drillKey);
+    if (drillGame !== null) setDrillGame(null);
+  }
+
+  /** The payouts actually on screen: one game's worth, or all of them. */
+  const shownPayouts = useMemo(
+    () =>
+      drillGame === null
+        ? bonusPayouts
+        : bonusPayouts.filter((p) => p.game === drillGame),
+    [bonusPayouts, drillGame],
   );
 
   const table: PreparedTable | null = useMemo(() => {
@@ -586,164 +710,78 @@ export default function ReportDetailPage() {
       }
 
       case "bonus_payout": {
-        const withBonus = filteredDeposits.filter((d) => d.bonus_amount > 0);
-        // A deposit-status filter is a statement about deposits; recommend
-        // bonuses have their own three states and none of them can satisfy it,
-        // so they step aside rather than being silently dropped to zero.
-        // Status holds *deposit* statuses; a recommend bonus can never satisfy
-        // one. When the view is recommend-only the status filter simply does
-        // not apply — otherwise a leftover "completed" would empty the table
-        // and look like there were no recommend bonuses at all.
-        const showRecommend = status === "all" || payoutKind === "Recommend";
-        const recommend = showRecommend ? filteredReferralBonuses : [];
+        const sum = (list: BonusPayout[], f: (p: BonusPayout) => number) =>
+          list.reduce((acc, p) => acc + f(p), 0);
 
-        // One shape for two different payouts, so they sort and total together.
-        // "Player" is who receives the money — the depositor for a deposit
-        // bonus, the *upline* for a recommend bonus — which is the whole reason
-        // these cannot be folded into the deposit's own figure.
-        type Payout = {
-          key: string;
-          date: string;
-          kind: "Deposit" | "Recommend";
-          ref: string;
-          player: string;
-          company: string;
-          game: string;
-          statusNode: Cell;
-          pct: number;
-          basis: number;
-          bonus: number;
-        };
+        // ---- Level 1: one row per game. Click a row to drill in. ----
+        if (drillGame === null) {
+          const byGame = new Map<string, BonusPayout[]>();
+          for (const p of bonusPayouts) {
+            const list = byGame.get(p.game);
+            if (list) list.push(p);
+            else byGame.set(p.game, [p]);
+          }
 
-        const payouts: Payout[] = [
-          ...withBonus.map((d) => ({
-            key: `dep-${d.deposit_id}`,
-            date: d.deposit_date,
-            kind: "Deposit" as const,
-            ref: d.transaction_ref,
-            player: playerLabelOf(d.player_id, d.player_username),
-            company: companyNameOf(d.company_entity_id),
-            game: d.selected_game ?? "—",
-            statusNode: badge(d.status),
-            pct: d.bonus_percentage,
-            basis: d.deposit_amount,
-            bonus: d.bonus_amount,
-          })),
-          ...recommend.map((b) => {
-            const upline = playerById.get(b.upline_player_id);
-            const downline =
-              b.downline_full_name ?? b.downline_username ?? `#${b.downline_player_id}`;
-            return {
-              key: `rec-${b.bonus_id}`,
-              // When the credit was handed over, or when it was earned if it
-              // is still waiting for CS.
-              date: b.assigned_at ?? b.created_at,
-              kind: "Recommend" as const,
-              ref: `REC-${b.bonus_id}`,
-              player: upline?.full_name ?? upline?.username ?? `#${b.upline_player_id}`,
-              company: companyNameOf(upline?.company_entity_id),
-              game: b.game_name ?? "—",
-              statusNode: badge(b.status),
-              pct: b.bonus_percentage,
-              // The downline's qualifying deposit — the figure the percentage
-              // was taken from, so the arithmetic on the row still reads.
-              basis: b.deposit_amount,
-              bonus: b.bonus_amount,
-              referredBy: downline,
-            };
-          }),
-        ]
-          .filter((p) => payoutKind === "all" || p.kind === payoutKind)
-          .sort((a, b) => b.date.localeCompare(a.date));
+          // Biggest bonus spend first: the top row is the one worth opening.
+          // Games come from the payouts themselves, not the catalogue, so a
+          // game with no bonuses this period is absent rather than a zero row.
+          const groups = [...byGame.entries()]
+            .map(([game, list]) => ({
+              game,
+              list,
+              bonus: sum(list, (p) => p.bonus),
+              basis: sum(list, (p) => p.basis),
+              deposit: list.filter((p) => p.kind === "Deposit").length,
+              recommend: list.filter((p) => p.kind === "Recommend").length,
+            }))
+            .sort((a, b) => b.bonus - a.bonus);
 
-        // Grouped by game, because "which game is the bonus spend going to"
-        // is the question this report gets asked — a flat list of payouts made
-        // you add it up yourself. Games come from the payouts themselves rather
-        // than the catalogue, so a game with no bonuses this period is absent
-        // instead of a row of zeroes.
-        const NO_GAME = "(no game yet)";
-        const byGame = new Map<string, Payout[]>();
-        for (const p of payouts) {
-          // A recommend bonus has no game until CS credits it, and lumping
-          // those under a real game would misstate that game's spend.
-          const key = p.game && p.game !== "—" ? p.game : NO_GAME;
-          const list = byGame.get(key);
-          if (list) list.push(p);
-          else byGame.set(key, [p]);
-        }
-
-        const money0 = (n: number) => ({ node: formatRM(n), csv: n });
-        const blank: Cell = { node: "", csv: "" };
-
-        const rows = [...byGame.entries()]
-          // Biggest bonus spend first: the top row is the one worth looking at.
-          .map(([game, list]) => ({
-            game,
-            list,
-            bonus: list.reduce((a, p) => a + p.bonus, 0),
-            basis: list.reduce((a, p) => a + p.basis, 0),
-          }))
-          .sort((a, b) => b.bonus - a.bonus)
-          .map(({ game, list, bonus, basis }) => ({
-            key: `game-${game}`,
-            cells: [
-              {
-                node: (
-                  <span className="font-medium">
-                    {game}
-                    <span className="ml-1.5 text-[11px] font-normal text-muted-foreground">
-                      {list.length} payout{list.length === 1 ? "" : "s"}
-                    </span>
-                  </span>
-                ),
-                csv: game,
-              },
-              blank,
-              blank,
-              blank,
-              blank,
-              blank,
-              blank,
-              money0(basis),
-              money0(bonus),
+          return {
+            headers: [
+              { label: "Game" },
+              { label: "Payouts", align: "right" },
+              { label: "Deposit bonuses", align: "right" },
+              { label: "Recommend bonuses", align: "right" },
+              { label: "Deposit Volume", align: "right" },
+              { label: "Bonus Paid", align: "right" },
             ],
-            children: list.map((p) => ({
-              key: p.key,
+            rows: groups.map((g) => ({
+              key: `game-${g.game}`,
+              onClick: () => setDrillGame(g.game),
               cells: [
-                when(p.date),
                 {
                   node: (
-                    <span
-                      className={cn(
-                        "inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium",
-                        p.kind === "Recommend"
-                          ? "bg-purple-500/10 text-purple-700 dark:text-purple-300"
-                          : "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
-                      )}
-                    >
-                      {p.kind}
+                    <span className="flex items-center gap-1.5 font-medium">
+                      {g.game}
+                      <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
                     </span>
                   ),
-                  csv: p.kind,
+                  csv: g.game,
                 },
-                mono(p.ref),
-                text(p.player),
-                text(p.company),
-                p.statusNode,
-                { node: `${p.pct}%`, csv: p.pct },
-                money(p.basis),
-                money(p.bonus),
+                { node: g.list.length, csv: g.list.length },
+                { node: g.deposit, csv: g.deposit },
+                { node: g.recommend, csv: g.recommend },
+                { node: formatRM(g.basis), csv: g.basis },
+                { node: formatRM(g.bonus), csv: g.bonus },
               ],
             })),
-          }));
+            totals: [
+              "Totals",
+              bonusPayouts.length,
+              bonusPayouts.filter((p) => p.kind === "Deposit").length,
+              bonusPayouts.filter((p) => p.kind === "Recommend").length,
+              formatRM(sum(bonusPayouts, (p) => p.basis)),
+              formatRM(sum(bonusPayouts, (p) => p.bonus)),
+            ],
+            summary:
+              "Click a game to see its payouts. Deposits with no bonus are excluded; cancelled recommend bonuses are written off and excluded.",
+          };
+        }
 
-        const sum = (f: (p: Payout) => number) =>
-          payouts.reduce((acc, p) => acc + f(p), 0);
-        const recommendTotal = recommend.reduce((a, b) => a + b.bonus_amount, 0);
-
+        // ---- Level 2: one game's payouts. ----
         return {
           headers: [
-            { label: "Game / Date" },
+            { label: "Date" },
             { label: "Type" },
             { label: "Ref" },
             { label: "Player" },
@@ -753,7 +791,34 @@ export default function ReportDetailPage() {
             { label: "Deposit", align: "right" },
             { label: "Bonus Paid", align: "right" },
           ],
-          rows,
+          rows: shownPayouts.map((p) => ({
+            key: p.key,
+            cells: [
+              when(p.date),
+              {
+                node: (
+                  <span
+                    className={cn(
+                      "inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium",
+                      p.kind === "Recommend"
+                        ? "bg-purple-500/10 text-purple-700 dark:text-purple-300"
+                        : "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+                    )}
+                  >
+                    {p.kind}
+                  </span>
+                ),
+                csv: p.kind,
+              },
+              mono(p.ref),
+              text(p.player),
+              text(p.company),
+              badge(p.status),
+              { node: `${p.pct}%`, csv: p.pct },
+              money(p.basis),
+              money(p.bonus),
+            ],
+          })),
           totals: [
             "Totals",
             null,
@@ -762,12 +827,10 @@ export default function ReportDetailPage() {
             null,
             null,
             null,
-            formatRM(sum((p) => p.basis)),
-            formatRM(sum((p) => p.bonus)),
+            formatRM(sum(shownPayouts, (p) => p.basis)),
+            formatRM(sum(shownPayouts, (p) => p.bonus)),
           ],
-          summary: showRecommend
-            ? `Grouped by game — click a row to see its payouts. Deposits with no bonus are excluded. Includes ${recommend.length} recommend bonus${recommend.length === 1 ? "" : "es"} (${formatRM(recommendTotal)}) paid to uplines — dated when credited, or when earned if still pending. Cancelled ones are written off and excluded.`
-            : "Grouped by game — click a row to see its payouts. Deposits with no bonus are excluded. Recommend bonuses are hidden while a deposit status filter is applied — set Status to “All” to include them.",
+          summary: `Bonus payouts for ${drillGame}.`,
         };
       }
 
@@ -845,9 +908,9 @@ export default function ReportDetailPage() {
     def,
     filteredDeposits,
     filteredWithdrawals,
-    filteredReferralBonuses,
-    status,
-    payoutKind,
+    bonusPayouts,
+    shownPayouts,
+    drillGame,
     companies,
     playerById,
     userById,
@@ -904,43 +967,32 @@ export default function ReportDetailPage() {
         ];
       }
       case "bonus_payout": {
-        // The kind filter applies here too. Tiles that ignored it would
-        // contradict the table right below them, which is exactly how an
-        // unexplained figure starts looking like a bug.
-        const withBonus =
-          payoutKind === "Recommend"
-            ? []
-            : filteredDeposits.filter((d) => d.bonus_amount > 0);
-        const recommend =
-          status === "all" && payoutKind !== "Deposit"
-            ? filteredReferralBonuses
-            : [];
-        const depositTotal = withBonus.reduce((s, d) => s + d.bonus_amount, 0);
-        const recommendTotal = recommend.reduce((s, b) => s + b.bonus_amount, 0);
+        // Reads the same list the table does, scoped the same way — so drilling
+        // into a game moves the cards with it, and a card can never quietly
+        // disagree with the rows underneath it.
+        const shown = shownPayouts;
+        const dep = shown.filter((p) => p.kind === "Deposit");
+        const rec = shown.filter((p) => p.kind === "Recommend");
+        const depTotal = dep.reduce((a, p) => a + p.bonus, 0);
+        const recTotal = rec.reduce((a, p) => a + p.bonus, 0);
+        const scope = drillGame ? ` · ${drillGame}` : "";
         return [
           {
             title: "Total Bonus Amount",
-            value: formatRM(depositTotal + recommendTotal),
-            sub: `${formatRM(depositTotal)} deposit · ${formatRM(recommendTotal)} recommend`,
+            value: formatRM(depTotal + recTotal),
+            sub: `${formatRM(depTotal)} deposit · ${formatRM(recTotal)} recommend${scope}`,
             icon: Gift,
           },
           {
             title: "Unique Players",
-            value: String(
-              uniquePlayers([
-                ...withBonus.map((d) => d.player_id),
-                // The upline is the one paid, so they are the player who
-                // "claimed" a recommend bonus.
-                ...recommend.map((b) => b.upline_player_id),
-              ]),
-            ),
+            value: String(uniquePlayers(shown.map((p) => p.playerId))),
             sub: "claimed a bonus",
             icon: Users,
           },
           {
-            title: "Bonus Transactions",
-            value: (withBonus.length + recommend.length).toLocaleString(),
-            sub: `${withBonus.length} deposit · ${recommend.length} recommend`,
+            title: drillGame ? "Payouts" : "Bonus Transactions",
+            value: shown.length.toLocaleString(),
+            sub: `${dep.length} deposit · ${rec.length} recommend`,
             icon: Hash,
           },
         ];
@@ -948,14 +1000,7 @@ export default function ReportDetailPage() {
       default:
         return [];
     }
-  }, [
-    def,
-    filteredDeposits,
-    filteredWithdrawals,
-    filteredReferralBonuses,
-    status,
-    payoutKind,
-  ]);
+  }, [def, filteredDeposits, filteredWithdrawals, shownPayouts, drillGame]);
 
   if (!def || !table) {
     return (
@@ -999,15 +1044,9 @@ export default function ReportDetailPage() {
     };
     const lines = [
       table.headers.map((h) => esc(h.label)).join(","),
-      // Flattened: a grouped table exports its detail rows, plus the group
-      // header that owns them. Exporting only the collapsed headers would drop
-      // every individual payout from the file.
-      ...table.rows.flatMap((r) => [
-        r.cells.map((c) => esc(c.csv)).join(","),
-        ...(r.children ?? []).map((child) =>
-          child.cells.map((c) => esc(c.csv)).join(","),
-        ),
-      ]),
+      // Exports exactly what is on screen — the game summary, or one game's
+      // payouts once drilled in.
+      ...table.rows.map((r) => r.cells.map((c) => esc(c.csv)).join(",")),
     ];
     const blob = new Blob(["\ufeff" + lines.join("\n")], {
       type: "text/csv;charset=utf-8",
@@ -1043,10 +1082,25 @@ export default function ReportDetailPage() {
             <div>
               <h1 className="text-xl font-semibold leading-tight">
                 {def.title}
+                {drillGame && (
+                  <span className="text-muted-foreground"> · {drillGame}</span>
+                )}
               </h1>
-              <p className="mt-0.5 text-sm text-muted-foreground">
-                {def.description}
-              </p>
+              {drillGame ? (
+                // A way back out. Without it the only route to the summary is a
+                // full page reload, since the drill lives in component state.
+                <button
+                  onClick={() => setDrillGame(null)}
+                  className="mt-0.5 inline-flex cursor-pointer items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+                >
+                  <ArrowLeft className="h-3.5 w-3.5" />
+                  All games
+                </button>
+              ) : (
+                <p className="mt-0.5 text-sm text-muted-foreground">
+                  {def.description}
+                </p>
+              )}
             </div>
           </div>
           <Button onClick={exportCsv} className="shrink-0 cursor-pointer">
@@ -1268,83 +1322,31 @@ export default function ReportDetailPage() {
               </tr>
             </thead>
             <tbody>
-              {table.rows.map((r) => {
-                const isGroup = !!r.children?.length;
-                const isOpen = expanded.has(r.key);
-                return (
-                  <Fragment key={r.key}>
-                    <tr
+              {table.rows.map((r) => (
+                <tr
+                  key={r.key}
+                  onClick={r.onClick}
+                  className={cn(
+                    "border-t",
+                    r.onClick
+                      ? "cursor-pointer hover:bg-primary/5"
+                      : "hover:bg-muted/30",
+                  )}
+                >
+                  {r.cells.map((c, i) => (
+                    <td
+                      key={i}
                       className={cn(
-                        "border-t",
-                        isGroup
-                          ? "cursor-pointer bg-muted/20 font-medium hover:bg-muted/40"
-                          : "hover:bg-muted/30",
+                        "px-3 py-2.5 text-[12px]",
+                        table.headers[i]?.align === "right" &&
+                          "text-right whitespace-nowrap",
                       )}
-                      onClick={
-                        isGroup
-                          ? () =>
-                              setExpanded((prev) => {
-                                const next = new Set(prev);
-                                if (next.has(r.key)) next.delete(r.key);
-                                else next.add(r.key);
-                                return next;
-                              })
-                          : undefined
-                      }
                     >
-                      {r.cells.map((c, i) => (
-                        <td
-                          key={i}
-                          className={cn(
-                            "px-3 py-2.5 text-[12px]",
-                            table.headers[i]?.align === "right" &&
-                              "text-right whitespace-nowrap",
-                          )}
-                        >
-                          {/* The chevron rides the first cell so the grid stays
-                              aligned with the detail rows beneath it. */}
-                          {isGroup && i === 0 ? (
-                            <span className="flex items-center gap-1.5">
-                              <ChevronRight
-                                className={cn(
-                                  "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
-                                  isOpen && "rotate-90",
-                                )}
-                              />
-                              {c.node}
-                            </span>
-                          ) : (
-                            c.node
-                          )}
-                        </td>
-                      ))}
-                    </tr>
-                    {isOpen &&
-                      r.children!.map((child) => (
-                        <tr
-                          key={child.key}
-                          className="border-t border-dashed hover:bg-muted/30"
-                        >
-                          {child.cells.map((c, i) => (
-                            <td
-                              key={i}
-                              className={cn(
-                                "px-3 py-2 text-[12px]",
-                                // Indented under the chevron, so a detail row
-                                // reads as belonging to the group above it.
-                                i === 0 && "pl-9",
-                                table.headers[i]?.align === "right" &&
-                                  "text-right whitespace-nowrap",
-                              )}
-                            >
-                              {c.node}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                  </Fragment>
-                );
-              })}
+                      {c.node}
+                    </td>
+                  ))}
+                </tr>
+              ))}
               {table.rows.length === 0 && (
                 <tr>
                   <td
