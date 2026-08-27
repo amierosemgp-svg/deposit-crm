@@ -257,6 +257,17 @@ export const players = pgTable("players", {
   })
     .notNull()
     .defaultNow(),
+  // Maintained by a database trigger (2026-08-27-players-updated-at.sql), not
+  // by application code: players are written from the CRM API, the agent API
+  // and import scripts, and /api/state uses this to decide whether it can skip
+  // re-sending the 1.5 MB roster. A stamp one write path could forget would
+  // serve stale data as fresh.
+  updated_at: timestamp("updated_at", {
+    withTimezone: true,
+    mode: "string",
+  })
+    .notNull()
+    .defaultNow(),
   status: playerStatusEnum("status").notNull().default("active"),
   total_deposits: numeric("total_deposits", {
     precision: 12,

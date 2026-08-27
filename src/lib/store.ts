@@ -67,7 +67,10 @@ type StateResponse = {
   me: Me;
   entities: Entity[];
   users: User[];
-  players: Player[];
+  /** Absent when the roster we already hold is current — see playersVersion. */
+  players?: Player[];
+  /** Opaque version of the player roster; echoed back on the next poll. */
+  playersVersion: string;
   deposits: Deposit[];
   withdrawals: Withdrawal[];
   gameCredits: GameCredit[];
@@ -420,6 +423,8 @@ type Store = {
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let knownDepositIds: Set<number> | null = null;
+/** Roster version the store currently holds; sent back to skip re-fetching it. */
+let knownPlayersVersion: string | null = null;
 
 export const useStore = create<Store>((set, get) => {
   async function mutate(
@@ -489,7 +494,13 @@ export const useStore = create<Store>((set, get) => {
     },
 
     refresh: async () => {
-      const res = await api<StateResponse>("/api/state");
+      // Echo the roster version we hold: the server omits the 1.5 MB player
+      // list when it still matches, which is nearly every poll.
+      const res = await api<StateResponse>(
+        knownPlayersVersion
+          ? `/api/state?pv=${encodeURIComponent(knownPlayersVersion)}`
+          : "/api/state",
+      );
       if (!res.ok) {
         if (res.status === 401 && typeof window !== "undefined") {
           window.location.href = "/login";
@@ -515,6 +526,9 @@ export const useStore = create<Store>((set, get) => {
         }
       }
       knownDepositIds = incoming;
+      knownPlayersVersion = data.playersVersion;
+      // `data` omits `players` entirely when unchanged, and zustand merges
+      // shallowly — so the roster already in the store survives untouched.
       set({ ...data, deposits: flagged, hydrated: true });
     },
 

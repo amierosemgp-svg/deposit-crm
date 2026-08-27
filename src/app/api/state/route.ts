@@ -1,4 +1,4 @@
-import { aliasedTable, asc, desc, eq, inArray, isNull, or } from "drizzle-orm";
+import { aliasedTable, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   bankAccounts,
@@ -51,9 +51,33 @@ let lastSweptAt = 0;
  * Returns every collection the UI needs, filtered by the user's role scope.
  * The frontend polls this (10s) for live updates.
  */
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const user = await requireUser();
+
+    // The player list is 98% of this payload — 2,625 rows, 1.5 MB, and the UI
+    // polls every 10 seconds. Re-sending an unchanged roster six times a minute
+    // per open tab is what put the database 713% over its egress quota.
+    //
+    // So the client tells us the version it holds and we omit the list when it
+    // is still current. `players.updated_at` is trigger-maintained, so this
+    // cannot serve a stale roster as fresh: any write from any path moves it.
+    // count(*) is in the version because a DELETE lowers no timestamp.
+    const [playersStamp] = await db
+      .select({
+        max: sql<string | null>`max(${players.updated_at})`,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(players);
+    // The viewer's own scope is part of the version: the stamp above only
+    // answers "did the players table change", and a user moved to a different
+    // company would otherwise keep serving themselves a roster they can no
+    // longer see.
+    const scopeKey =
+      user.companyIds === null ? "all" : [...user.companyIds].sort().join(".");
+    const playersVersion = `${playersStamp?.max ?? "0"}:${playersStamp?.count ?? 0}:${scopeKey}`;
+    const playersUnchanged =
+      new URL(request.url).searchParams.get("pv") === playersVersion;
 
     // Lazy sweeps: settle any bank transfer whose confirmation window expired,
     // restart any game transfer the agent has gone quiet on, and settle any
@@ -79,22 +103,35 @@ export async function GET() {
       user.companyIds ??
       entityTree.filter((e) => e.entity_type === "company").map((e) => e.entity_id);
 
-    const scopedPlayers = await (companyIds.length || user.companyIds === null
-      ? db
-          .select()
-          .from(players)
-          .where(
-            user.companyIds === null
-              ? undefined
-              : inArray(players.company_entity_id, companyIds),
-          )
-          // Without an explicit order Postgres returns heap order, and an
-          // UPDATE writes a new tuple at the end of the heap — so editing a
-          // player made them jump position in the list. player_id breaks ties
-          // because a bulk import gives every row the same registration_date.
-          .orderBy(desc(players.registration_date), desc(players.player_id))
-      : Promise.resolve([]));
-    const playerIds = scopedPlayers.map((p) => p.player_id);
+    const canSeePlayers = companyIds.length > 0 || user.companyIds === null;
+    const playerScope =
+      user.companyIds === null
+        ? undefined
+        : inArray(players.company_entity_id, companyIds);
+
+    // The ids are needed either way — they scope the withdrawals, credits,
+    // transfers and bonuses below — but they never leave the server, so when
+    // the client's roster is current we fetch the ids alone and skip the 1.5 MB.
+    let scopedPlayers: (typeof players.$inferSelect)[] = [];
+    let playerIds: number[] = [];
+    if (canSeePlayers && playersUnchanged) {
+      const idRows = await db
+        .select({ player_id: players.player_id })
+        .from(players)
+        .where(playerScope);
+      playerIds = idRows.map((p) => p.player_id);
+    } else if (canSeePlayers) {
+      scopedPlayers = await db
+        .select()
+        .from(players)
+        .where(playerScope)
+        // Without an explicit order Postgres returns heap order, and an
+        // UPDATE writes a new tuple at the end of the heap — so editing a
+        // player made them jump position in the list. player_id breaks ties
+        // because a bulk import gives every row the same registration_date.
+        .orderBy(desc(players.registration_date), desc(players.player_id));
+      playerIds = scopedPlayers.map((p) => p.player_id);
+    }
 
     const accountEntityIds =
       entityIds ?? entityTree.map((e) => e.entity_id);
@@ -332,7 +369,10 @@ export async function GET() {
       me: user,
       entities: entityTree,
       users: allUsers,
-      players: scopedPlayers,
+      // Omitted, not nulled, when unchanged — the store shallow-merges, so an
+      // absent key keeps the roster it already has.
+      ...(playersUnchanged ? {} : { players: scopedPlayers }),
+      playersVersion,
       deposits: scopedDeposits,
       withdrawals: scopedWithdrawals,
       gameCredits: scopedCredits,
