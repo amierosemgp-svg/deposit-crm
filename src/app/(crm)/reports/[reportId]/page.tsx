@@ -386,20 +386,36 @@ export default function ReportDetailPage() {
           }
           return a;
         };
+        // Realised money only, matching the Dashboard's profit tile.
+        //
+        // This counted every non-failed row at its requested figure, which
+        // booked unconfirmed deposits as revenue and, worse, booked a
+        // withdrawal at what the player ASKED for rather than what was paid —
+        // so a request of 100 settled at 30 overstated GGR's cost by 70, while
+        // a `withdraw_all` (requested_amount = 0 until the agent reports back)
+        // counted as nothing at all however much left the wallet.
         for (const d of filteredDeposits) {
-          if (d.company_entity_id == null || d.status === "failed") continue;
+          if (d.company_entity_id == null || d.status !== "completed") continue;
           const a = aggOf(d.company_entity_id);
           a.depCount += 1;
           a.depVolume += d.deposit_amount;
           a.bonus += d.bonus_amount;
         }
         for (const w of filteredWithdrawals) {
-          if (w.status === "failed") continue;
+          if (w.status !== "paid") continue;
           const cid = playerById.get(w.player_id)?.company_entity_id;
           if (cid == null) continue;
           const a = aggOf(cid);
           a.wdCount += 1;
-          a.wdVolume += w.requested_amount;
+          a.wdVolume += w.credit_pulled_amount;
+        }
+        // Recommend bonuses are money out too, and are invisible here
+        // otherwise: they are paid to the upline and never touch a deposit row.
+        for (const b of filteredReferralBonuses) {
+          if (b.status !== "assigned") continue;
+          const cid = playerById.get(b.upline_player_id)?.company_entity_id;
+          if (cid == null) continue;
+          aggOf(cid).bonus += b.bonus_amount;
         }
         const entries = companies
           .map((c) => ({ company: c, agg: byCompany.get(c.company_id) }))
@@ -465,7 +481,8 @@ export default function ReportDetailPage() {
             formatRM(t.wdVolume),
             formatRM(t.depVolume - t.wdVolume - t.bonus),
           ],
-          summary: "Failed deposits and withdrawals are excluded.",
+          summary:
+            "Realised money only: completed deposits and paid withdrawals, at the amount actually paid. Bonuses include recommend bonuses credited to uplines.",
         };
       }
 

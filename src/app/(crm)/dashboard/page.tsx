@@ -83,6 +83,7 @@ export default function DashboardPage() {
   const boAccounts = useStore((s) => s.boAccounts);
   const bankAccounts = useStore((s) => s.bankAccounts);
   const expenses = useStore((s) => s.expenses);
+  const referralBonuses = useStore((s) => s.referralBonuses);
   const botHealth = useStore((s) => s.botHealth);
   const userName = useStore((s) => s.userName);
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
@@ -126,6 +127,17 @@ export default function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [expenses, selectedCompanyId, selectedLeaderId],
   );
+  // Recommend bonuses are paid to the *upline*, so they are scoped by that
+  // player's company — and they never appear on a deposit row, which is why
+  // the profit line below has to add them separately.
+  const scopedReferralBonuses = useMemo(
+    () =>
+      referralBonuses.filter((b) =>
+        companyInScope(playerMap.get(b.upline_player_id)?.company_entity_id),
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [referralBonuses, playerMap, selectedCompanyId, selectedLeaderId],
+  );
   const scopedBankAccounts = useMemo(
     () => bankAccounts.filter((a) => companyInScope(a.entity_id)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -154,18 +166,41 @@ export default function DashboardPage() {
     0,
   );
 
-  // Profit = deposits − withdrawals − bonuses − expenses (failed rows excluded).
-  const grossDeposits = rangeDeposits
-    .filter((d) => d.status !== "failed")
-    .reduce((sum, d) => sum + d.deposit_amount, 0);
-  const grossBonuses = rangeDeposits
-    .filter((d) => d.status !== "failed")
-    .reduce((sum, d) => sum + d.bonus_amount, 0);
-  const grossWithdrawals = rangeWithdrawals
-    .filter((w) => w.status !== "failed")
-    .reduce((sum, w) => sum + w.requested_amount, 0);
+  // Profit counts REALISED money only — what actually arrived and what actually
+  // left — so it reconciles with the two cards beside it.
+  //
+  // It previously summed every non-failed row at its *requested* figure, which
+  // was wrong three ways at once: a withdrawal paid at 30 against a request of
+  // 100 was booked as 100; a withdrawal still awaiting payment was booked as
+  // money already gone; and a `withdraw_all` request, which carries
+  // requested_amount = 0 until the agent reports back, was booked as zero no
+  // matter how much left the wallet. Deposits had the mirror problem, counting
+  // unconfirmed pending_match rows as income.
+  const grossDeposits = completedDeposits.reduce(
+    (sum, d) => sum + d.deposit_amount,
+    0,
+  );
+  const grossBonuses = completedDeposits.reduce(
+    (sum, d) => sum + d.bonus_amount,
+    0,
+  );
+  // What was actually paid out, which is the same figure the Withdrawals card
+  // shows — never requested_amount.
+  const grossWithdrawals = withdrawalsTotal;
+  // Recommend bonuses are real money out and live in their own table, keyed on
+  // the upline rather than on a deposit. Dated when credited; cancelled ones
+  // were written off and never paid.
+  const recommendBonuses = scopedReferralBonuses
+    .filter((b) => b.status === "assigned" && b.assigned_at)
+    .filter((b) => inRange(b.assigned_at!, dateFrom, dateTo))
+    .reduce((sum, b) => sum + b.bonus_amount, 0);
   const totalExpenses = rangeExpenses.reduce((sum, e) => sum + e.amount, 0);
-  const profit = grossDeposits - grossWithdrawals - grossBonuses - totalExpenses;
+  const profit =
+    grossDeposits -
+    grossWithdrawals -
+    grossBonuses -
+    recommendBonuses -
+    totalExpenses;
 
   // Live states (not range-bound)
   const pendingDeposits = scopedDeposits.filter((d) =>
@@ -318,7 +353,14 @@ export default function DashboardPage() {
         <StatTile
           title="Profit"
           value={formatRM(profit)}
-          sub="Deposits − withdrawals − bonuses − expenses"
+          // Spelled out because the figure is a difference of five numbers and
+          // an unexplained negative is indistinguishable from a bug — which is
+          // exactly how the old one read.
+          sub={`${formatRM(grossDeposits)} in − ${formatRM(grossWithdrawals)} out${
+            grossBonuses + recommendBonuses > 0
+              ? ` − ${formatRM(grossBonuses + recommendBonuses)} bonus`
+              : ""
+          }${totalExpenses > 0 ? ` − ${formatRM(totalExpenses)} expenses` : ""}`}
           icon={TrendingUp}
           tone={profit >= 0 ? "success" : "danger"}
           valueClassName={profit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}
