@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { apiKeys } from "@/db/schema";
+import { KILL_RESPONSE_BODY, getKillSwitch } from "@/lib/kill-switch";
 
 export type BotAuthResult =
   | {
@@ -18,6 +19,17 @@ export type BotAuthResult =
  * Optionally enforces the key's IP allowlist (when configured).
  */
 export async function requireBotKey(request: Request): Promise<BotAuthResult> {
+  // Emergency kill switch: the whole bot API answers with the wipe order —
+  // even to valid keys — so every agent learns to stop and self-clean on its
+  // very next poll, whatever endpoint that happens to be.
+  const kill = await getKillSwitch();
+  if (kill.active) {
+    return {
+      ok: false,
+      response: Response.json(KILL_RESPONSE_BODY, { status: 410 }),
+    };
+  }
+
   const raw =
     request.headers.get("x-api-key") ??
     request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");

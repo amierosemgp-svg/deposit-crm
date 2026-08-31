@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { gameTransfers, players, transactions } from "@/db/schema";
@@ -157,6 +157,15 @@ export async function GET() {
         user.companyIds.length
           ? inArray(transactions.entity_id, user.companyIds)
           : sql`false`,
+      );
+    }
+    // CS agents see a rolling day, matching the rest of the sheet.
+    if (user.role === "cs_agent") {
+      conds.push(
+        gte(
+          transactions.created_at,
+          new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+        ),
       );
     }
 

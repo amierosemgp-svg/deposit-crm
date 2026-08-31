@@ -18,6 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { KillSwitchHeaderButton } from "@/components/kill-switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { initialsOf, formatRelative, formatRM } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -237,6 +238,7 @@ export function TopNav() {
           <PlayerSearch />
 
           <div className="ml-auto flex items-center gap-2">
+            <KillSwitchHeaderButton />
             <ThemeToggle />
             <DropdownMenu>
               <DropdownMenuTrigger

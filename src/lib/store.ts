@@ -504,6 +504,11 @@ export const useStore = create<Store>((set, get) => {
       );
       if (!res.ok) {
         if (res.status === 401 && typeof window !== "undefined") {
+          // The token may still verify at the Edge proxy (e.g. it was killed by
+          // the session-epoch, which only the DB knows) — so a bare redirect to
+          // /login bounces straight back to /dashboard and loops. Clear the
+          // cookie first, then land on /login with no session at all.
+          await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
           window.location.href = "/login";
         }
         return;

@@ -5,6 +5,7 @@ import { PlayerProfileProvider } from "@/components/player-name-link";
 import { ClientOnly } from "@/components/client-only";
 import { StoreHydrator } from "@/components/store-hydrator";
 import { BotLiveFeed } from "@/components/bot-live-feed";
+import { KillSwitchListener } from "@/components/kill-switch";
 
 export default function CrmLayout({
   children,
@@ -41,6 +42,8 @@ export default function CrmLayout({
           has nothing meaningful to render on the server. */}
       <ClientOnly>
         <BotLiveFeed />
+        {/* Ctrl+Alt+Delete — the admin's emergency kill switch. */}
+        <KillSwitchListener />
       </ClientOnly>
     </PlayerProfileProvider>
   );

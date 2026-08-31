@@ -1,4 +1,4 @@
-import { aliasedTable, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { aliasedTable, and, asc, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   bankAccounts,
@@ -133,6 +133,13 @@ export async function GET(request: Request) {
       playerIds = scopedPlayers.map((p) => p.player_id);
     }
 
+    // CS agents work a rolling day: transactions older than 24h are not
+    // theirs to browse. Leaders and admins see the full window.
+    const csCutoffIso =
+      user.role === "cs_agent"
+        ? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+        : null;
+
     const accountEntityIds =
       entityIds ?? entityTree.map((e) => e.entity_id);
     const scopedAccounts = await db
@@ -158,14 +165,24 @@ export async function GET(request: Request) {
       db
         .select()
         .from(deposits)
-        .where(depositScopeFilter(user))
+        .where(
+          and(
+            depositScopeFilter(user),
+            csCutoffIso ? gte(deposits.created_at, csCutoffIso) : undefined,
+          ),
+        )
         .orderBy(desc(deposits.created_at))
         .limit(500),
       playerIds.length
         ? db
             .select()
             .from(withdrawals)
-            .where(inArray(withdrawals.player_id, playerIds))
+            .where(
+              and(
+                inArray(withdrawals.player_id, playerIds),
+                csCutoffIso ? gte(withdrawals.created_at, csCutoffIso) : undefined,
+              ),
+            )
             .orderBy(desc(withdrawals.created_at))
             .limit(500)
         : user.companyIds === null
@@ -180,7 +197,12 @@ export async function GET(request: Request) {
         ? db
             .select()
             .from(gameTransfers)
-            .where(inArray(gameTransfers.player_id, playerIds))
+            .where(
+              and(
+                inArray(gameTransfers.player_id, playerIds),
+                csCutoffIso ? gte(gameTransfers.created_at, csCutoffIso) : undefined,
+              ),
+            )
             .orderBy(desc(gameTransfers.created_at))
             .limit(200)
         : user.companyIds === null
@@ -191,9 +213,12 @@ export async function GET(request: Request) {
             .select()
             .from(bankTransfers)
             .where(
-              user.companyIds === null
-                ? undefined
-                : inArray(bankTransfers.from_account_id, accountIds),
+              and(
+                user.companyIds === null
+                  ? undefined
+                  : inArray(bankTransfers.from_account_id, accountIds),
+                csCutoffIso ? gte(bankTransfers.created_at, csCutoffIso) : undefined,
+              ),
             )
             .orderBy(desc(bankTransfers.created_at))
             .limit(200)
