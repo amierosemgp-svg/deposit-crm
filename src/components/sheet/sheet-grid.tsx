@@ -25,11 +25,21 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
 import { cn } from "@/lib/utils";
+
+/**
+ * Committed rows paginate by infinite scroll: only the latest LOAD_CHUNK are
+ * rendered at first (the entry rows sit at the bottom, so that's where the
+ * user starts), and scrolling up past the sentinel loads older chunks. All
+ * selection/clipboard logic keeps using absolute row indices over the full
+ * dataset, so ranges spanning unrendered rows still copy correctly.
+ */
+const LOAD_CHUNK = 100;
 
 export type SheetColumn = {
   key: string;
@@ -253,6 +263,20 @@ export function SheetGrid({
   const nCols = columns.length;
   const draftStart = rows.length;
 
+  // ---- infinite scroll over the committed rows ----
+
+  // How many of the latest committed rows are rendered; older ones mount as
+  // the user scrolls up past the sentinel.
+  const [visibleCount, setVisibleCount] = useState(LOAD_CHUNK);
+  const hiddenAbove = Math.max(0, rows.length - visibleCount);
+  const visibleRows = hiddenAbove ? rows.slice(hiddenAbove) : rows;
+  const topSentinelRef = useRef<HTMLTableRowElement>(null);
+  // scrollHeight snapshot taken when a chunk load starts, so the viewport can
+  // be held still while older rows are prepended above it.
+  const prevScrollHeightRef = useRef<number | null>(null);
+  // Cell to bring into view once the chunk containing it has rendered.
+  const pendingScrollRef = useRef<CellPos | null>(null);
+
   const flash = useCallback((msg: string) => {
     setNotice(msg);
     if (noticeTimer.current) clearTimeout(noticeTimer.current);
@@ -291,10 +315,54 @@ export function SheetGrid({
         setSel({ r: nr, c: nc });
         setExt(null);
       }
-      scrollCellIntoView(nr, nc);
+      if (nr < hiddenAbove) {
+        // Target row isn't rendered yet (PageUp / Ctrl+A / Home runs) — load
+        // enough older rows to include it, then scroll once they exist.
+        setVisibleCount(Math.min(rows.length, rows.length - nr + 20));
+        pendingScrollRef.current = { r: nr, c: nc };
+      } else {
+        scrollCellIntoView(nr, nc);
+      }
     },
-    [nRows, nCols, scrollCellIntoView],
+    [nRows, nCols, hiddenAbove, rows.length, scrollCellIntoView],
   );
+
+  // Load the next older chunk whenever the sentinel row scrolls into view.
+  useEffect(() => {
+    if (!hiddenAbove) return;
+    const root = containerRef.current;
+    const el = topSentinelRef.current;
+    if (!root || !el) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((en) => en.isIntersecting)) return;
+        if (prevScrollHeightRef.current === null) {
+          prevScrollHeightRef.current = root.scrollHeight;
+        }
+        setVisibleCount((v) => Math.min(rows.length, v + LOAD_CHUNK));
+      },
+      // Start loading a couple hundred px before the sentinel is actually
+      // visible so fast scrolling rarely hits the placeholder.
+      { root, rootMargin: "240px 0px 0px 0px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [hiddenAbove, rows.length]);
+
+  // After a chunk mounts above the viewport, push scrollTop down by exactly
+  // the added height so the rows the user was looking at don't jump.
+  useLayoutEffect(() => {
+    const root = containerRef.current;
+    if (root && prevScrollHeightRef.current !== null) {
+      root.scrollTop += root.scrollHeight - prevScrollHeightRef.current;
+      prevScrollHeightRef.current = null;
+    }
+    if (pendingScrollRef.current) {
+      const { r, c } = pendingScrollRef.current;
+      pendingScrollRef.current = null;
+      scrollCellIntoView(r, c);
+    }
+  }, [visibleCount, scrollCellIntoView]);
 
   // ---- draft mutation helpers ----
 
@@ -689,7 +757,19 @@ export function SheetGrid({
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, r) => (
+            {hiddenAbove > 0 && (
+              <tr ref={topSentinelRef} className="h-7">
+                <td
+                  colSpan={nCols + 2}
+                  className="select-none border-b border-border bg-muted/40 px-2 text-center text-[11px] text-muted-foreground"
+                >
+                  Loading earlier rows… ({hiddenAbove.toLocaleString()} above)
+                </td>
+              </tr>
+            )}
+            {visibleRows.map((row, i) => {
+              const r = hiddenAbove + i;
+              return (
               <GridRow
                 key={row.id}
                 rIdx={r}
@@ -715,7 +795,8 @@ export function SheetGrid({
                 onCellMouseEnter={onCellMouseEnter}
                 onCellDoubleClick={onCellDoubleClick}
               />
-            ))}
+              );
+            })}
             {!readOnly &&
               drafts.map((draft, i) => {
                 const r = draftStart + i;
