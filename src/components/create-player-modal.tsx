@@ -92,6 +92,45 @@ export function CreatePlayerModal({
   const [createdName, setCreatedName] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  // Lead-list distributions, so a member can be converted from a bought list
+  // with its code auto-numbered. Fetched once when the modal opens.
+  type DistOpt = { dist_id: number; to_entity_id: number; list_name: string; prefix: string; next_seq: number };
+  const [dists, setDists] = useState<DistOpt[]>([]);
+  const [sourceDistId, setSourceDistId] = useState<string>("");
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    void (async () => {
+      try {
+        const res = await fetch("/api/lead-lists");
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          lead_lists?: { name: string; distributions: DistOpt[] }[];
+        };
+        if (!alive) return;
+        const flat: DistOpt[] = [];
+        for (const l of data.lead_lists ?? []) {
+          for (const d of l.distributions ?? []) flat.push({ ...d, list_name: l.name });
+        }
+        setDists(flat);
+      } catch {
+        /* ignore — lists are optional */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [open]);
+
+  // Distributions pointed at the currently selected company.
+  const distsForCompany = dists.filter(
+    (d) => String(d.to_entity_id) === form.company_entity_id,
+  );
+  const selectedDist = distsForCompany.find((d) => String(d.dist_id) === sourceDistId);
+  const previewCode = selectedDist
+    ? `${selectedDist.prefix}${String(selectedDist.next_seq).padStart(4, "0")}`
+    : "";
+
   useEffect(() => {
     if (!open) {
       const t = setTimeout(() => {
@@ -130,11 +169,15 @@ export function CreatePlayerModal({
 
   const errors = {
     full_name: !form.full_name.trim() ? "Required" : null,
-    username: !form.username.trim()
-      ? "Required"
-      : usernameTaken
-        ? "Member code already exists"
-        : null,
+    // When converting from a list the code is auto-assigned, so the manual
+    // field isn't required or checked.
+    username: selectedDist
+      ? null
+      : !form.username.trim()
+        ? "Required"
+        : usernameTaken
+          ? "Member code already exists"
+          : null,
     telegram_username: !form.telegram_username.trim() ? "Required" : null,
     company_entity_id: !form.company_entity_id ? "Required" : null,
     bank_accounts: form.bank_accounts.some(
@@ -218,7 +261,8 @@ export function CreatePlayerModal({
     setSubmitting(true);
     const res = await createPlayer({
       full_name: fullName,
-      username: form.username.trim(),
+      username: sourceDistId ? previewCode || "auto" : form.username.trim(),
+      ...(sourceDistId ? { source_dist_id: Number(sourceDistId) } : {}),
       telegram_username: tg.startsWith("@") ? tg : `@${tg}`,
       contact_number: form.contact_number.trim() || undefined,
       wechat_id: form.wechat_id.trim() || undefined,
@@ -296,15 +340,24 @@ export function CreatePlayerModal({
                     </Label>
                     <Input
                       id="cp-username"
-                      value={form.username}
+                      value={selectedDist ? previewCode : form.username}
                       onChange={(e) => update("username", e.target.value)}
                       placeholder="S2616"
+                      disabled={!!selectedDist}
                       aria-invalid={!!errors.username}
                     />
-                    {errors.username === "Member code already exists" && (
-                      <p className="text-[11px] text-rose-600 dark:text-rose-400">
-                        This member code is already taken
+                    {selectedDist ? (
+                      <p className="text-[11px] text-muted-foreground">
+                        Auto-numbered from{" "}
+                        <span className="font-medium">{selectedDist.list_name}</span> — the next
+                        code is assigned on save.
                       </p>
+                    ) : (
+                      errors.username === "Member code already exists" && (
+                        <p className="text-[11px] text-rose-600 dark:text-rose-400">
+                          This member code is already taken
+                        </p>
+                      )
                     )}
                   </div>
                 </div>
@@ -351,7 +404,10 @@ export function CreatePlayerModal({
                     </Label>
                     <Select
                       value={form.company_entity_id}
-                      onValueChange={(v) => update("company_entity_id", v ?? "")}
+                      onValueChange={(v) => {
+                        update("company_entity_id", v ?? "");
+                        setSourceDistId("");
+                      }}
                       items={companies.map((c) => ({
                         value: String(c.company_id),
                         label: c.company_name,
@@ -376,6 +432,32 @@ export function CreatePlayerModal({
                     </Select>
                   </div>
                 </div>
+
+                {distsForCompany.length > 0 && (
+                  <div className="space-y-1.5">
+                    <Label>From lead list (optional)</Label>
+                    <Select
+                      value={sourceDistId || null}
+                      onValueChange={(v) => setSourceDistId(v ?? "")}
+                    >
+                      <SelectTrigger className="h-8 w-full">
+                        <SelectValue placeholder="Not from a list — enter a code manually" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="">Not from a list</SelectItem>
+                        {distsForCompany.map((d) => (
+                          <SelectItem key={d.dist_id} value={String(d.dist_id)}>
+                            {d.list_name} ({d.prefix})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-[11px] text-muted-foreground">
+                      Pick a list this company received to convert a lead — its member code fills
+                      itself.
+                    </p>
+                  </div>
+                )}
 
                 <div className="rounded-md border bg-muted/20 p-3 space-y-3">
                   <div className="flex items-center justify-between">

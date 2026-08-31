@@ -57,6 +57,12 @@ export type SheetColumn = {
   numeric?: boolean;
   /** Autocomplete suggestions offered while editing (typeahead dropdown). */
   options?: Array<string | SheetSuggestion>;
+  /**
+   * Ghost hint shown in this cell while empty — but only on the first entry row
+   * that's still blank, so it reads as a template for the next row to fill,
+   * never as clutter down the whole panel.
+   */
+  placeholder?: string;
 };
 
 /**
@@ -137,6 +143,7 @@ const GridRow = memo(function GridRow({
   tone,
   isDraft,
   firstDraft,
+  showPlaceholder,
   sel,
   editing,
   editorProps,
@@ -153,6 +160,8 @@ const GridRow = memo(function GridRow({
   tone: SheetRowTone;
   isDraft: boolean;
   firstDraft: boolean;
+  /** This is the first still-blank entry row — show column placeholders here. */
+  showPlaceholder: boolean;
   sel: RowSel;
   /** Column being edited in this row, or -1. */
   editing: number;
@@ -203,7 +212,15 @@ const GridRow = memo(function GridRow({
                 "outline outline-2 -outline-offset-1 outline-emerald-600 dark:outline-emerald-400",
             )}
           >
-            {isEditing && editorProps ? <CellEditor {...editorProps} /> : cells[c] ?? ""}
+            {isEditing && editorProps ? (
+              <CellEditor {...editorProps} />
+            ) : (cells[c] ?? "") ? (
+              cells[c]
+            ) : showPlaceholder && col.entry && col.placeholder ? (
+              <span className="italic text-muted-foreground/45">{col.placeholder}</span>
+            ) : (
+              ""
+            )}
           </td>
         );
       })}
@@ -1212,6 +1229,7 @@ export function SheetGrid({
                 tone={row.tone ?? "default"}
                 isDraft={false}
                 firstDraft={false}
+                showPlaceholder={false}
                 sel={
                   bounds && r >= bounds.r1 && r <= bounds.r2
                     ? {
@@ -1263,7 +1281,15 @@ export function SheetGrid({
             <col />
           </colgroup>
               <tbody>
-                {drafts.map((draft, i) => {
+                {(() => {
+                  // The one row that carries the placeholder template: the first
+                  // entry row that still has an empty entry field. It stays there
+                  // — hinting the blanks — until every field is filled, then the
+                  // hint moves to the next row.
+                  const placeholderIndex = drafts.findIndex((d) =>
+                    columns.some((col, c) => col.entry && !(d[c] ?? "").trim()),
+                  );
+                  return drafts.map((draft, i) => {
                   const r = draftStart + i;
                   const status = draftStatus(draft, i);
                   return (
@@ -1284,6 +1310,7 @@ export function SheetGrid({
                       tone="default"
                       isDraft
                       firstDraft={false}
+                      showPlaceholder={i === placeholderIndex}
                       sel={
                         bounds && r >= bounds.r1 && r <= bounds.r2
                           ? {
@@ -1300,7 +1327,8 @@ export function SheetGrid({
                       onCellDoubleClick={onCellDoubleClick}
                     />
                   );
-                })}
+                  });
+                })()}
               </tbody>
             </table>
           </div>

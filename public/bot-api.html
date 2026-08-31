@@ -830,11 +830,12 @@
             <div class="sub">Body</div>
             <div class="tbl-wrap"><table>
               <tr><th>Field</th><th></th><th>Notes</th></tr>
-              <tr><td><code>username</code></td><td><span class="req">req</span></td><td>Unique. Idempotency key — re-sending returns <code>{ "duplicate": true }</code>.</td></tr>
+              <tr><td><code>username</code></td><td><span class="req">req</span></td><td>The member code. Unique <b>within the company</b> (company_A and company_B may both have <code>AZ0001</code>). Idempotency key <em>per company</em> — re-sending the same code in the same company returns <code>{ "duplicate": true }</code>.</td></tr>
               <tr><td><code>full_name</code></td><td><span class="req">req</span></td><td></td></tr>
               <tr><td><code>telegram_username</code></td><td><span class="req">req</span></td><td><code>@</code> added automatically if missing.</td></tr>
               <tr><td><code>company_entity_id</code></td><td><span class="req">req</span></td><td>Must reference a <code>company</code> entity.</td></tr>
-              <tr><td><code>contact_number, wechat_id, notes</code></td><td><span class="opt">opt</span></td><td></td></tr>
+              <tr><td><code>contact_number</code></td><td><span class="opt">opt</span></td><td><b>The person key.</b> One phone = one person for the whole system. If this number already exists (even under another company) the new member links to that same person; if it is new (or blank) a person is created. A blank number creates an unidentified person flagged for review.</td></tr>
+              <tr><td><code>wechat_id, notes</code></td><td><span class="opt">opt</span></td><td></td></tr>
               <tr><td><code>bank_accounts[], game_accounts[]</code></td><td><span class="opt">opt</span></td><td>Arrays of the player's own accounts. A player may hold several <code>game_accounts</code> under one <code>game_name</code> (different logins); each has its own balance. The exact same <code>(game_name, game_username)</code> pair twice is rejected.</td></tr>
             </table></div>
             <div class="code" data-copy>
@@ -1125,6 +1126,11 @@
 
       <section id="game-credits">
         <h2>Resource</h2>
+        <div class="note">
+              <span class="ic">i</span>
+              <div><b>People vs members.</b> A <code>player_id</code> is a <em>member</em> — one person's presence under one company. The same real person (one phone number) can be a member under several companies, each with its own code, accounts and balances. Every money endpoint here is keyed on <code>player_id</code> (the member), so nothing about your integration changes; the only new behaviour is that creating a player may attach to an existing person and create a fresh member — <b>treat that as success, not a conflict.</b></div>
+            </div>
+
         <div class="block-title">Game credits</div>
         <div class="prose"><p>A player's balance per game <b>login</b>, keyed by <code>player_id + game_name + game_username</code>. A player may hold several logins under one game (different kiosk accounts) and each carries its own balance. Use the upsert to sync the real provider balance into the CRM.</p></div>
 

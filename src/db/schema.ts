@@ -212,7 +212,7 @@ export const entities = pgTable("entities", {
 
 export const users = pgTable("users", {
   user_id: serial("user_id").primaryKey(),
-  username: varchar("username", { length: 60 }).notNull().unique(),
+  username: varchar("username", { length: 60 }).notNull(),
   email: varchar("email", { length: 160 }).notNull().unique(),
   full_name: varchar("full_name", { length: 120 }).notNull(),
   password_hash: varchar("password_hash", { length: 100 }).notNull(),
@@ -230,11 +230,106 @@ export const users = pgTable("users", {
     .defaultNow(),
 });
 
+/**
+ * A real person — one row per phone number for the whole database.
+ *
+ * Identity is global: the same person appears under many companies as separate
+ * `players` (member) rows, but exists here once. One phone number is one
+ * person; the same human with two numbers is two people (never deduped by name).
+ */
+export const people = pgTable("people", {
+  person_id: serial("person_id").primaryKey(),
+  // The identity key. Globally unique when present; a person with no number on
+  // file is kept distinct (never merged) and flagged for review.
+  contact_number: varchar("contact_number", { length: 40 }).unique(),
+  full_name: varchar("full_name", { length: 120 }).notNull(),
+  telegram_username: varchar("telegram_username", { length: 80 }),
+  wechat_id: varchar("wechat_id", { length: 80 }),
+  // Set when migration couldn't be sure of identity — a blank or duplicated
+  // phone. A human reconciles these; nothing auto-merges.
+  needs_review: boolean("needs_review").notNull().default(false),
+  created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .notNull()
+    .defaultNow(),
+});
+
+/**
+ * A list of leads a leader buys ("list_A"). Grows continuously as they buy more.
+ * The prefix (e.g. "A") labels the list's own lead codes (A0001, A0002…).
+ */
+export const leadLists = pgTable("lead_lists", {
+  list_id: serial("list_id").primaryKey(),
+  owner_leader_entity_id: integer("owner_leader_entity_id")
+    .notNull()
+    .references(() => entities.entity_id),
+  name: varchar("name", { length: 120 }).notNull(),
+  prefix: varchar("prefix", { length: 16 }).notNull(),
+  // Running counter for the next lead code in this list.
+  next_seq: integer("next_seq").notNull().default(1),
+  notes: text("notes"),
+  created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .notNull()
+    .defaultNow(),
+});
+
+/** One lead in a list — a person with the list's own code (A0001). */
+export const listLeads = pgTable(
+  "list_leads",
+  {
+    lead_id: serial("lead_id").primaryKey(),
+    list_id: integer("list_id")
+      .notNull()
+      .references(() => leadLists.list_id),
+    person_id: integer("person_id")
+      .notNull()
+      .references(() => people.person_id),
+    lead_code: varchar("lead_code", { length: 40 }).notNull(),
+    seq: integer("seq").notNull(),
+    created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    unique("list_leads_person_key").on(t.list_id, t.person_id),
+    unique("list_leads_seq_key").on(t.list_id, t.seq),
+  ],
+);
+
+/**
+ * A hand-off of a list to a company (or another leader). This is where the
+ * per-company code prefix and its auto-increment counter live: converting a
+ * lead into a member takes `next_seq`, stamps member_code = prefix + seq, bumps.
+ */
+export const listDistributions = pgTable(
+  "list_distributions",
+  {
+    dist_id: serial("dist_id").primaryKey(),
+    list_id: integer("list_id")
+      .notNull()
+      .references(() => leadLists.list_id),
+    // A company (converts leads to members) or a leader (re-distributes).
+    to_entity_id: integer("to_entity_id")
+      .notNull()
+      .references(() => entities.entity_id),
+    // The prefix this company stamps on members converted from the list ("AZ").
+    prefix: varchar("prefix", { length: 16 }).notNull(),
+    next_seq: integer("next_seq").notNull().default(1),
+    created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [unique("list_distributions_key").on(t.list_id, t.to_entity_id)],
+);
+
 export const players = pgTable("players", {
   player_id: serial("player_id").primaryKey(),
   username: varchar("username", { length: 60 }).notNull().unique(),
   full_name: varchar("full_name", { length: 120 }).notNull(),
   contact_number: varchar("contact_number", { length: 40 }),
+  // The global identity this membership belongs to. Nullable only mid-migration.
+  person_id: integer("person_id").references(() => people.person_id),
+  // Which list distribution this member was converted from (null = direct/legacy).
+  source_dist_id: integer("source_dist_id"),
   telegram_username: varchar("telegram_username", { length: 80 }),
   wechat_id: varchar("wechat_id", { length: 80 }),
   company_entity_id: integer("company_entity_id")
@@ -288,6 +383,55 @@ export const players = pgTable("players", {
     .default(0),
   notes: text("notes"),
 });
+
+/**
+ * A member's bank accounts, per company. Moved off players.bank_accounts jsonb
+ * so the "unique within a company" rule can be a real constraint.
+ */
+export const memberBankAccounts = pgTable(
+  "member_bank_accounts",
+  {
+    id: serial("id").primaryKey(),
+    // The member (players row) this account belongs to.
+    member_id: integer("member_id")
+      .notNull()
+      .references(() => players.player_id),
+    // Denormalised for the per-company uniqueness constraint.
+    company_entity_id: integer("company_entity_id")
+      .notNull()
+      .references(() => entities.entity_id),
+    bank_name: varchar("bank_name", { length: 60 }).notNull(),
+    account_number: varchar("account_number", { length: 60 }).notNull(),
+    account_holder: varchar("account_holder", { length: 120 }).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    // One account number can recur across companies, never within one.
+    unique("member_bank_company_account_key").on(t.company_entity_id, t.account_number),
+  ],
+);
+
+/** A member's kiosk logins, per company. Moved off players.game_accounts jsonb. */
+export const memberGameAccounts = pgTable(
+  "member_game_accounts",
+  {
+    id: serial("id").primaryKey(),
+    member_id: integer("member_id")
+      .notNull()
+      .references(() => players.player_id),
+    game_name: varchar("game_name", { length: 60 }).notNull(),
+    game_username: varchar("game_username", { length: 120 }).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    // The same login can't be linked twice on one member.
+    unique("member_game_login_key").on(t.member_id, t.game_name, t.game_username),
+  ],
+);
 
 // ---------- Money ----------
 

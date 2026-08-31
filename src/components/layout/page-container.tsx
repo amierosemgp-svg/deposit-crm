@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
  * Routes that own the whole content area: no max-width, no page scroll —
  * the page lays itself out and scrolls internally (the spreadsheet view).
  */
-const FULL_BLEED_ROUTES = ["/transactions"];
+const FULL_BLEED_ROUTES = ["/transactions", "/players"];
 
 export function PageContainer({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();

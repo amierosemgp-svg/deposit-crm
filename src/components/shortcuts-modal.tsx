@@ -71,10 +71,10 @@ const GROUPS: Group[] = [
   },
   {
     title: "Save & switch sheets",
-    hint: "Transactions",
+    hint: "Transactions & Players",
     items: [
       { keys: [MOD, "S"], label: "Save the ready (✓) entry rows" },
-      { keys: ["Shift", MOD, "→"], label: "Next worksheet tab" },
+      { keys: ["Shift", MOD, "→"], label: "Next worksheet tab (Deposit… / Players / Leads)" },
       { keys: ["Shift", MOD, "←"], label: "Previous worksheet tab" },
     ],
   },
@@ -101,6 +101,8 @@ const GROUPS: Group[] = [
   {
     title: "Anywhere",
     items: [
+      { keys: ["Shift", MOD, "↓"], label: "Next side-menu page" },
+      { keys: ["Shift", MOD, "↑"], label: "Previous side-menu page" },
       { keys: [MOD, "K"], label: "Search players" },
       { keys: ["?"], label: "Open this shortcut manual" },
     ],
@@ -138,7 +140,7 @@ export function ShortcutsModal({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] max-w-3xl overflow-hidden p-0">
+      <DialogContent className="max-h-[85vh] w-[calc(100%-2rem)] sm:max-w-4xl overflow-hidden p-0">
         <div className="flex items-center gap-2.5 border-b border-border px-5 py-3.5">
           <Keyboard className="h-4 w-4 text-muted-foreground" />
           <DialogTitle className="text-base">Keyboard shortcuts</DialogTitle>
@@ -151,22 +153,22 @@ export function ShortcutsModal({
           </span>
         </div>
         <div className="max-h-[calc(85vh-56px)] overflow-y-auto px-5 py-4">
-          <div className="columns-1 gap-6 md:columns-2 [&>section]:break-inside-avoid">
+          <div className="space-y-5">
             {GROUPS.map((g) => (
-              <section key={g.title} className="mb-5">
-                <div className="mb-2 flex items-baseline justify-between gap-2">
+              <section key={g.title}>
+                <div className="mb-2 flex items-baseline gap-2 border-b border-border/60 pb-1">
                   <h3 className="text-[13px] font-semibold">{g.title}</h3>
                   {g.hint && (
                     <span className="text-[11px] text-muted-foreground">{g.hint}</span>
                   )}
                 </div>
-                <ul className="space-y-1">
+                <ul>
                   {g.items.map((s, i) => (
                     <li
                       key={i}
-                      className="flex items-center justify-between gap-4 rounded-md px-2 py-1.5 text-[13px] odd:bg-muted/40"
+                      className="flex items-center justify-between gap-6 rounded-md px-2 py-1.5 text-[13px] odd:bg-muted/40"
                     >
-                      <span className="min-w-0 text-muted-foreground">{s.label}</span>
+                      <span className="text-muted-foreground">{s.label}</span>
                       <Keys keys={s.keys} />
                     </li>
                   ))}

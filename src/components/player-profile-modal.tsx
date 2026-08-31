@@ -34,6 +34,7 @@ import {
   MessageCircle,
   Phone,
   Calendar,
+  Building2,
   Landmark,
   Gamepad2,
   Loader2,
@@ -61,6 +62,7 @@ const EMPTY_GAME = { game_name: "", game_username: "" };
 const SECTIONS = [
   { id: "profile", label: "Profile", icon: User },
   { id: "balances", label: "Game Balances", icon: Wallet },
+  { id: "memberships", label: "Memberships", icon: Building2 },
   { id: "transactions", label: "Transactions", icon: Receipt },
   { id: "banks", label: "Bank Accounts", icon: Landmark },
   { id: "games", label: "Game Accounts", icon: Gamepad2 },
@@ -515,6 +517,10 @@ export function PlayerProfileModal({ playerId, open, onOpenChange }: Props) {
                                 </section>
                 )}
 
+                {section === "memberships" && (
+                  <MembershipsTab playerId={player.player_id} />
+                )}
+
                 {section === "transactions" && (
                   <PlayerTransactionsTab playerId={player.player_id} />
                 )}
@@ -886,5 +892,105 @@ export function PlayerProfileModal({ playerId, open, onOpenChange }: Props) {
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+type MembershipRow = {
+  member_id: number;
+  company: string;
+  member_code: string;
+  status: string;
+  total_deposits: number;
+  total_withdrawals: number;
+  is_current: boolean;
+};
+
+/** This person's presence across every company — the cross-company view. */
+function MembershipsTab({ playerId }: { playerId: number }) {
+  const [rows, setRows] = useState<MembershipRow[] | null>(null);
+  const [total, setTotal] = useState(0);
+  const [review, setReview] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/players/${playerId}/memberships`);
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          memberships?: MembershipRow[];
+          total_companies?: number;
+          person?: { needs_review?: boolean } | null;
+        };
+        if (!alive) return;
+        setRows(data.memberships ?? []);
+        setTotal(data.total_companies ?? 0);
+        setReview(!!data.person?.needs_review);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [playerId]);
+
+  if (!rows) {
+    return <div className="py-8 text-center text-sm text-muted-foreground">Loading…</div>;
+  }
+
+  return (
+    <section>
+      <div className="mb-2 flex items-center justify-between">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Member under {total} {total === 1 ? "company" : "companies"}
+        </h3>
+        {review && (
+          <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300">
+            Identity needs review
+          </span>
+        )}
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+              <th className="px-2 py-1.5 font-medium">Company</th>
+              <th className="px-2 py-1.5 font-medium">Code</th>
+              <th className="px-2 py-1.5 font-medium">Status</th>
+              <th className="px-2 py-1.5 text-right font-medium">Deposits</th>
+              <th className="px-2 py-1.5 text-right font-medium">Withdrawals</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((m) => (
+              <tr
+                key={m.member_id}
+                className={m.is_current ? "bg-primary/5" : undefined}
+              >
+                <td className="px-2 py-1.5 whitespace-nowrap">
+                  {m.company}
+                  {m.is_current && (
+                    <span className="ml-1.5 text-[10px] text-muted-foreground">(this one)</span>
+                  )}
+                </td>
+                <td className="px-2 py-1.5 whitespace-nowrap font-mono text-[12px]">{m.member_code}</td>
+                <td className="px-2 py-1.5 whitespace-nowrap capitalize text-muted-foreground">{m.status}</td>
+                <td className="px-2 py-1.5 text-right tabular-nums">{formatRM(m.total_deposits)}</td>
+                <td className="px-2 py-1.5 text-right tabular-nums">{formatRM(m.total_withdrawals)}</td>
+              </tr>
+            ))}
+            {rows.length > total && null}
+            {total > rows.length && (
+              <tr>
+                <td colSpan={5} className="px-2 py-2 text-[12px] text-muted-foreground">
+                  {total - rows.length} more under companies outside your scope.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }

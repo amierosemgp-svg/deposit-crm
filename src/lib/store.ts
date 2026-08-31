@@ -256,6 +256,8 @@ type Store = {
     full_name: string;
     telegram_username?: string;
     company_entity_id: number;
+    /** Convert from a lead-list distribution — member code auto-numbered. */
+    source_dist_id?: number;
     contact_number?: string;
     wechat_id?: string;
     notes?: string;
