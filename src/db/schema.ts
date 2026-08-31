@@ -192,6 +192,9 @@ export const auditTypeEnum = pgEnum("audit_type", [
   // Referral payout credited to an upline. Kept apart from game_topup so
   // bonus spend can be totalled without unpicking deposit-driven top-ups.
   "recommend_bonus",
+  // A settlement moving funds from one leader to another. Deliberately its own
+  // type — not an expense — so leader-to-leader movement reports on its own.
+  "leader_transfer",
 ]);
 
 // ---------- Core hierarchy ----------
@@ -908,6 +911,33 @@ export const expenses = pgTable("expenses", {
     .notNull()
     .references(() => users.user_id),
   notes: text("notes"),
+  created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .notNull()
+    .defaultNow(),
+});
+
+/**
+ * A settlement between two leaders — one leader moving funds to another.
+ *
+ * Distinct from `expenses` (operational costs leaving the business) and from
+ * `bankTransfers` (movement between bank accounts): this records an accounting
+ * transfer between two leader entities, so leader-to-leader flow can be
+ * reported without being tangled up in either.
+ */
+export const leaderTransfers = pgTable("leader_transfers", {
+  transfer_id: serial("transfer_id").primaryKey(),
+  from_leader_entity_id: integer("from_leader_entity_id")
+    .notNull()
+    .references(() => entities.entity_id),
+  to_leader_entity_id: integer("to_leader_entity_id")
+    .notNull()
+    .references(() => entities.entity_id),
+  amount: numeric("amount", { precision: 14, scale: 2, mode: "number" }).notNull(),
+  // What the settlement is for — free text, shown in the list and report.
+  note: text("note"),
+  created_by_user_id: integer("created_by_user_id")
+    .notNull()
+    .references(() => users.user_id),
   created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
     .notNull()
     .defaultNow(),

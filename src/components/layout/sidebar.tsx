@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  ArrowLeftRight,
   FileSpreadsheet,
   LayoutDashboard,
   Users,
@@ -68,6 +69,12 @@ const NAV: NavGroup[] = [
       { href: "/bank-accounts", label: "Bank Accounts", icon: Landmark },
       { href: "/provider-accounts", label: "Kiosks Accounts", icon: KeyRound },
       { href: "/hierarchy", label: "Hierarchy", icon: Network },
+      {
+        href: "/leader-transfers",
+        label: "Leader Transfers",
+        icon: ArrowLeftRight,
+        roles: ["super_admin"],
+      },
       { href: "/history", label: "Transaction History", icon: History },
     ],
   },

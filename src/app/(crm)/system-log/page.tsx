@@ -97,6 +97,7 @@ const CATEGORY_GROUPS: { label: string; source: LogSource; values: string[] }[] 
       "bo_adjustment",
       "player_import",
       "recommend_bonus",
+      "leader_transfer",
     ],
   },
   {
