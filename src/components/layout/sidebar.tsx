@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  FileSpreadsheet,
   LayoutDashboard,
   Wallet,
   Users,
@@ -52,6 +53,8 @@ const NAV: NavGroup[] = [
     label: "Operation",
     items: [
       { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+      // The workbook, rebuilt: deposits + withdrawals in one Excel-style sheet.
+      { href: "/transactions", label: "Transactions", icon: FileSpreadsheet },
       {
         href: "/deposits",
         label: "Deposits",
