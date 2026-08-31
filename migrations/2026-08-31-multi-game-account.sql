@@ -36,8 +36,20 @@ WHERE g.player_id = fl.player_id
   AND fl.game_username IS NOT NULL;
 
 -- Re-key: drop the old (player_id, game_name) primary key and the case-
--- insensitive backstop, add the login to both.
-ALTER TABLE game_credits DROP CONSTRAINT IF EXISTS game_credits_pkey;
+-- insensitive backstop, add the login to both. The old PK's name varies by how
+-- the table was first created (Drizzle names composite PKs
+-- <table>_<cols>_pk; a raw CREATE names it <table>_pkey), so drop whichever
+-- primary key is actually on the table by looking it up, not by a guessed name.
+DO $$
+DECLARE pk_name text;
+BEGIN
+  SELECT conname INTO pk_name
+    FROM pg_constraint
+   WHERE conrelid = 'game_credits'::regclass AND contype = 'p';
+  IF pk_name IS NOT NULL THEN
+    EXECUTE format('ALTER TABLE game_credits DROP CONSTRAINT %I', pk_name);
+  END IF;
+END $$;
 ALTER TABLE game_credits
   ADD CONSTRAINT game_credits_pkey PRIMARY KEY (player_id, game_name, game_username);
 
