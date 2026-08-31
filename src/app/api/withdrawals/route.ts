@@ -13,6 +13,8 @@ const createSchema = z.object({
   requested_amount: z.number().positive().optional(),
   withdraw_all: z.boolean().optional(),
   game_name: z.string().min(1),
+  // Which login under game_name to pull from. Omit for the player's first.
+  game_username: z.string().max(120).optional(),
   bank_name: z.string().optional(),
   bank_account_number: z.string().optional(),
   // Fully manual: the agent never auto-pulls/pays this — CS handles it.
@@ -86,6 +88,7 @@ export async function POST(request: Request) {
         requested_amount: requested,
         withdraw_all: withdrawAll,
         game_name: body.game_name,
+        game_username: body.game_username,
         bank_name: body.bank_name,
         bank_account_number: body.bank_account_number,
         source: "manual",

@@ -11,6 +11,7 @@ import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import { maybeCreateReferralBonus } from "@/lib/referral";
 import { balanceSyncedSince, canonicalise } from "@/lib/game-name";
+import { CREDIT_CONFLICT_TARGET, resolveGameLogin } from "@/lib/game-credits";
 
 /**
  * POST /api/deposits/:id/complete — manual completion of a skip-agent deposit.
@@ -87,9 +88,19 @@ export async function POST(
       // per game, and never add a delta on top of a balance the agent has
       // already read off the provider.
       const gameName = await canonicalise(row.selected_game, txn);
+      const [pl] = await txn
+        .select({ game_accounts: players.game_accounts })
+        .from(players)
+        .where(eq(players.player_id, row.player_id));
+      const gameUsername = resolveGameLogin(
+        pl?.game_accounts ?? null,
+        gameName,
+        row.selected_game_username,
+      );
       const alreadySynced = await balanceSyncedSince(txn, {
         playerId: row.player_id,
         gameName,
+        gameUsername,
         sinceIso: row.approved_at ?? row.updated_at ?? row.created_at,
       });
 
@@ -99,11 +110,12 @@ export async function POST(
           .values({
             player_id: row.player_id,
             game_name: gameName,
+            game_username: gameUsername,
             current_balance: row.total_amount,
             last_updated_at: nowIso,
           })
           .onConflictDoUpdate({
-            target: [gameCredits.player_id, gameCredits.game_name],
+            target: [...CREDIT_CONFLICT_TARGET],
             set: {
               current_balance: sql`${gameCredits.current_balance} + ${row.total_amount}`,
               last_updated_at: nowIso,
@@ -134,6 +146,7 @@ export async function POST(
         user_id: user.user_id,
         details: {
           source: "manual",
+          game_username: gameUsername,
           action: "manual_complete",
           ...(alreadySynced
             ? {

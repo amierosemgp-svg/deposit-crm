@@ -476,6 +476,9 @@ export const deposits = pgTable("deposits", {
     .notNull()
     .default(0),
   selected_game: varchar("selected_game", { length: 60 }),
+  // Which login under selected_game this top-up targets. Null = the player's
+  // first (or only) account for the game — the pre-multi-account default.
+  selected_game_username: varchar("selected_game_username", { length: 120 }),
   status: depositStatusEnum("status").notNull().default("pending"),
   // Agent-detected bank credits default to "agent"; CRM-entered deposits set "manual".
   source: transactionSourceEnum("source").notNull().default("bot"),
@@ -536,6 +539,8 @@ export const withdrawals = pgTable("withdrawals", {
    */
   withdraw_all: boolean("withdraw_all").notNull().default(false),
   game_name: varchar("game_name", { length: 60 }).notNull(),
+  // Which login under game_name to pull from. Null = the player's first account.
+  game_username: varchar("game_username", { length: 120 }),
   credit_pulled_amount: numeric("credit_pulled_amount", {
     precision: 12,
     scale: 2,
@@ -722,6 +727,11 @@ export const gameCredits = pgTable(
       .notNull()
       .references(() => players.player_id),
     game_name: varchar("game_name", { length: 60 }).notNull(),
+    // Which of the player's logins under this game the balance belongs to. A
+    // player may hold several accounts on one game; each carries its own
+    // balance. "" is the legacy/only-login row (backfilled from the player's
+    // first linked account for the game).
+    game_username: varchar("game_username", { length: 120 }).notNull().default(""),
     current_balance: numeric("current_balance", {
       precision: 12,
       scale: 2,
@@ -736,7 +746,7 @@ export const gameCredits = pgTable(
       .notNull()
       .defaultNow(),
   },
-  (t) => [primaryKey({ columns: [t.player_id, t.game_name] })],
+  (t) => [primaryKey({ columns: [t.player_id, t.game_name, t.game_username] })],
 );
 
 export const gameTransfers = pgTable("game_transfers", {
@@ -746,6 +756,10 @@ export const gameTransfers = pgTable("game_transfers", {
     .references(() => players.player_id),
   from_game: varchar("from_game", { length: 60 }).notNull(),
   to_game: varchar("to_game", { length: 60 }).notNull(),
+  // Which specific logins the move is between. Null = the player's first
+  // account for each game (the pre-multi-account default).
+  from_game_username: varchar("from_game_username", { length: 120 }),
+  to_game_username: varchar("to_game_username", { length: 120 }),
   transfer_amount: numeric("transfer_amount", {
     precision: 12,
     scale: 2,

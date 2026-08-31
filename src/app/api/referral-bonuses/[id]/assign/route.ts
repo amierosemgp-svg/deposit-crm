@@ -13,6 +13,7 @@ import {
   creditRecommendBonus,
   InsufficientBoCreditError,
 } from "@/lib/referral";
+import { resolveGameLogin } from "@/lib/game-credits";
 
 const bodySchema = z.object({
   game_name: z.string().min(1),
@@ -98,6 +99,7 @@ export async function POST(
             playerId: upline.player_id,
             companyEntityId: upline.company_entity_id,
             gameName: game_name,
+            gameUsername: resolveGameLogin(upline.game_accounts, game_name),
             amount: bonus.bonus_amount,
             nowIso,
           });
@@ -112,12 +114,15 @@ export async function POST(
         // the stall sweep and the Game Credit Transfer page cover it for free.
         // from_game === to_game marks it as a credit-in rather than a move
         // between two of the player's games.
+        const uploginRef = resolveGameLogin(upline.game_accounts, game_name);
         const [transfer] = await txn
           .insert(gameTransfers)
           .values({
             player_id: upline.player_id,
             from_game: game_name,
             to_game: game_name,
+            from_game_username: uploginRef,
+            to_game_username: uploginRef,
             transfer_amount: bonus.bonus_amount,
             from_game_balance_before: 0,
             status: "pending",

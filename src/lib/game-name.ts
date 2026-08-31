@@ -69,8 +69,8 @@ export class DuplicateGameAccountError extends Error {
   constructor(public games: string[]) {
     super(
       games.length === 1
-        ? `This player already has a ${games[0]} account — one account per game.`
-        : `Duplicate game accounts: ${games.join(", ")}. A player gets one account per game.`,
+        ? `Duplicate ${games[0]} account — that exact game login is already on this player.`
+        : `Duplicate game logins: ${games.join(", ")}. The same login can't be added twice.`,
     );
   }
 }
@@ -78,33 +78,38 @@ export class DuplicateGameAccountError extends Error {
 /**
  * Canonicalise a player's game accounts and enforce one per game.
  *
- * A second account on the same game is not a richer record, it is an ambiguity:
- * every top-up, transfer and credit-pull then has two candidate logins and
- * picks whichever the lookup happens to return first. Rejecting the write is
- * the only answer that keeps `game_accounts` meaning what the rest of the
- * system assumes it means.
+ * A player may hold several logins under one game (different kiosk accounts),
+ * so duplicates on game_name are allowed. What's still rejected is the EXACT
+ * same login twice — same game AND same username — which is a data-entry slip,
+ * not a real second account.
  *
- * Throws DuplicateGameAccountError naming the offending games, so the message
- * tells whoever sent it which line to fix.
+ * Note the balance caveat: game_credits keys on (player_id, game_name), so
+ * accounts sharing a game share one CRM balance row, and a top-up/transfer/
+ * credit-pull resolves the login by game name (first match). Per-login balance
+ * separation would need a schema change; this only lifts the entry block.
+ *
+ * Throws DuplicateGameAccountError naming the games whose exact login repeats.
  */
 export function normaliseGameAccounts(
   accounts: PlayerGameAccount[],
   catalogue: string[],
 ): PlayerGameAccount[] {
   const out: PlayerGameAccount[] = [];
-  const seen = new Map<string, string>();
+  const seen = new Set<string>();
   const clashes: string[] = [];
 
   for (const a of accounts) {
     const game_name = canonicalGameName(a.game_name, catalogue);
-    const key = game_name.toLowerCase();
+    const game_username = a.game_username.trim();
+    // Uniqueness is on the (game, login) pair now — a second login under the
+    // same game is fine; the same login repeated is the slip we reject.
+    const key = `${game_name.toLowerCase()}\u0000${game_username.toLowerCase()}`;
     if (seen.has(key)) {
-      // Two spellings of one game count as one clash, reported canonically.
       if (!clashes.includes(game_name)) clashes.push(game_name);
       continue;
     }
-    seen.set(key, game_name);
-    out.push({ game_name, game_username: a.game_username.trim() });
+    seen.add(key);
+    out.push({ game_name, game_username });
   }
 
   if (clashes.length) throw new DuplicateGameAccountError(clashes);
@@ -126,7 +131,7 @@ export function normaliseGameAccounts(
  */
 export async function balanceSyncedSince(
   runner: Pick<typeof db, "select">,
-  input: { playerId: number; gameName: string; sinceIso: string },
+  input: { playerId: number; gameName: string; gameUsername?: string; sinceIso: string },
 ): Promise<{ created_at: string; balance_after: unknown } | null> {
   const [row] = await runner
     .select({
@@ -142,6 +147,13 @@ export async function balanceSyncedSince(
         // Case-insensitive: the sync that caused this bug was spelled
         // differently from the deposit's own game.
         sql`lower(${transactions.game_name}) = lower(${input.gameName})`,
+        // Per-login: a sync for login A must not suppress a top-up for login B.
+        // Legacy sync rows carry no game_username in details; match those too
+        // when the caller targets the default ("") login, so old data still
+        // guards.
+        input.gameUsername !== undefined
+          ? sql`coalesce(${transactions.details}->>'game_username', '') = ${input.gameUsername}`
+          : sql`true`,
         gte(transactions.created_at, input.sinceIso),
       ),
     )

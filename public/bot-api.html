@@ -521,8 +521,12 @@
       <span class="k">"player_username"</span>: <span class="s">"ahmadtan88"</span>,
       <span class="k">"telegram_username"</span>: <span class="s">"@ahmadtan88"</span>,
       <span class="k">"selected_game"</span>: <span class="s">"Mega888"</span>,
+      <span class="k">"selected_game_username"</span>: <span class="s">"MEGA_ahmad01"</span>,
       <span class="k">"game_username"</span>: <span class="s">"MEGA_ahmad01"</span>,
-      <span class="k">"game_accounts"</span>: [{ <span class="k">"game_name"</span>: <span class="s">"Mega888"</span>, <span class="k">"game_username"</span>: <span class="s">"MEGA_ahmad01"</span> }]
+      <span class="k">"game_accounts"</span>: [
+        { <span class="k">"game_name"</span>: <span class="s">"Mega888"</span>, <span class="k">"game_username"</span>: <span class="s">"MEGA_ahmad01"</span> },
+        { <span class="k">"game_name"</span>: <span class="s">"Mega888"</span>, <span class="k">"game_username"</span>: <span class="s">"MEGA_ahmad02"</span> }
+      ]
     }
   ]
 }
@@ -572,7 +576,7 @@
             </div>
             <div class="note">
               <span class="ic">i</span>
-              <div><code>game_username</code> is the player's login/ID in <code>selected_game</code> — the in-game account you top up (resolved from the player's <code>game_accounts</code>). It's <code>null</code> until a game is selected or if the player has no account recorded for that game. <code>pending_match</code> deposits are intents awaiting a bank-credit match — reconcile those with <a href="#match">Match</a>.</div>
+              <div>A player may hold several logins under one game. <code>selected_game_username</code> names the exact login this deposit tops up (its balance is keyed on it); <code>game_username</code> echoes it, or the player's first account for <code>selected_game</code> when the deposit didn't pin one. Both are <code>null</code> until a game is selected or if the player has no account recorded for that game — top up the account the fields name. <code>pending_match</code> deposits are intents awaiting a bank-credit match — reconcile those with <a href="#match">Match</a>.</div>
             </div>
           </div>
         </div>
@@ -831,7 +835,7 @@
               <tr><td><code>telegram_username</code></td><td><span class="req">req</span></td><td><code>@</code> added automatically if missing.</td></tr>
               <tr><td><code>company_entity_id</code></td><td><span class="req">req</span></td><td>Must reference a <code>company</code> entity.</td></tr>
               <tr><td><code>contact_number, wechat_id, notes</code></td><td><span class="opt">opt</span></td><td></td></tr>
-              <tr><td><code>bank_accounts[], game_accounts[]</code></td><td><span class="opt">opt</span></td><td>Arrays of the player's own accounts.</td></tr>
+              <tr><td><code>bank_accounts[], game_accounts[]</code></td><td><span class="opt">opt</span></td><td>Arrays of the player's own accounts. A player may hold several <code>game_accounts</code> under one <code>game_name</code> (different logins); each has its own balance. The exact same <code>(game_name, game_username)</code> pair twice is rejected.</td></tr>
             </table></div>
             <div class="code" data-copy>
               <button class="copy">Copy</button>
@@ -1062,7 +1066,7 @@
         <div class="ep">
           <div class="ep-head"><span class="m post">Post</span><span class="ep-path">/api/bot/transactions</span><span class="use-tag">Create withdrawal</span></div>
           <div class="ep-body">
-            <div class="prose"><p>Set <code>type: "withdrawal"</code>. Body: <code>player_id</code>, <code>requested_amount</code>, <code>game_name</code>, optional <code>bank_name</code>, <code>bank_account_number</code>. Starts as <code>requested</code>. Requests raised in the CRM may instead carry <code>withdraw_all: true</code> with <code>requested_amount: 0</code> — see the note above.</p></div>
+            <div class="prose"><p>Set <code>type: "withdrawal"</code>. Body: <code>player_id</code>, <code>requested_amount</code>, <code>game_name</code>, optional <code>game_username</code> (which login to pull from — omit for the player's first account under the game), <code>bank_name</code>, <code>bank_account_number</code>. Starts as <code>requested</code>. Requests raised in the CRM may instead carry <code>withdraw_all: true</code> with <code>requested_amount: 0</code> — see the note above.</p></div>
             <div class="code" data-copy>
               <button class="copy">Copy</button>
               <pre><code><span class="k">curl</span> -X POST <span class="s">"$BASE/api/bot/transactions"</span> -H <span class="s">"X-API-Key: $KEY"</span> \
@@ -1090,7 +1094,7 @@
         <div class="ep">
           <div class="ep-head"><span class="m post">Post</span><span class="ep-path">/api/bot/withdrawals/:id/pull</span><span class="use-tag">Action</span></div>
           <div class="ep-body">
-            <div class="prose"><p>Deducts the player's <code>game_name</code> balance and moves to <code>credits_pulled</code>.</p>
+            <div class="prose"><p>Deducts the withdrawal's target login balance (<code>game_name</code> + <code>game_username</code>, or the first account when unset) and moves to <code>credits_pulled</code>.</p>
             <p>Optional body <code>{"amount": N}</code> — <strong>what you actually pulled from the wallet</strong>. It overrides our cached balance, so send it whenever you know the real figure. Without a body: the whole balance when <code>withdraw_all</code> is set, otherwise up to <code>requested_amount</code>.</p></div>
             <div class="code" data-copy>
               <button class="copy">Copy</button>
@@ -1122,29 +1126,29 @@
       <section id="game-credits">
         <h2>Resource</h2>
         <div class="block-title">Game credits</div>
-        <div class="prose"><p>A player's balance per game, keyed by <code>player_id + game_name</code>. Use the upsert to sync the real provider balance into the CRM.</p></div>
+        <div class="prose"><p>A player's balance per game <b>login</b>, keyed by <code>player_id + game_name + game_username</code>. A player may hold several logins under one game (different kiosk accounts) and each carries its own balance. Use the upsert to sync the real provider balance into the CRM.</p></div>
 
         <div class="ep">
           <div class="ep-head"><span class="m get">Get</span><span class="ep-path">/api/bot/game-credits</span><span class="use-tag">List</span></div>
-          <div class="ep-body"><div class="prose"><p>Filter with <code>?player_id=</code> and/or <code>?game_name=</code>.</p></div></div>
+          <div class="ep-body"><div class="prose"><p>Filter with <code>?player_id=</code>, <code>?game_name=</code> and/or <code>?game_username=</code>. A player with two logins under one game returns two rows.</p></div></div>
         </div>
 
         <div class="ep">
           <div class="ep-head"><span class="m post">Post</span><span class="ep-path">/api/bot/game-credits</span><span class="use-tag">Upsert</span></div>
           <div class="ep-body">
-            <div class="prose"><p>Sets the balance to an <b>absolute</b> value (not a delta): <code>player_id</code>, <code>game_name</code>, <code>current_balance</code>. Logs an audit adjustment.</p></div>
+            <div class="prose"><p>Sets the balance to an <b>absolute</b> value (not a delta): <code>player_id</code>, <code>game_name</code>, optional <code>game_username</code> (which login — omit for the player's first account under the game), <code>current_balance</code>. Logs an audit adjustment.</p></div>
             <div class="code" data-copy>
               <button class="copy">Copy</button>
               <pre><code><span class="k">curl</span> -X POST <span class="s">"$BASE/api/bot/game-credits"</span> -H <span class="s">"X-API-Key: $KEY"</span> \
   -H <span class="s">"Content-Type: application/json"</span> \
-  -d <span class="s">'{ "player_id": 1001, "game_name": "918kiss", "current_balance": 120.50 }'</span></code></pre>
+  -d <span class="s">'{ "player_id": 1001, "game_name": "918kiss", "game_username": "KS_ahmad01", "current_balance": 120.50 }'</span></code></pre>
             </div>
           </div>
         </div>
 
         <div class="ep">
           <div class="ep-head"><span class="m patch">Del</span><span class="ep-path">/api/bot/game-credits</span><span class="use-tag">Delete</span></div>
-          <div class="ep-body"><div class="prose"><p>Body <code>{ player_id, game_name }</code>. <span class="sc warn">422</span> if the balance is non-zero.</p></div></div>
+          <div class="ep-body"><div class="prose"><p>Body <code>{ player_id, game_name, game_username? }</code> (omit <code>game_username</code> for the first login). <span class="sc warn">422</span> if the balance is non-zero.</p></div></div>
         </div>
       </section>
 

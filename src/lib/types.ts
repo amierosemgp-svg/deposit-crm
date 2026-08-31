@@ -283,6 +283,8 @@ export type Deposit = {
   bonus_amount: number;
   total_amount: number;
   selected_game: string | null;
+  /** Which login under selected_game this top-up targets. Null = first account. */
+  selected_game_username?: string | null;
   status: DepositStatus;
   source?: TransactionSource;
   skip_bot?: boolean;
@@ -311,6 +313,8 @@ export type Withdrawal = {
   /** 0 when withdraw_all is set — not known until the credits are pulled. */
   requested_amount: number;
   game_name: string;
+  /** Which login under game_name to pull from. Null = first account. */
+  game_username?: string | null;
   /** Take whatever is in the wallet; the amount is discovered at pull time. */
   withdraw_all?: boolean;
   credit_pulled_amount: number;
@@ -354,6 +358,9 @@ export type GameTransfer = {
   player_id: number;
   from_game: string;
   to_game: string;
+  /** Which logins the move is between. Null = first account for each game. */
+  from_game_username?: string | null;
+  to_game_username?: string | null;
   /** 0 while transfer_all is set — not known until the agent reads the wallet. */
   transfer_amount: number;
   from_game_balance_before: number;
@@ -387,6 +394,8 @@ export const LOW_GAME_ACCOUNT_STOCK = 5;
 export type GameCredit = {
   player_id: number;
   game_name: string;
+  /** Which login this balance belongs to. "" = the player's default/only one. */
+  game_username: string;
   current_balance: number;
   last_updated_at: string;
 };

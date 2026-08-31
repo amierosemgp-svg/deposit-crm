@@ -19,6 +19,11 @@ import {
   gameTransferJson,
   jsonError,
 } from "@/lib/bot-crud";
+import {
+  CREDIT_CONFLICT_TARGET,
+  creditWhere,
+  resolveGameLogin,
+} from "@/lib/game-credits";
 
 const bodySchema = z.object({
   status: z.enum(["processing", "completed", "failed"]),
@@ -144,7 +149,10 @@ export async function PATCH(
           // balance to debit — the credit is issued from the company's BO pool,
           // exactly as a deposit top-up is.
           const [owner] = await txn
-            .select({ company_entity_id: players.company_entity_id })
+            .select({
+              company_entity_id: players.company_entity_id,
+              game_accounts: players.game_accounts,
+            })
             .from(players)
             .where(eq(players.player_id, row.player_id));
           try {
@@ -153,6 +161,13 @@ export async function PATCH(
               playerId: row.player_id,
               companyEntityId: owner?.company_entity_id ?? null,
               gameName: row.to_game,
+              // The credit-in row carries its target login; fall back to the
+              // player's first account for the game.
+              gameUsername: resolveGameLogin(
+                owner?.game_accounts ?? null,
+                row.to_game,
+                row.to_game_username,
+              ),
               amount: moved,
               nowIso,
             });
@@ -163,19 +178,30 @@ export async function PATCH(
             throw e;
           }
         } else {
+          // Which logins the move is between — the transfer's own, else the
+          // player's first account for each game.
+          const [mover] = await txn
+            .select({ game_accounts: players.game_accounts })
+            .from(players)
+            .where(eq(players.player_id, row.player_id));
+          const fromLogin = resolveGameLogin(
+            mover?.game_accounts ?? null,
+            row.from_game,
+            row.from_game_username,
+          );
+          const toLogin = resolveGameLogin(
+            mover?.game_accounts ?? null,
+            row.to_game,
+            row.to_game_username,
+          );
+
           // Re-validate the source balance atomically — it may have moved since
-          // the CS request created this transfer. Case-insensitive, matching the
-          // unique index on game_credits: the row may be spelled differently
-          // from the transfer that draws on it.
+          // the CS request created this transfer. Matched on the (game, login)
+          // pair, case-insensitively, like the unique index on game_credits.
           const [fromCredit] = await txn
             .select()
             .from(gameCredits)
-            .where(
-              and(
-                eq(gameCredits.player_id, row.player_id),
-                sql`lower(${gameCredits.game_name}) = lower(${row.from_game})`,
-              ),
-            )
+            .where(creditWhere(row.player_id, row.from_game, fromLogin))
             .for("update");
           const fromBalance = fromCredit?.current_balance ?? 0;
 
@@ -200,6 +226,7 @@ export async function PATCH(
           // Write back under the spelling already on file, so a case variant in
           // the transfer row can't fork the balance the index now forbids.
           const fromName = fromCredit?.game_name ?? row.from_game;
+          const fromUser = fromCredit?.game_username ?? fromLogin;
           await txn
             .update(gameCredits)
             .set({
@@ -210,6 +237,7 @@ export async function PATCH(
               and(
                 eq(gameCredits.player_id, row.player_id),
                 eq(gameCredits.game_name, fromName),
+                eq(gameCredits.game_username, fromUser),
               ),
             );
 
@@ -218,26 +246,26 @@ export async function PATCH(
           // conflict and the case-insensitive unique index would reject the
           // insert outright.
           const [toCredit] = await txn
-            .select({ game_name: gameCredits.game_name })
+            .select({
+              game_name: gameCredits.game_name,
+              game_username: gameCredits.game_username,
+            })
             .from(gameCredits)
-            .where(
-              and(
-                eq(gameCredits.player_id, row.player_id),
-                sql`lower(${gameCredits.game_name}) = lower(${row.to_game})`,
-              ),
-            )
+            .where(creditWhere(row.player_id, row.to_game, toLogin))
             .for("update");
           const toName = toCredit?.game_name ?? row.to_game;
+          const toUser = toCredit?.game_username ?? toLogin;
           await txn
             .insert(gameCredits)
             .values({
               player_id: row.player_id,
               game_name: toName,
+              game_username: toUser,
               current_balance: moved,
               last_updated_at: nowIso,
             })
             .onConflictDoUpdate({
-              target: [gameCredits.player_id, gameCredits.game_name],
+              target: [...CREDIT_CONFLICT_TARGET],
               set: {
                 current_balance: sql`${gameCredits.current_balance} + ${moved}`,
                 last_updated_at: nowIso,

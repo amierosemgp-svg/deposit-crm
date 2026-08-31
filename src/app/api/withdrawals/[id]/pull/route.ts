@@ -1,7 +1,8 @@
-import { and, eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { gameCredits, players, transactions, withdrawals } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
+import { creditWhere, resolveGameLogin } from "@/lib/game-credits";
 import { jsonError } from "@/lib/api-helpers";
 
 /**
@@ -50,15 +51,15 @@ export async function POST(
         throw new AuthError(403, "Withdrawal is outside your company scope");
       }
 
+      const login = resolveGameLogin(
+        player?.game_accounts ?? null,
+        row.game_name,
+        row.game_username,
+      );
       const [credit] = await txn
         .select()
         .from(gameCredits)
-        .where(
-          and(
-            eq(gameCredits.player_id, row.player_id),
-            eq(gameCredits.game_name, row.game_name),
-          ),
-        )
+        .where(creditWhere(row.player_id, row.game_name, login))
         .for("update");
       const balance = credit?.current_balance ?? 0;
       // A withdraw-all takes the lot; a fixed request takes what it asked for,
@@ -77,12 +78,7 @@ export async function POST(
           current_balance: +(balance - pulled).toFixed(2),
           last_updated_at: nowIso,
         })
-        .where(
-          and(
-            eq(gameCredits.player_id, row.player_id),
-            eq(gameCredits.game_name, row.game_name),
-          ),
-        );
+        .where(creditWhere(row.player_id, row.game_name, login));
 
       const [updated] = await txn
         .update(withdrawals)

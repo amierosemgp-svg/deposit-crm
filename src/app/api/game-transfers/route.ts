@@ -1,10 +1,11 @@
-import { and, eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { gameCredits, gameTransfers, players, transactions } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import { canonicalise } from "@/lib/game-name";
+import { creditWhere, resolveGameLogin } from "@/lib/game-credits";
 
 const createSchema = z.object({
   player_id: z.number().int().positive(),
@@ -14,6 +15,10 @@ const createSchema = z.object({
   // reads the source wallet.
   amount: z.number().positive().optional(),
   transfer_all: z.boolean().optional(),
+  // Which specific logins the move is between. Omit for the player's first
+  // account on each game.
+  from_game_username: z.string().max(120).optional(),
+  to_game_username: z.string().max(120).optional(),
 });
 
 /**
@@ -62,15 +67,12 @@ export async function POST(request: Request) {
         throw new AuthError(403, "Player is outside your company scope");
       }
 
+      const fromLogin = resolveGameLogin(player.game_accounts, fromGame, body.from_game_username);
+      const toLogin = resolveGameLogin(player.game_accounts, toGame, body.to_game_username);
       const [fromCredit] = await txn
         .select()
         .from(gameCredits)
-        .where(
-          and(
-            eq(gameCredits.player_id, body.player_id),
-            sql`lower(${gameCredits.game_name}) = lower(${fromGame})`,
-          ),
-        );
+        .where(creditWhere(body.player_id, fromGame, fromLogin));
       const fromBalance = fromCredit?.current_balance ?? 0;
       // Skipped for transfer_all on purpose: the cached balance is exactly the
       // number the flag exists to stop trusting. A wallet the agent finds empty
@@ -90,6 +92,8 @@ export async function POST(request: Request) {
           player_id: body.player_id,
           from_game: fromGame,
           to_game: toGame,
+          from_game_username: fromLogin,
+          to_game_username: toLogin,
           // 0 under transfer_all — a placeholder the agent replaces with the
           // figure it actually moved.
           transfer_amount: amount,

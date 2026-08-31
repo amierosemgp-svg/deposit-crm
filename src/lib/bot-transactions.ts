@@ -174,10 +174,18 @@ export function depositToBotJson(
 ) {
   // Resolve the player's account id in the selected game, so the agent knows
   // exactly which in-game account to top up (not just the CRM player id).
+  // A player may hold several logins under one game — honour the login the
+  // deposit pinned (selected_game_username); else its first account for the game.
   const gameAccounts = player?.game_accounts ?? null;
   const match =
     d.selected_game && gameAccounts
-      ? (gameAccounts.find((g) => g.game_name === d.selected_game) ?? null)
+      ? (gameAccounts.find((g) =>
+          d.selected_game_username
+            ? g.game_username.toLowerCase() ===
+                d.selected_game_username.toLowerCase() &&
+              g.game_name.toLowerCase() === d.selected_game!.toLowerCase()
+            : g.game_name === d.selected_game,
+        ) ?? null)
       : null;
 
   return {
@@ -196,8 +204,12 @@ export function depositToBotJson(
     bonus_percentage: d.bonus_percentage,
     total_amount: d.total_amount,
     selected_game: d.selected_game,
-    // The player's login/ID in `selected_game` — what the agent tops up.
-    game_username: match?.game_username ?? null,
+    // The login this deposit pinned, if any — the exact account to top up.
+    selected_game_username: d.selected_game_username ?? null,
+    // The player's login/ID in `selected_game` — what the agent tops up. Honours
+    // selected_game_username when set, else the player's first account.
+    game_username:
+      match?.game_username ?? d.selected_game_username ?? null,
     // Full list of the player's game accounts, for reference.
     game_accounts: gameAccounts,
     game_topup_reference: d.game_topup_reference,

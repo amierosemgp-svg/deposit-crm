@@ -8,10 +8,13 @@ import {
   creditRecommendBonus,
   InsufficientBoCreditError,
 } from "@/lib/referral";
+import { resolveGameLogin } from "@/lib/game-credits";
 
 const createSchema = z.object({
   player_id: z.number().int().positive(),
   game_name: z.string().min(1),
+  // Which login under the game to credit. Omit for the player's first account.
+  game_username: z.string().max(120).optional(),
   amount: z.number().positive(),
   // Why the credit was given — "rebate", "compensation", a promo name. Free
   // text; it is the column the workbook's Free Credit sheet kept as Remark.
@@ -40,7 +43,7 @@ export async function POST(request: Request) {
     const user = await requireWriteUser();
     const parsed = createSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return jsonError("Invalid payload");
-    const { player_id, game_name, amount, reason, skip_bot = false } = parsed.data;
+    const { player_id, game_name, game_username, amount, reason, skip_bot = false } = parsed.data;
 
     const result = await db.transaction(async (txn) => {
       const [player] = await txn
@@ -67,6 +70,7 @@ export async function POST(request: Request) {
         );
       }
 
+      const login = resolveGameLogin(player.game_accounts, game_name, game_username);
       const nowIso = new Date().toISOString();
       let gameTransferId: number | null = null;
 
@@ -78,6 +82,7 @@ export async function POST(request: Request) {
             playerId: player.player_id,
             companyEntityId: player.company_entity_id,
             gameName: game_name,
+            gameUsername: login,
             amount,
             nowIso,
           });
@@ -97,6 +102,8 @@ export async function POST(request: Request) {
             player_id: player.player_id,
             from_game: game_name,
             to_game: game_name,
+            from_game_username: login,
+            to_game_username: login,
             transfer_amount: amount,
             from_game_balance_before: 0,
             status: "pending",
@@ -121,6 +128,7 @@ export async function POST(request: Request) {
           details: {
             action: "free_credit",
             source: skip_bot ? "manual" : "bot",
+            game_username: login,
             reason: reason ?? null,
             game_transfer_id: gameTransferId,
           },

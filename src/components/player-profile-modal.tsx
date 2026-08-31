@@ -477,20 +477,39 @@ export function PlayerProfileModal({ playerId, open, onOpenChange }: Props) {
                                     Current Game Balances
                                   </h3>
                                   <div className="grid grid-cols-2 gap-2">
-                                    {gameNames.map((g) => {
-                                      const row = playerCredits.find((c) => c.game_name === g);
-                                      const bal = row?.current_balance ?? 0;
-                                      return (
-                                        <div
-                                          key={g}
-                                          className="rounded-md border bg-card px-3 py-2 flex items-center justify-between"
-                                        >
-                                          <span className="text-sm font-medium">{g}</span>
-                                          <span className={bal > 0 ? "text-sm font-semibold" : "text-sm text-muted-foreground"}>
-                                            {formatRM(bal)}
-                                          </span>
-                                        </div>
+                                    {gameNames.flatMap((g) => {
+                                      // One tile per login under the game — a
+                                      // player may hold several accounts on one
+                                      // game, each with its own balance.
+                                      const rows = playerCredits.filter(
+                                        (c) => c.game_name.toLowerCase() === g.toLowerCase(),
                                       );
+                                      const logins =
+                                        rows.length > 0
+                                          ? rows
+                                          : [{ game_username: "", current_balance: 0 }];
+                                      return logins.map((row) => {
+                                        const bal = row.current_balance ?? 0;
+                                        const uname = row.game_username ?? "";
+                                        return (
+                                          <div
+                                            key={`${g}::${uname}`}
+                                            className="rounded-md border bg-card px-3 py-2 flex items-center justify-between gap-2"
+                                          >
+                                            <span className="min-w-0">
+                                              <span className="text-sm font-medium">{g}</span>
+                                              {uname && (
+                                                <span className="ml-1.5 truncate text-[11px] text-muted-foreground">
+                                                  {uname}
+                                                </span>
+                                              )}
+                                            </span>
+                                            <span className={bal > 0 ? "text-sm font-semibold" : "text-sm text-muted-foreground"}>
+                                              {formatRM(bal)}
+                                            </span>
+                                          </div>
+                                        );
+                                      });
                                     })}
                                   </div>
                                 </section>
@@ -710,9 +729,6 @@ export function PlayerProfileModal({ playerId, open, onOpenChange }: Props) {
                                               <SelectItem
                                                 key={g}
                                                 value={g}
-                                                disabled={(player.game_accounts ?? []).some(
-                                                  (ga, gi) => ga.game_name === g && gi !== editingGame,
-                                                )}
                                                 className="cursor-pointer"
                                               >
                                                 {g}

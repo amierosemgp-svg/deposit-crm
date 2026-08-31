@@ -69,6 +69,15 @@ import {
 
 type TabKey = "deposit" | "withdrawal" | "freecredit" | "transfer" | "expense";
 
+/** Per tab, which entry cell holds the game login and which holds its game. */
+const LOGIN_COLS: Record<TabKey, { userCol: number; gameCol: number } | null> = {
+  deposit: { userCol: 5, gameCol: 6 },
+  withdrawal: { userCol: 3, gameCol: 4 },
+  freecredit: { userCol: 3, gameCol: 4 },
+  transfer: { userCol: 3, gameCol: 4 },
+  expense: null,
+};
+
 /** One Free Credit ledger row, as GET /api/free-credits returns it. */
 type FreeCredit = {
   transaction_id: number;
@@ -111,7 +120,8 @@ function parseAmount(raw: string): number | null {
  */
 function parseBonusPct(raw: string): number | null {
   const cleaned = raw.replace(/[%\s]/g, "");
-  if (!cleaned) return 0;
+  // "—"/"-" is the blank-bonus display; read it back as no bonus.
+  if (!cleaned || cleaned === "—" || cleaned === "-") return 0;
   const n = Number(cleaned);
   if (!Number.isFinite(n) || n < 0) return null;
   return n < 1 ? n * 100 : n;
@@ -380,7 +390,7 @@ export default function TransactionsPage() {
         { key: "contact", label: "Contact Type", width: 100 },
         { key: "date", label: "Date", width: 82, align: "center" },
         { key: "time", label: "Time", width: 56, align: "center" },
-        { key: "username", label: "Username", width: 130 },
+        { key: "username", label: "Username", width: 130, entry: true },
         { key: "product", label: "Product", width: 110, entry: true, options: games },
         { key: "bonuspct", label: "Bonus %", width: 76, align: "right", numeric: true, entry: true },
         { key: "bank", label: "Bank", width: 110, entry: true, required: true, options: banks },
@@ -393,7 +403,7 @@ export default function TransactionsPage() {
         { key: "member", label: "Member Code", width: 110, entry: true, required: true, options: memberSuggestions },
         { key: "date", label: "Date", width: 82, align: "center" },
         { key: "time", label: "Time", width: 56, align: "center" },
-        { key: "username", label: "Username", width: 130 },
+        { key: "username", label: "Username", width: 130, entry: true },
         { key: "product", label: "Product", width: 110, entry: true, required: true, options: games },
         { key: "bank", label: "Bank", width: 110, entry: true, options: banks },
         { key: "amount", label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true },
@@ -406,7 +416,7 @@ export default function TransactionsPage() {
         { key: "member", label: "Member Code", width: 110, entry: true, required: true, options: memberSuggestions },
         { key: "date", label: "Date", width: 82, align: "center" },
         { key: "time", label: "Time", width: 56, align: "center" },
-        { key: "username", label: "Username", width: 130 },
+        { key: "username", label: "Username", width: 130, entry: true },
         { key: "product", label: "Product", width: 110, entry: true, required: true, options: games },
         { key: "amount", label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true },
         { key: "mode", label: "Mode", width: 90, entry: true, options: MODE_SUGGESTIONS },
@@ -418,7 +428,7 @@ export default function TransactionsPage() {
         { key: "member", label: "Member Code", width: 110, entry: true, required: true, options: memberSuggestions },
         { key: "date", label: "Date", width: 82, align: "center" },
         { key: "time", label: "Time", width: 56, align: "center" },
-        { key: "username", label: "Username", width: 130 },
+        { key: "username", label: "Username", width: 130, entry: true },
         { key: "from", label: "From Game", width: 110, entry: true, required: true, options: games },
         { key: "to", label: "To Game", width: 110, entry: true, required: true, options: games },
         { key: "amount", label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true },
@@ -596,10 +606,10 @@ export default function TransactionsPage() {
             d.deposit_time_known ? formatClock(d.deposit_date) : "",
             gameUsername(p, d.selected_game),
             d.selected_game ?? "",
-            pct ? `${pct}%` : "",
+            pct ? `${pct}%` : "—",
             d.bank_name,
             fmtAmount(d.deposit_amount),
-            d.bonus_amount ? fmtAmount(d.bonus_amount) : "",
+            d.bonus_amount ? fmtAmount(d.bonus_amount) : "—",
             DEPOSIT_STATUS_LABEL[d.status],
             d.assigned_to_user_id ? userName(d.assigned_to_user_id) : "",
           ],
@@ -853,8 +863,21 @@ export default function TransactionsPage() {
 
   const draftSuggestions = useCallback(
     (draftIndex: number, colIndex: number) => {
-      if (tab !== "deposit" || colIndex !== 7) return undefined;
       const d = drafts[draftIndex];
+      // Login picker: the player's linked logins for the row's game, so CS can
+      // choose which account under that game the transaction hits.
+      const loginCfg = LOGIN_COLS[tab];
+      if (loginCfg && colIndex === loginCfg.userCol) {
+        const pl = d ? playerByCode.get(d[0]?.trim().toLowerCase() ?? "") : undefined;
+        const gameCell = d?.[loginCfg.gameCol]?.trim().toLowerCase() ?? "";
+        if (!pl || !gameCell) return undefined;
+        const logins = (pl.game_accounts ?? []).filter(
+          (a) => a.game_name.toLowerCase() === gameCell,
+        );
+        if (logins.length <= 1) return undefined; // one login: nothing to pick
+        return logins.map((a) => ({ value: a.game_username, hint: a.game_name }));
+      }
+      if (tab !== "deposit" || colIndex !== 7) return undefined;
       const pl = d ? playerByCode.get(d[0]?.trim().toLowerCase() ?? "") : undefined;
       if (!pl) {
         // No player yet — eligibility is meaningless without one, so the
@@ -886,7 +909,7 @@ export default function TransactionsPage() {
 
   const parseDepositDraft = useCallback(
     (d: string[]): Parsed => {
-      const [member, , , , , , product, bonuspct, bank, amount] = d;
+      const [member, , , , , username, product, bonuspct, bank, amount] = d;
       const player = playerByCode.get(member.trim().toLowerCase());
       if (!player) return { ok: false, error: `Unknown member code "${member.trim()}"` };
       const amt = parseAmount(amount);
@@ -910,6 +933,9 @@ export default function TransactionsPage() {
           // goes straight to the CS queue instead of waiting for a bank match.
           status: "pending",
           ...(selected_game ? { selected_game } : {}),
+          ...(selected_game && username.trim()
+            ? { selected_game_username: username.trim() }
+            : {}),
           ...(pct ? { bonus_percentage: pct } : {}),
         },
       };
@@ -919,7 +945,7 @@ export default function TransactionsPage() {
 
   const parseWithdrawalDraft = useCallback(
     (d: string[]): Parsed => {
-      const [member, , , , product, bank, amount, account] = d;
+      const [member, , , username, product, bank, amount, account] = d;
       const player = playerByCode.get(member.trim().toLowerCase());
       if (!player) return { ok: false, error: `Unknown member code "${member.trim()}"` };
       const g = gameByName.get(product.trim().toLowerCase());
@@ -933,6 +959,7 @@ export default function TransactionsPage() {
         payload: {
           player_id: player.player_id,
           game_name: g,
+          ...(username.trim() ? { game_username: username.trim() } : {}),
           ...(all ? { withdraw_all: true } : { requested_amount: amt }),
           ...(bank.trim() ? { bank_name: bank.trim() } : {}),
           ...(account.trim() ? { bank_account_number: account.trim() } : {}),
@@ -944,7 +971,7 @@ export default function TransactionsPage() {
 
   const parseFreeCreditDraft = useCallback(
     (d: string[]): Parsed => {
-      const [member, , , , product, amount, mode, remark] = d;
+      const [member, , , username, product, amount, mode, remark] = d;
       const player = playerByCode.get(member.trim().toLowerCase());
       if (!player) return { ok: false, error: `Unknown member code "${member.trim()}"` };
       const g = gameByName.get(product.trim().toLowerCase());
@@ -968,6 +995,7 @@ export default function TransactionsPage() {
         payload: {
           player_id: player.player_id,
           game_name: g,
+          ...(username.trim() ? { game_username: username.trim() } : {}),
           amount: amt,
           skip_bot,
           ...(remark.trim() ? { reason: remark.trim() } : {}),
@@ -979,7 +1007,7 @@ export default function TransactionsPage() {
 
   const parseTransferDraft = useCallback(
     (d: string[]): Parsed => {
-      const [member, , , , from, to, amount] = d;
+      const [member, , , username, from, to, amount] = d;
       const player = playerByCode.get(member.trim().toLowerCase());
       if (!player) return { ok: false, error: `Unknown member code "${member.trim()}"` };
       const fromGame = gameByName.get(from.trim().toLowerCase());
@@ -997,6 +1025,7 @@ export default function TransactionsPage() {
           player_id: player.player_id,
           from_game: fromGame,
           to_game: toGame,
+          ...(username.trim() ? { from_game_username: username.trim() } : {}),
           ...(all ? { transfer_all: true } : { amount: amt }),
         },
       };

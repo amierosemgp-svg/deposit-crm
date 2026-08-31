@@ -1,8 +1,9 @@
-import { and, eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { gameCredits, gameTransfers, players, transactions } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
+import { creditWhere, resolveGameLogin } from "@/lib/game-credits";
 import { MAX_TRANSFER_ATTEMPTS } from "@/lib/types";
 
 /**
@@ -58,15 +59,15 @@ export async function POST(
       // Case-insensitive, matching the unique index on game_credits: the
       // transfer may have been recorded under a different spelling than the
       // balance row it is drawn from.
+      const fromLogin = resolveGameLogin(
+        player.game_accounts,
+        t.from_game,
+        t.from_game_username,
+      );
       const [fromCredit] = await txn
         .select()
         .from(gameCredits)
-        .where(
-          and(
-            eq(gameCredits.player_id, t.player_id),
-            sql`lower(${gameCredits.game_name}) = lower(${t.from_game})`,
-          ),
-        );
+        .where(creditWhere(t.player_id, t.from_game, fromLogin));
       const fromBalance = fromCredit?.current_balance ?? 0;
       // A transfer_all transfer carries no figure to check against — it is a
       // "whatever is in there" instruction, re-issued as one.

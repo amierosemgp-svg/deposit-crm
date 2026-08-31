@@ -13,6 +13,7 @@ import { depositToBotJson, playerGameInfoMap } from "@/lib/bot-transactions";
 import { BotError, botErrorResponse, jsonError } from "@/lib/bot-crud";
 import { maybeCreateReferralBonus } from "@/lib/referral";
 import { balanceSyncedSince, canonicalise } from "@/lib/game-name";
+import { CREDIT_CONFLICT_TARGET, resolveGameLogin } from "@/lib/game-credits";
 
 /** Allowed forward transitions the agent may drive. */
 const ALLOWED: Record<string, string[]> = {
@@ -126,6 +127,13 @@ export async function PATCH(
         // Spelling is decided once, here — game_credits is keyed on the name,
         // so "918kiss" and "918Kiss" would otherwise be two balances.
         const gameName = await canonicalise(locked.selected_game, txn);
+        // Which login this top-up lands in — the deposit's chosen one, else the
+        // player's first account for the game.
+        const gameUsername = resolveGameLogin(
+          player?.game_accounts ?? null,
+          gameName,
+          locked.selected_game_username,
+        );
 
         // Has the agent already reported the real post-top-up balance? Then the
         // CRM's own +amount would count the same money twice. See
@@ -133,6 +141,7 @@ export async function PATCH(
         const alreadySynced = await balanceSyncedSince(txn, {
           playerId: locked.player_id,
           gameName,
+          gameUsername,
           // From when the deposit was handed to the agent: a sync older than
           // that describes a balance before this top-up existed.
           sinceIso: locked.approved_at ?? locked.updated_at ?? locked.created_at,
@@ -175,11 +184,12 @@ export async function PATCH(
             .values({
               player_id: locked.player_id,
               game_name: gameName,
+              game_username: gameUsername,
               current_balance: locked.total_amount,
               last_updated_at: nowIso,
             })
             .onConflictDoUpdate({
-              target: [gameCredits.player_id, gameCredits.game_name],
+              target: [...CREDIT_CONFLICT_TARGET],
               set: {
                 current_balance: sql`${gameCredits.current_balance} + ${locked.total_amount}`,
                 last_updated_at: nowIso,
@@ -203,6 +213,7 @@ export async function PATCH(
           reference_id: locked.deposit_id,
           details: {
             source: "bot",
+            game_username: gameUsername,
             topup_reference: body.game_topup_reference ?? locked.game_topup_reference ?? null,
             // Say so out loud. A top-up row whose amount never reached the
             // balance is exactly the thing someone reconciling needs to see.

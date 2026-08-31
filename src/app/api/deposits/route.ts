@@ -14,6 +14,8 @@ const createSchema = z.object({
   // "pending" = CS already sighted the receipt, straight to approval queue.
   status: z.enum(["pending_match", "pending"]).default("pending_match"),
   selected_game: z.string().optional(),
+  // Which login under selected_game to top up. Omit for the player's first.
+  selected_game_username: z.string().max(120).optional(),
   // The bonus to apply, checked against the player's history before it sticks.
   bonus_plan_id: z.number().int().positive().nullable().optional(),
   // The old free-percentage path, still honoured when no plan is named.
@@ -81,6 +83,7 @@ export async function POST(request: Request) {
         deposit_amount: body.amount,
         bank_name: body.bank_name,
         selected_game: body.selected_game,
+        selected_game_username: body.selected_game_username,
         ...bonus.fields,
         status,
         source: "manual",
