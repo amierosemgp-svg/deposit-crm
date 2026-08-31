@@ -1011,14 +1011,20 @@ export function SheetGrid({
     [startEdit],
   );
 
-  // Tab switch: jump to the entry area, ready to type.
+  // Tab switch / first load: focus the SAVED LIST (its last, newest row), not
+  // the entry cell — landing on an empty entry cell would pop its dropdown open
+  // on every load. Keyboard is live for arrows/actions; typing starts once the
+  // user clicks into an entry cell. Falls back to the entry area only when
+  // there are no saved rows to select.
   useEffect(() => {
     if (focusKey === undefined) return;
     const t = setTimeout(() => {
-      const firstEmpty = drafts.findIndex((d) => d.every((v) => !v));
-      const r = draftStart + (firstEmpty === -1 ? 0 : firstEmpty);
-      const c = columns.findIndex((col) => col.entry);
-      moveTo(r, Math.max(0, c));
+      if (rows.length > 0) {
+        moveTo(rows.length - 1, 0);
+      } else {
+        const c = columns.findIndex((col) => col.entry);
+        moveTo(draftStart, Math.max(0, c));
+      }
       containerRef.current?.focus();
     }, 50);
     return () => clearTimeout(t);
@@ -1234,7 +1240,7 @@ export function SheetGrid({
           <div className="flex items-center gap-2 border-b border-border bg-emerald-600/10 px-2 py-0.5 text-[11px] font-medium text-emerald-800 dark:bg-emerald-400/10 dark:text-emerald-300">
             <span className="font-bold">NEW ENTRIES</span>
             <span className="font-normal text-emerald-800/80 dark:text-emerald-300/80">
-              type or paste here · Enter/Tab move · Ctrl+Enter saves the ✓ rows
+              type or paste here · Enter/Tab move · Ctrl/⌘+S saves the ✓ rows
             </span>
           </div>
           <div
@@ -1313,7 +1319,7 @@ export function SheetGrid({
           ) : readOnly ? (
             "Read-only view"
           ) : (
-            "Add rows in the NEW ENTRIES panel · select saved rows for actions · paste straight from Excel · Ctrl+Enter saves ready rows"
+            "Add rows in the NEW ENTRIES panel · select saved rows for actions · paste straight from Excel · Ctrl/⌘+S saves ready rows"
           )}
         </span>
         {stats && stats.count > 0 && (

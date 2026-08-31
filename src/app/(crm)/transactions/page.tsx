@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
 import { formatClock, formatRM } from "@/lib/format";
 import { extractSenderName } from "@/lib/bank-remark";
+import { usePlayerProfile } from "@/components/player-name-link";
 import {
   SheetGrid,
   type DraftStatus,
@@ -48,6 +49,7 @@ import {
   Save,
   Search,
   Trash2,
+  User,
   UserCheck,
   UserMinus,
   X,
@@ -279,6 +281,7 @@ export default function TransactionsPage() {
   const players = useStore((s) => s.players);
   const hydrated = useStore((s) => s.hydrated);
   const me = useStore((s) => s.me);
+  const { openPlayer } = usePlayerProfile();
   const companyInScope = useStore((s) => s.companyInScope);
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
   const selectedLeaderId = useStore((s) => s.selectedLeaderId);
@@ -1273,6 +1276,21 @@ export default function TransactionsPage() {
     [tab, selectedNumericIds, selectedDeposits, selectedWithdrawals, selectedTransfers, selectedExpenses],
   );
 
+  // The player behind the current selection — set only when every selected row
+  // points at the same one, so "View player" is unambiguous. Free-credit rows
+  // aren't selectable, so this covers deposit/withdrawal/transfer.
+  const selectedPlayerId = useMemo(() => {
+    const ids = new Set<number>();
+    for (const d of selectedDeposits) if (d.player_id) ids.add(d.player_id);
+    for (const w of selectedWithdrawals) ids.add(w.player_id);
+    for (const t of selectedTransfers) ids.add(t.player_id);
+    return ids.size === 1 ? [...ids][0] : null;
+  }, [selectedDeposits, selectedWithdrawals, selectedTransfers]);
+
+  const handleViewPlayer = useCallback(() => {
+    if (selectedPlayerId) openPlayer(selectedPlayerId);
+  }, [selectedPlayerId, openPlayer]);
+
   const handleComplete = useCallback(
     () =>
       runBulk(
@@ -1373,7 +1391,8 @@ export default function TransactionsPage() {
       const wrongMod = IS_MAC ? e.ctrlKey : e.metaKey;
       if (!mod || wrongMod || e.altKey || e.shiftKey) return;
       let run: (() => void) | null = null;
-      if (k === "a" && can.assign) run = handleAssignToMe;
+      if (k === "enter" && selectedPlayerId) run = handleViewPlayer;
+      else if (k === "a" && can.assign) run = handleAssignToMe;
       else if (tab === "deposit") {
         if (k === "p" && can.approve) run = handleApprove;
         else if (k === "c" && can.complete) run = handleComplete;
@@ -1398,10 +1417,40 @@ export default function TransactionsPage() {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [
     isViewer, selectedIds.length, tab, acting, confirming, can,
+    selectedPlayerId, handleViewPlayer,
     handleAssignToMe, handleApprove, handleComplete, handleRetryDeposits,
     handleRejectDeposits, handlePull, handleMarkPaid, handleRejectWithdrawals,
     handleRetryTransfers, handleDeleteExpenses,
   ]);
+
+  // Shift+Cmd/Ctrl+Left/Right cycles the worksheet tabs — global, so it works
+  // whether the focus is in the grid, a filter, or nowhere. Skips while a text
+  // field is focused so it never fights caret movement.
+  useEffect(() => {
+    const order: TabKey[] = [
+      "deposit",
+      "withdrawal",
+      "freecredit",
+      "transfer",
+      ...(isAdmin ? (["expense"] as TabKey[]) : []),
+    ];
+    const onKey = (e: KeyboardEvent) => {
+      const mod = IS_MAC ? e.metaKey : e.ctrlKey;
+      const wrongMod = IS_MAC ? e.ctrlKey : e.metaKey;
+      if (!e.shiftKey || !mod || wrongMod || e.altKey) return;
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const i = order.indexOf(tab);
+      const next = e.key === "ArrowLeft" ? i - 1 : i + 1;
+      // Wrap around, so the ends meet like flipping through sheet tabs.
+      switchTab(order[(next + order.length) % order.length]);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [tab, isAdmin, switchTab]);
 
   // ---- commit ----
 
@@ -1463,6 +1512,22 @@ export default function TransactionsPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [saving, isViewer, drafts, parseDraft, tab, commitErrors, draftKey, columns.length, refresh, loadFreeCredits]);
+
+  // Cmd/Ctrl+S saves the ready entry rows from anywhere on the page — and
+  // preventDefault stops the browser's own "save this page" dialog.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const mod = IS_MAC ? e.metaKey : e.ctrlKey;
+      const wrongMod = IS_MAC ? e.ctrlKey : e.metaKey;
+      if (!mod || wrongMod || e.altKey || e.shiftKey) return;
+      if (e.key.toLowerCase() !== "s") return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (!isViewer) void handleCommit();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [isViewer, handleCommit]);
 
   // ---- filters ----
 
@@ -1679,7 +1744,7 @@ export default function TransactionsPage() {
                 <Save className="h-3.5 w-3.5" />
               )}
               Save {readyCount > 0 ? `${readyCount} row${readyCount === 1 ? "" : "s"}` : "rows"}
-              <span className="hidden text-[10px] opacity-70 lg:inline">Ctrl+↵</span>
+              <span className="hidden text-[10px] opacity-70 lg:inline">{MOD_LABEL}S</span>
             </Button>
           )}
         </div>
@@ -1722,6 +1787,19 @@ export default function TransactionsPage() {
             >
               <X className="h-3.5 w-3.5" />
             </button>
+            {selectedPlayerId && (
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={handleViewPlayer}
+                title="Open the player's details"
+                className="cursor-pointer gap-1"
+              >
+                <User className="h-3 w-3" />
+                Player
+                <Kbd k={`${MOD_LABEL}\u21B5`} />
+              </Button>
+            )}
             {can.assign && (
               <Button
                 size="xs"

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useStore } from "@/lib/store";
 import { formatRM, formatShortDateTime, formatRelative, initialsOf } from "@/lib/format";
@@ -87,6 +87,37 @@ export function PlayerProfileModal({ playerId, open, onOpenChange }: Props) {
 
   const isViewer = me?.role === "viewer";
   const banks = banksFn();
+
+  // Arrow Up/Down walks the section tabs while the modal is open — skipping the
+  // notes tab exactly when it's hidden, and never while a text field is focused
+  // (notes editor, the bank/game forms) so it can't fight caret movement.
+  useEffect(() => {
+    if (!open || !player) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      const t = e.target as HTMLElement | null;
+      if (
+        t &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.tagName === "SELECT" ||
+          t.isContentEditable)
+      ) {
+        return;
+      }
+      const visible = SECTIONS.filter(
+        (sec) => !(sec.id === "notes" && isViewer && !player.notes),
+      ).map((sec) => sec.id);
+      const i = visible.indexOf(section);
+      if (i === -1) return;
+      e.preventDefault();
+      const next = e.key === "ArrowUp" ? i - 1 : i + 1;
+      setSection(visible[(next + visible.length) % visible.length]);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open, player, isViewer, section]);
 
   const [notesDraft, setNotesDraft] = useState("");
   const [savingNotes, setSavingNotes] = useState(false);
