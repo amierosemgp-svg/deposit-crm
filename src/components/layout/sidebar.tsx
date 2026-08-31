@@ -3,17 +3,14 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  FileSpreadsheet,
   LayoutDashboard,
-  Wallet,
   Users,
-  Banknote,
-  ArrowLeftRight,
   History,
   Settings,
   Landmark,
   KeyRound,
   Gift,
-  Receipt,
   ScrollText,
   Bot,
   Network,
@@ -52,29 +49,10 @@ const NAV: NavGroup[] = [
     label: "Operation",
     items: [
       { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-      {
-        href: "/deposits",
-        label: "Deposits",
-        icon: Wallet,
-        badge: "pending_deposits",
-      },
-      {
-        href: "/withdrawals",
-        label: "Withdrawals",
-        icon: Banknote,
-        badge: "pending_withdrawals",
-      },
-      {
-        href: "/game-transfer",
-        label: "Game Credit Transfer",
-        icon: ArrowLeftRight,
-      },
-      {
-        href: "/expenses",
-        label: "Expenses",
-        icon: Receipt,
-        roles: ["super_admin"],
-      },
+      // The workbook, rebuilt: deposits, withdrawals, free credit, transfers
+      // and expenses all live in the one Excel-style sheet now — their old
+      // standalone pages still exist by URL but are off the menu.
+      { href: "/transactions", label: "Transactions", icon: FileSpreadsheet },
     ],
   },
   {

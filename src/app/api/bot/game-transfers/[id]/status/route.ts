@@ -1,7 +1,13 @@
 import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { gameCredits, gameTransfers, players, transactions } from "@/db/schema";
+import {
+  gameCredits,
+  gameTransfers,
+  players,
+  referralBonuses,
+  transactions,
+} from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
 import {
   creditRecommendBonus,
@@ -82,12 +88,24 @@ export async function PATCH(
       }
 
       const nowIso = new Date().toISOString();
-      // from_game === to_game is not a move — it's a recommend bonus queued by
-      // /api/referral-bonuses/:id/assign, riding this queue because it is the
-      // only "go do something in the back-office" queue the agent polls.
-      // POST /api/game-transfers rejects from === to, so nothing else can
-      // produce this shape.
+      // from_game === to_game is not a move — it's a credit-in riding this
+      // queue because it is the only "go do something in the back-office"
+      // queue the agent polls. Two things produce the shape: a recommend bonus
+      // (/api/referral-bonuses/:id/assign) and a free credit
+      // (/api/free-credits). POST /api/game-transfers rejects from === to, so
+      // nothing else can.
       const creditIn = row.from_game.toLowerCase() === row.to_game.toLowerCase();
+      // Which of the two it is only matters for the ledger label below — a
+      // referral bonus row pointing at this transfer settles it.
+      let isReferralCredit = false;
+      if (creditIn) {
+        const [ref] = await txn
+          .select({ bonus_id: referralBonuses.bonus_id })
+          .from(referralBonuses)
+          .where(eq(referralBonuses.game_transfer_id, row.transfer_id))
+          .limit(1);
+        isReferralCredit = !!ref;
+      }
 
       // What actually moved. Starts as the requested figure and is replaced by
       // the agent's own once it reports one; persisted onto the row below so
@@ -257,15 +275,24 @@ export async function PATCH(
       await txn.insert(transactions).values({
         player_id: row.player_id,
         entity_id: player?.company_entity_id ?? null,
-        // A credit-in carries the bonus that queued it, so it lands in the
-        // ledger under the same type as the hand-credited path.
-        type: creditIn ? "recommend_bonus" : "game_transfer",
+        // A credit-in lands in the ledger under the same type as its
+        // hand-credited path: recommend_bonus for a referral payout,
+        // game_topup for a free credit.
+        type: creditIn
+          ? isReferralCredit
+            ? "recommend_bonus"
+            : "game_topup"
+          : "game_transfer",
         amount: body.status === "completed" ? moved : row.transfer_amount,
         game_name: creditIn ? row.to_game : `${row.from_game} → ${row.to_game}`,
         reference_id: row.transfer_id,
         details: {
           source: "bot",
           action: body.status,
+          // Marks a free-credit credit-in's outcome row. Deliberately not
+          // "free_credit" — that value is the creation row's, and the Free
+          // Credit list must see each injection exactly once.
+          ...(creditIn && !isReferralCredit ? { free_credit: true } : {}),
           api_key_label: auth.label,
           note: body.note ?? null,
           ...(row.transfer_all ? { transfer_all: true } : {}),
