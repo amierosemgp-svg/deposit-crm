@@ -123,7 +123,7 @@ export function TopNav() {
   const badgeCount = pendingIncoming.length;
 
   return (
-    <header className="h-14 shrink-0 border-b border-border bg-card/60 backdrop-blur-sm">
+    <header className="relative z-50 h-14 shrink-0 border-b border-border bg-card/60 backdrop-blur-sm">
       <div className="flex h-full items-center">
         {/* Brand cell — same column as the sidebar (and shrinks with it), so
             everything after it lines up with the content area. */}
