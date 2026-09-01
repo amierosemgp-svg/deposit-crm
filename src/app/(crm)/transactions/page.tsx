@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
-import { formatClock, formatRM } from "@/lib/format";
+import { formatClock, formatRelative, formatRM } from "@/lib/format";
 import { extractSenderName } from "@/lib/bank-remark";
 import { usePlayerProfile } from "@/components/player-name-link";
 import {
@@ -44,6 +44,7 @@ import {
   CheckCircle2,
   HandCoins,
   Loader2,
+  Radar,
   RefreshCw,
   RotateCcw,
   Save,
@@ -59,7 +60,9 @@ import {
   BONUS_PERIOD_LABELS,
   BONUS_TYPE_LABELS,
   EXPENSE_CATEGORIES,
+  OPEN_BOT_COMMAND_STATUSES,
   type BonusOption,
+  type BotCommand,
   type Deposit,
   type Expense,
   type GameTransfer,
@@ -259,6 +262,36 @@ const IS_MAC =
 const MOD_LABEL = IS_MAC ? "\u2318" : "Ctrl+";
 
 /** Shortcut chip shown inside action buttons. `light` for solid backgrounds. */
+/** The Crawl banks tooltip — what the last crawl did, in one line. */
+function crawlHint(cmd: BotCommand | null): string {
+  if (!cmd) {
+    return "Re-read the banks now instead of waiting for the agent's next sweep";
+  }
+  const when = formatRelative(cmd.completed_at ?? cmd.created_at);
+  switch (cmd.status) {
+    case "pending":
+      return `Queued ${when} — waiting for an agent to pick it up`;
+    case "running":
+      return `Crawling since ${when}${cmd.bot_id ? ` · ${cmd.bot_id}` : ""}`;
+    case "completed": {
+      const found = Number(cmd.result?.deposits_created ?? NaN);
+      const seen = Number(cmd.result?.transactions_found ?? NaN);
+      const detail = Number.isFinite(found)
+        ? found === 1
+          ? "1 new deposit"
+          : `${found} new deposits`
+        : Number.isFinite(seen)
+          ? `${seen} transactions read`
+          : "nothing reported";
+      return `Last crawl finished ${when} — ${detail}`;
+    }
+    case "failed":
+      return `Last crawl failed ${when}${cmd.error ? ` — ${cmd.error}` : ""}`;
+    case "expired":
+      return `Last crawl expired ${when} — no agent picked it up`;
+  }
+}
+
 function Kbd({ k, light }: { k: string; light?: boolean }) {
   return (
     <kbd
@@ -293,6 +326,8 @@ export default function TransactionsPage() {
   const me = useStore((s) => s.me);
   const { openPlayer } = usePlayerProfile();
   const companyInScope = useStore((s) => s.companyInScope);
+  const botCommands = useStore((s) => s.botCommands);
+  const requestBankCrawl = useStore((s) => s.requestBankCrawl);
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
   const selectedLeaderId = useStore((s) => s.selectedLeaderId);
   const refresh = useStore((s) => s.refresh);
@@ -346,6 +381,7 @@ export default function TransactionsPage() {
   const [search, setSearch] = useState("");
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [crawlRequesting, setCrawlRequesting] = useState(false);
   // Committed rows currently selected in the grid — what the action bar acts on.
   const [selectedIds, setSelectedIds] = useState<(string | number)[]>([]);
   const [acting, setActing] = useState(false);
@@ -1662,6 +1698,44 @@ export default function TransactionsPage() {
     runBulk, rejectDeposit, rejectWithdrawal, deleteExpense,
   ]);
 
+  // ---- Crawl banks (deposit tab): ask the agent to re-read the banks now ----
+  // The crawl that matters to what's on screen: the newest one covering the
+  // selected company (an unscoped crawl covers every bank, this one included).
+  const latestCrawl = useMemo(
+    () =>
+      botCommands.find(
+        (c) =>
+          c.command === "crawl_bank" &&
+          (c.company_entity_id === null || companyInScope(c.company_entity_id)),
+      ) ?? null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [botCommands, selectedCompanyId, selectedLeaderId],
+  );
+  const crawling =
+    crawlRequesting ||
+    (latestCrawl !== null && OPEN_BOT_COMMAND_STATUSES.includes(latestCrawl.status));
+
+  const handleCrawl = useCallback(async () => {
+    setCrawlRequesting(true);
+    const res = await requestBankCrawl({ company_entity_id: selectedCompanyId });
+    setCrawlRequesting(false);
+    if (!res.ok) {
+      toast.error(res.error ?? "Couldn't request a bank crawl");
+      return;
+    }
+    if (res.deduped) {
+      toast.info("A bank crawl is already in progress");
+      return;
+    }
+    if (!res.agentOnline) {
+      toast.warning(
+        "Crawl queued, but no agent is online. It runs as soon as one is back, or expires in 10 minutes.",
+      );
+      return;
+    }
+    toast.success("Bank crawl requested — the agent picks it up within ~30s");
+  }, [requestBankCrawl, selectedCompanyId]);
+
   const tabs: { key: TabKey; label: string }[] = [
     { key: "deposit", label: "Deposit" },
     { key: "withdrawal", label: "Withdrawal" },
@@ -1748,6 +1822,27 @@ export default function TransactionsPage() {
         </span>
 
         <div className="ml-auto flex items-center gap-2">
+          {tab === "deposit" && !isViewer && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 cursor-pointer gap-1.5"
+              onClick={handleCrawl}
+              disabled={crawling}
+              title={crawlHint(latestCrawl)}
+            >
+              {crawling ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Radar className="h-3.5 w-3.5" />
+              )}
+              {crawling
+                ? latestCrawl?.status === "running"
+                  ? "Crawling…"
+                  : "Queued…"
+                : "Crawl banks"}
+            </Button>
+          )}
           <Button
             size="sm"
             variant="outline"
