@@ -385,7 +385,7 @@ export default function TransactionsPage() {
   const columnsByTab = useMemo<Record<TabKey, SheetColumn[]>>(
     () => ({
       deposit: [
-        { key: "member", label: "Member Code", width: 110, entry: true, required: true, options: memberSuggestions, placeholder: "member code" },
+        { key: "member", label: "Member Code", width: 110, entry: true, required: true, options: memberSuggestions, placeholder: "member code", noAutoOpen: true },
         { key: "remark", label: "Remark / Name", width: 200 },
         { key: "contact", label: "Contact Type", width: 100 },
         { key: "date", label: "Date", width: 82, align: "center" },
@@ -400,7 +400,7 @@ export default function TransactionsPage() {
         { key: "assignee", label: "Assignee", width: 110 },
       ],
       withdrawal: [
-        { key: "member", label: "Member Code", width: 110, entry: true, required: true, options: memberSuggestions, placeholder: "member code" },
+        { key: "member", label: "Member Code", width: 110, entry: true, required: true, options: memberSuggestions, placeholder: "member code", noAutoOpen: true },
         { key: "date", label: "Date", width: 82, align: "center" },
         { key: "time", label: "Time", width: 56, align: "center" },
         { key: "username", label: "Username", width: 130, entry: true, placeholder: "game login" },
@@ -413,7 +413,7 @@ export default function TransactionsPage() {
         { key: "assignee", label: "Assignee", width: 110 },
       ],
       freecredit: [
-        { key: "member", label: "Member Code", width: 110, entry: true, required: true, options: memberSuggestions, placeholder: "member code" },
+        { key: "member", label: "Member Code", width: 110, entry: true, required: true, options: memberSuggestions, placeholder: "member code", noAutoOpen: true },
         { key: "date", label: "Date", width: 82, align: "center" },
         { key: "time", label: "Time", width: 56, align: "center" },
         { key: "username", label: "Username", width: 130, entry: true, placeholder: "game login" },
@@ -425,7 +425,7 @@ export default function TransactionsPage() {
         { key: "by", label: "By", width: 130 },
       ],
       transfer: [
-        { key: "member", label: "Member Code", width: 110, entry: true, required: true, options: memberSuggestions, placeholder: "member code" },
+        { key: "member", label: "Member Code", width: 110, entry: true, required: true, options: memberSuggestions, placeholder: "member code", noAutoOpen: true },
         { key: "date", label: "Date", width: 82, align: "center" },
         { key: "time", label: "Time", width: 56, align: "center" },
         { key: "username", label: "Username", width: 130, entry: true, placeholder: "game login" },

@@ -58,6 +58,13 @@ export type SheetColumn = {
   /** Autocomplete suggestions offered while editing (typeahead dropdown). */
   options?: Array<string | SheetSuggestion>;
   /**
+   * Don't spring the dropdown open just because the cell is focused — wait for
+   * the user to start typing. For columns with a huge option list (member
+   * codes), an on-focus dropdown of everything is noise; typing to filter is
+   * what people actually want.
+   */
+  noAutoOpen?: boolean;
+  /**
    * Ghost hint shown in this cell while empty — but only on the first entry row
    * that's still blank, so it reads as a template for the next row to fill,
    * never as clutter down the whole panel.
@@ -802,6 +809,7 @@ export function SheetGrid({
     const isDraft = sel.r >= draftStart;
     if (!isDraft && !committedEditable?.(sel.r, sel.c)) return;
     if (isDraft && !columns[sel.c]?.entry) return;
+    if (columns[sel.c]?.noAutoOpen) return; // opens on typing, not on focus
     if (cellValue(sel.r, sel.c)) return;
     if (!suggestionsAt(sel.r, sel.c)?.length) return;
     // Subscription-style reaction to the selection landing; guarded above.
