@@ -44,7 +44,7 @@ function InfoCard({
         <div className={cn("text-sm font-semibold tabular-nums", totalClassName)}>
           {formatRM(total)}
         </div>
-        <div className="mt-1.5 max-h-20 space-y-0.5 overflow-y-auto border-t pt-1.5">
+        <div className="mt-1.5 space-y-0.5 border-t pt-1.5">
           {rows.length === 0 && (
             <p className="text-[11px] text-muted-foreground">Nothing yet.</p>
           )}
