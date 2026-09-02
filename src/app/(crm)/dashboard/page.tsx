@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
 import Link from "next/link";
 import { formatRM, formatDateTime, isBotOnline } from "@/lib/format";
-import { botForName } from "@/lib/bot-category";
+import { botCategory, botForName, bankNamesFrom } from "@/lib/bot-category";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { StatTile } from "@/components/stat-tile";
@@ -84,6 +84,7 @@ export default function DashboardPage() {
   const bankAccounts = useStore((s) => s.bankAccounts);
   const referralBonuses = useStore((s) => s.referralBonuses);
   const botHealth = useStore((s) => s.botHealth);
+  const banksFn = useStore((s) => s.banks);
   const userName = useStore((s) => s.userName);
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
   const selectedLeaderId = useStore((s) => s.selectedLeaderId);
@@ -220,11 +221,22 @@ export default function DashboardPage() {
   const kioskOnline = (gameName: string) =>
     isBotOnline(botForName(botHealth, gameName)?.last_heartbeat_at);
 
-  const banksOnline = scopedBankAccounts.filter((a) =>
-    bankOnline(a.bank_name),
+  // Bank/kiosk online counts mirror the Agent Health page exactly: count the
+  // agent processes (bots), categorised the same way, not the account rows —
+  // several bots can drive the same bank/game, so counting accounts (which
+  // resolve many-to-one onto the first matching bot) undercounts them.
+  const bankNames = bankNamesFrom(bankAccounts, banksFn());
+  const bankBots = botHealth.filter(
+    (b) => botCategory(b.bot_id, bankNames) === "bank",
+  );
+  const kioskBots = botHealth.filter(
+    (b) => botCategory(b.bot_id, bankNames) === "kiosk",
+  );
+  const banksOnline = bankBots.filter((b) =>
+    isBotOnline(b.last_heartbeat_at),
   ).length;
-  const kiosksOnline = scopedBoAccounts.filter((k) =>
-    kioskOnline(k.game_name),
+  const kiosksOnline = kioskBots.filter((b) =>
+    isBotOnline(b.last_heartbeat_at),
   ).length;
 
   // Agent process health (system-wide, not company-scoped).
@@ -490,24 +502,24 @@ export default function DashboardPage() {
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">Banks online</span>
                 <span className="font-medium tabular-nums">
-                  <span className={statusColor(banksOnline, scopedBankAccounts.length)}>
+                  <span className={statusColor(banksOnline, bankBots.length)}>
                     {banksOnline}
                   </span>
                   <span className="text-muted-foreground">
                     {" "}
-                    / {scopedBankAccounts.length}
+                    / {bankBots.length}
                   </span>
                 </span>
               </div>
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">Kiosks online</span>
                 <span className="font-medium tabular-nums">
-                  <span className={statusColor(kiosksOnline, scopedBoAccounts.length)}>
+                  <span className={statusColor(kiosksOnline, kioskBots.length)}>
                     {kiosksOnline}
                   </span>
                   <span className="text-muted-foreground">
                     {" "}
-                    / {scopedBoAccounts.length}
+                    / {kioskBots.length}
                   </span>
                 </span>
               </div>

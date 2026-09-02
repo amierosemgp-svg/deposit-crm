@@ -613,7 +613,21 @@ export function SheetGrid({
 
   const scrollCellIntoView = useCallback((r: number, c: number) => {
     const el = containerRef.current?.querySelector(`[data-cell="${r}-${c}"]`);
-    el?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    if (!el) return;
+    el.scrollIntoView({ block: "nearest", inline: "nearest" });
+    // The row-number gutter is sticky at the left edge, so a cell that
+    // scrollIntoView aligns flush-left (e.g. column A after paging right then
+    // back) ends up hidden underneath it. Nudge left by the covered amount.
+    const GUTTER = 44;
+    const scroller = mainScrollRef.current?.contains(el)
+      ? mainScrollRef.current
+      : entryScrollRef.current?.contains(el)
+        ? entryScrollRef.current
+        : null;
+    if (!scroller) return;
+    const covered =
+      scroller.getBoundingClientRect().left + GUTTER - el.getBoundingClientRect().left;
+    if (covered > 0) scroller.scrollLeft -= covered;
   }, []);
 
   const moveTo = useCallback(
