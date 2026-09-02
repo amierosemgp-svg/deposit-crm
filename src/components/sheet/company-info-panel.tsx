@@ -14,7 +14,8 @@
 
 import { useMemo } from "react";
 import { useStore } from "@/lib/store";
-import { formatRM, isOnline } from "@/lib/format";
+import { formatRM, isBotOnline } from "@/lib/format";
+import { botForName } from "@/lib/bot-category";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Banknote, Coins, Landmark, Wallet } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -87,6 +88,7 @@ function InfoCard({
 export function CompanyInfoPanel({ month }: { month: string | "all" }) {
   const bankAccounts = useStore((s) => s.bankAccounts);
   const boAccounts = useStore((s) => s.boAccounts);
+  const botHealth = useStore((s) => s.botHealth);
   const deposits = useStore((s) => s.deposits);
   const withdrawals = useStore((s) => s.withdrawals);
   const players = useStore((s) => s.players);
@@ -102,21 +104,21 @@ export function CompanyInfoPanel({ month }: { month: string | "all" }) {
       .map((a) => ({
         label: a.label || `${a.bank_name}`,
         value: a.current_balance,
-        online: isOnline(a.last_heartbeat_at),
+        online: isBotOnline(botForName(botHealth, a.bank_name)?.last_heartbeat_at),
       }));
     const banksWithdrawal = bankAccounts
       .filter((a) => a.status === "active" && a.role === "withdrawal" && companyInScope(a.entity_id))
       .map((a) => ({
         label: a.label || `${a.bank_name}`,
         value: a.current_balance,
-        online: isOnline(a.last_heartbeat_at),
+        online: isBotOnline(botForName(botHealth, a.bank_name)?.last_heartbeat_at),
       }));
     const games = boAccounts
       .filter((b) => b.status === "active" && companyInScope(b.company_entity_id))
       .map((b) => ({
         label: b.bo_label || b.game_name,
         value: b.current_credit,
-        online: isOnline(b.last_heartbeat_at),
+        online: isBotOnline(botForName(botHealth, b.game_name)?.last_heartbeat_at),
       }));
 
     let depTotal = 0;
@@ -143,7 +145,7 @@ export function CompanyInfoPanel({ month }: { month: string | "all" }) {
     }
     return { banksDeposit, banksWithdrawal, games, depTotal, depBonus, depCount, wdTotal, wdCount };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bankAccounts, boAccounts, deposits, withdrawals, players, month, selectedCompanyId, companyInScope]);
+  }, [bankAccounts, boAccounts, botHealth, deposits, withdrawals, players, month, selectedCompanyId, companyInScope]);
 
   const monthLabel =
     month === "all"
