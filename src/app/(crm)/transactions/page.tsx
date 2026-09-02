@@ -1462,14 +1462,17 @@ export default function TransactionsPage() {
       else if (tab === "deposit") {
         if (k === "p" && can.approve) run = handleApprove;
         else if (k === "c" && can.complete) run = handleComplete;
-        else if (k === "t" && can.retryDep) run = handleRetryDeposits;
+        // ⌘I, not ⌘T — the browser reserves ⌘T / Ctrl+T for "new tab" and the
+        // page never receives it.
+        else if (k === "i" && can.retryDep) run = handleRetryDeposits;
         else if (k === "r" && can.rejectDep) run = handleRejectDeposits;
       } else if (tab === "withdrawal") {
         if (k === "p" && can.pull) run = handlePull;
-        else if (k === "m" && can.paid) run = handleMarkPaid;
+        // ⌘B, not ⌘M — ⌘M minimises the window on macOS before the page sees it.
+        else if (k === "b" && can.paid) run = handleMarkPaid;
         else if (k === "r" && can.rejectWd) run = handleRejectWithdrawals;
       } else if (tab === "transfer") {
-        if (k === "t" && can.retryTf) run = handleRetryTransfers;
+        if (k === "i" && can.retryTf) run = handleRetryTransfers;
       } else if (tab === "expense") {
         if (k === "d" && can.delExp) run = handleDeleteExpenses;
       }
@@ -1983,7 +1986,7 @@ export default function TransactionsPage() {
               >
                 <RotateCcw className="h-3 w-3" />
                 Retry
-                <Kbd k={`${MOD_LABEL}T`} />
+                <Kbd k={`${MOD_LABEL}I`} />
               </Button>
             )}
             {can.rejectDep && (
@@ -2020,7 +2023,7 @@ export default function TransactionsPage() {
               >
                 <CheckCircle2 className="h-3 w-3" />
                 Mark paid
-                <Kbd k={`${MOD_LABEL}M`} light />
+                <Kbd k={`${MOD_LABEL}B`} light />
               </Button>
             )}
             {can.rejectWd && (
@@ -2046,7 +2049,7 @@ export default function TransactionsPage() {
               >
                 <RotateCcw className="h-3 w-3" />
                 Retry
-                <Kbd k={`${MOD_LABEL}T`} />
+                <Kbd k={`${MOD_LABEL}I`} />
               </Button>
             )}
             {can.delExp && (
