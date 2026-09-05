@@ -515,41 +515,84 @@ export async function listRebatePayouts(
     )
     .orderBy(desc(rebatePayouts.net_loss), asc(players.username));
 
-  return rows.map(({ p, username, full_name, transfer_status }) => {
-    let live: RebateLiveStatus;
-    if (p.status === "pending") live = "pending";
-    else if (p.status === "skipped") live = "skipped";
-    else if (p.skip_bot || !p.game_transfer_id || !transfer_status) live = "credited";
-    else if (transfer_status === "completed") live = "credited";
-    else if (transfer_status === "failed") live = "failed";
-    else if (transfer_status === "pending") live = "queued";
-    else live = "processing";
-    return {
-      payout_id: p.payout_id,
-      plan_id: p.plan_id,
-      player_id: p.player_id,
-      username,
-      full_name,
-      company_entity_id: p.company_entity_id,
-      window_start: p.window_start,
-      window_end: p.window_end,
-      deposits_total: p.deposits_total,
-      withdrawals_total: p.withdrawals_total,
-      net_loss: p.net_loss,
-      percentage: p.percentage,
-      amount: p.amount,
-      status: p.status,
-      live_status: live,
-      game_name: p.game_name,
-      game_username: p.game_username,
-      skip_bot: p.skip_bot,
-      game_transfer_id: p.game_transfer_id,
-      generated_at: p.generated_at,
-      paid_by_user_id: p.paid_by_user_id,
-      paid_at: p.paid_at,
-      note: p.note,
-    };
-  });
+  return rows.map(({ p, username, full_name, transfer_status }) =>
+    viewOf(p, username, full_name, transfer_status),
+  );
+}
+
+/** A payout row as the pages see it, with the credit's live status folded in. */
+function viewOf(
+  p: typeof rebatePayouts.$inferSelect,
+  username: string,
+  full_name: string,
+  transfer_status: string | null,
+): RebatePayoutView {
+  let live: RebateLiveStatus;
+  if (p.status === "pending") live = "pending";
+  else if (p.status === "skipped") live = "skipped";
+  else if (p.skip_bot || !p.game_transfer_id || !transfer_status) live = "credited";
+  else if (transfer_status === "completed") live = "credited";
+  else if (transfer_status === "failed") live = "failed";
+  else if (transfer_status === "pending") live = "queued";
+  else live = "processing";
+  return {
+    payout_id: p.payout_id,
+    plan_id: p.plan_id,
+    player_id: p.player_id,
+    username,
+    full_name,
+    company_entity_id: p.company_entity_id,
+    window_start: p.window_start,
+    window_end: p.window_end,
+    deposits_total: p.deposits_total,
+    withdrawals_total: p.withdrawals_total,
+    net_loss: p.net_loss,
+    percentage: p.percentage,
+    amount: p.amount,
+    status: p.status,
+    live_status: live,
+    game_name: p.game_name,
+    game_username: p.game_username,
+    skip_bot: p.skip_bot,
+    game_transfer_id: p.game_transfer_id,
+    generated_at: p.generated_at,
+    paid_by_user_id: p.paid_by_user_id,
+    paid_at: p.paid_at,
+    note: p.note,
+  };
+}
+
+/** A payout row with its plan named — the Rebate sheet lists every plan at once. */
+export type RebatePayoutLedgerRow = RebatePayoutView & {
+  plan_name: string;
+  period: BonusPeriod;
+};
+
+/** Every payout in scope across all plans, newest window first (the Rebate sheet). */
+export async function listAllRebatePayouts(
+  companyIds: number[] | null,
+  limit = 2000,
+): Promise<RebatePayoutLedgerRow[]> {
+  const rows = await db
+    .select({
+      p: rebatePayouts,
+      username: players.username,
+      full_name: players.full_name,
+      transfer_status: gameTransfers.status,
+      plan_name: bonusPlans.name,
+    })
+    .from(rebatePayouts)
+    .innerJoin(players, eq(players.player_id, rebatePayouts.player_id))
+    .innerJoin(bonusPlans, eq(bonusPlans.plan_id, rebatePayouts.plan_id))
+    .leftJoin(gameTransfers, eq(gameTransfers.transfer_id, rebatePayouts.game_transfer_id))
+    .where(scopeFilter(companyIds))
+    .orderBy(desc(rebatePayouts.window_end), desc(rebatePayouts.net_loss), asc(players.username))
+    .limit(limit);
+  return rows.map(({ p, username, full_name, transfer_status, plan_name }) => ({
+    ...viewOf(p, username, full_name, transfer_status),
+    plan_name,
+    period: p.period,
+  }));
 }
 
 /**

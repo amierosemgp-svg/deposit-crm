@@ -44,12 +44,14 @@ import {
   CheckCircle2,
   HandCoins,
   Loader2,
+  Play,
   Radar,
   RefreshCw,
   RotateCcw,
   Save,
   Search,
   Trash2,
+  Undo2,
   User,
   UserCheck,
   UserMinus,
@@ -61,6 +63,7 @@ import {
   BONUS_TYPE_LABELS,
   EXPENSE_CATEGORIES,
   OPEN_BOT_COMMAND_STATUSES,
+  type BankCashOut,
   type BonusOption,
   type BotCommand,
   type Deposit,
@@ -69,8 +72,17 @@ import {
   type Player,
   type Withdrawal,
 } from "@/lib/types";
+import type { RebateLiveStatus, RebatePayoutLedgerRow } from "@/lib/rebates";
 
-type TabKey = "deposit" | "withdrawal" | "freecredit" | "transfer" | "expense";
+type TabKey =
+  | "deposit"
+  | "withdrawal"
+  | "freecredit"
+  | "transfer"
+  | "leaderwithdrawal"
+  | "rebate"
+  | "leadertransfer"
+  | "expense";
 
 /**
  * Column order per sheet, in workflow order: who handles it, then everything
@@ -89,14 +101,23 @@ const COLUMN_KEYS = {
     "status", "date", "time", "remark2",
   ],
   freecredit: [
-    "by", "member", "product", "username", "amount", "mode", "remark",
+    "assign", "member", "product", "username", "amount", "mode", "remark",
     "status", "date", "time",
   ],
   transfer: [
     "assign", "member", "from", "username", "to", "to_username", "amount",
     "status", "date", "time", "note",
   ],
-  expense: ["by", "date", "category", "description", "amount", "company", "notes"],
+  expense: ["assign", "date", "category", "description", "amount", "company", "notes"],
+  // Cash a leader took out of a company bank account (see Bank Accounts).
+  leaderwithdrawal: ["assign", "date", "time", "account", "amount", "takenby", "notes", "status"],
+  // Generated rebate payouts, every plan together — read-only, paid from here.
+  rebate: [
+    "plan", "window", "member", "name", "product", "username", "deposits",
+    "withdrawals", "loss", "pct", "amount", "status", "paidby", "paidat",
+  ],
+  // Settlements between leaders (super-admin only).
+  leadertransfer: ["assign", "date", "time", "from", "to", "amount", "note"],
 } as const satisfies Record<TabKey, readonly string[]>;
 
 type ColKey<T extends TabKey> = (typeof COLUMN_KEYS)[T][number];
@@ -127,8 +148,41 @@ const LOGIN_PAIRS: Record<TabKey, Array<{ userCol: number; gameCol: number }>> =
     { userCol: COL.transfer.username, gameCol: COL.transfer.from },
     { userCol: COL.transfer.to_username, gameCol: COL.transfer.to },
   ],
+  leaderwithdrawal: [],
+  rebate: [],
+  leadertransfer: [],
   expense: [],
 };
+
+/** One leader-to-leader settlement, as GET /api/leader-transfers returns it. */
+type LeaderTransferRow = {
+  transfer_id: number;
+  from_leader_entity_id: number;
+  to_leader_entity_id: number;
+  amount: number;
+  note: string | null;
+  created_by_user_id: number;
+  created_at: string;
+};
+
+const REBATE_STATUS_LABEL: Record<RebateLiveStatus, string> = {
+  pending: "Pending",
+  queued: "Queued",
+  processing: "Crediting",
+  credited: "Credited",
+  failed: "Failed",
+  skipped: "Skipped",
+};
+
+/** "HH:MM" (or "H:MM") → hours and minutes, or null when it isn't one. */
+function parseSheetTime(raw: string): [number, number] | null {
+  const m = raw.trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const h = Number(m[1]);
+  const mi = Number(m[2]);
+  if (h > 23 || mi > 59) return null;
+  return [h, mi];
+}
 
 /** One Free Credit ledger row, as GET /api/free-credits returns it. */
 type FreeCredit = {
@@ -398,6 +452,10 @@ const ENTRY_HINT: Record<TabKey, string> = {
     "Entry: Member Code · Product · Amount · Mode (bot / manual) · Remark — credit with no deposit behind it",
   transfer: "Entry: Member Code · From · To · Amount (or ALL) — the rest fills itself",
   expense: "Entry: Date · Category · Description · Amount · Company · Notes",
+  leaderwithdrawal:
+    "Entry: Date · Time · Bank Account · Amount · Taken By · Notes — cash a leader took out at the bank; the account is debited on save",
+  rebate: "Generated on the Rebates page — select rows here to pay, skip or unskip them",
+  leadertransfer: "Entry: From Leader · To Leader · Amount · Note — a settlement between leaders",
 };
 
 export default function TransactionsPage() {
@@ -431,6 +489,10 @@ export default function TransactionsPage() {
   const banksFn = useStore((s) => s.banks);
   const companiesFn = useStore((s) => s.companies);
   const userName = useStore((s) => s.userName);
+  const bankAccounts = useStore((s) => s.bankAccounts);
+  const entities = useStore((s) => s.entities);
+  const entityName = useStore((s) => s.entityName);
+  const reverseBankCashOut = useStore((s) => s.reverseBankCashOut);
 
   const games = gamesFn();
   const banks = banksFn();
@@ -451,11 +513,51 @@ export default function TransactionsPage() {
       // Poll/refresh will retry; the tab just shows what it last had.
     }
   }, []);
+  // Leader cash-outs, rebate payouts and leader settlements live outside
+  // /api/state too — same treatment.
+  const [cashOuts, setCashOuts] = useState<BankCashOut[]>([]);
+  const loadCashOuts = useCallback(async () => {
+    try {
+      const res = await fetch("/api/bank-accounts/cash-outs");
+      if (!res.ok) return;
+      const data = (await res.json()) as { cash_outs?: BankCashOut[] };
+      setCashOuts(data.cash_outs ?? []);
+    } catch {
+      // transient — next refresh retries
+    }
+  }, []);
+  const [rebatePayouts, setRebatePayouts] = useState<RebatePayoutLedgerRow[]>([]);
+  const loadRebatePayouts = useCallback(async () => {
+    try {
+      const res = await fetch("/api/rebates/payouts");
+      if (!res.ok) return;
+      const data = (await res.json()) as { payouts?: RebatePayoutLedgerRow[] };
+      setRebatePayouts(data.payouts ?? []);
+    } catch {
+      // transient
+    }
+  }, []);
+  const [leaderTransfers, setLeaderTransfers] = useState<LeaderTransferRow[]>([]);
+  const loadLeaderTransfers = useCallback(async () => {
+    if (!isAdmin) return; // the ledger is super-admin only
+    try {
+      const res = await fetch("/api/leader-transfers");
+      if (!res.ok) return;
+      const data = (await res.json()) as { leader_transfers?: LeaderTransferRow[] };
+      setLeaderTransfers(data.leader_transfers ?? []);
+    } catch {
+      // transient
+    }
+  }, [isAdmin]);
+  const loadLedgers = useCallback(
+    () => Promise.all([loadFreeCredits(), loadCashOuts(), loadRebatePayouts(), loadLeaderTransfers()]),
+    [loadFreeCredits, loadCashOuts, loadRebatePayouts, loadLeaderTransfers],
+  );
   useEffect(() => {
     // Fetch-on-mount; the setState happens after the await, not synchronously.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    void loadFreeCredits();
-  }, [loadFreeCredits]);
+    void loadLedgers();
+  }, [loadLedgers]);
 
   const [tab, setTab] = useState<TabKey>("deposit");
   const now = new Date();
@@ -470,7 +572,13 @@ export default function TransactionsPage() {
   const [selectedIds, setSelectedIds] = useState<(string | number)[]>([]);
   const [acting, setActing] = useState(false);
   const [confirming, setConfirming] = useState<{
-    kind: "reject-deposit" | "reject-withdrawal" | "delete-expense";
+    kind:
+      | "reject-deposit"
+      | "reject-withdrawal"
+      | "delete-expense"
+      | "reverse-cashout"
+      | "pay-rebate"
+      | "pay-rebate-manual";
     ids: number[];
   } | null>(null);
 
@@ -508,6 +616,42 @@ export default function TransactionsPage() {
     ],
     [],
   );
+  // Bank accounts a cash-out can come from: "Bank number", company and balance
+  // as the hint. Leaders by name, for who took the cash / who settles with whom.
+  const ACCOUNT_SUGGESTIONS = useMemo<SheetSuggestion[]>(
+    () =>
+      bankAccounts
+        .filter((a) => a.status === "active" && companyInScope(a.entity_id))
+        .map((a) => ({
+          value: `${a.bank_name} ${a.account_number}`,
+          hint: `${entityName(a.entity_id)} · ${fmtAmount(a.current_balance)}`,
+        })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [bankAccounts, entityName, selectedCompanyId, selectedLeaderId],
+  );
+  const LEADER_SUGGESTIONS = useMemo<SheetSuggestion[]>(
+    () =>
+      entities
+        .filter((e) => e.entity_type === "leader" && e.status === "active")
+        .map((e) => ({ value: e.name })),
+    [entities],
+  );
+  const leaderByName = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const e of entities) {
+      if (e.entity_type === "leader") m.set(e.name.trim().toLowerCase(), e.entity_id);
+    }
+    return m;
+  }, [entities]);
+  const accountByLabel = useMemo(() => {
+    const m = new Map<string, (typeof bankAccounts)[number]>();
+    for (const a of bankAccounts) {
+      m.set(`${a.bank_name} ${a.account_number}`.toLowerCase(), a);
+      // The number alone is enough when it's unambiguous.
+      if (!m.has(a.account_number.toLowerCase())) m.set(a.account_number.toLowerCase(), a);
+    }
+    return m;
+  }, [bankAccounts]);
 
   // Column definitions by key; COLUMN_KEYS decides the order they appear in.
   const columnsByTab = useMemo<Record<TabKey, SheetColumn[]>>(() => {
@@ -558,7 +702,7 @@ export default function TransactionsPage() {
         remark2: { label: "Remark 2", width: 200 },
       }),
       freecredit: order("freecredit", {
-        by: { label: "By", width: 130 },
+        assign,
         member,
         product: { label: "Product", width: 110, entry: true, required: true, options: games, placeholder: "game" },
         username,
@@ -582,8 +726,43 @@ export default function TransactionsPage() {
         time,
         note: { label: "Note", width: 240 },
       }),
+      leaderwithdrawal: order("leaderwithdrawal", {
+        assign,
+        date: { label: "Date", width: 92, align: "center", entry: true, placeholder: "31/8/2026" },
+        time: { label: "Time", width: 64, align: "center", entry: true, placeholder: "14:30" },
+        account: { label: "Bank Account", width: 220, entry: true, required: true, options: ACCOUNT_SUGGESTIONS, placeholder: "bank account" },
+        amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "500" },
+        takenby: { label: "Taken By", width: 160, entry: true, required: true, options: LEADER_SUGGESTIONS, placeholder: "leader" },
+        notes: { label: "Notes", width: 240, entry: true, placeholder: "receipt no. (optional)" },
+        status: { label: "Status", width: 100 },
+      }),
+      rebate: order("rebate", {
+        plan: { label: "Rebate Plan", width: 150 },
+        window: { label: "Window", width: 150 },
+        member: { label: "Member Code", width: 110 },
+        name: { label: "Name", width: 160 },
+        product: { label: "Product", width: 110 },
+        username: { label: "Username", width: 130 },
+        deposits: { label: "Deposits", width: 100, align: "right", numeric: true },
+        withdrawals: { label: "Withdrawals", width: 100, align: "right", numeric: true },
+        loss: { label: "Net Loss", width: 100, align: "right", numeric: true },
+        pct: { label: "%", width: 56, align: "right" },
+        amount: { label: "Rebate", width: 100, align: "right", numeric: true },
+        status: { label: "Status", width: 100 },
+        paidby: { label: "Paid By", width: 120 },
+        paidat: { label: "Paid At", width: 130 },
+      }),
+      leadertransfer: order("leadertransfer", {
+        assign,
+        date,
+        time,
+        from: { label: "From Leader", width: 160, entry: true, required: true, options: LEADER_SUGGESTIONS, placeholder: "from leader" },
+        to: { label: "To Leader", width: 160, entry: true, required: true, options: LEADER_SUGGESTIONS, placeholder: "to leader" },
+        amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "1000" },
+        note: { label: "Note", width: 260, entry: true, placeholder: "what it settles (optional)" },
+      }),
       expense: order("expense", {
-        by: { label: "Recorded By", width: 130 },
+        assign,
         date: { label: "Date", width: 92, align: "center", entry: true, required: true, placeholder: "31/8/2026" },
         category: { label: "Category", width: 110, entry: true, required: true, options: [...EXPENSE_CATEGORIES], placeholder: "category" },
         description: { label: "Description", width: 260, entry: true, required: true, placeholder: "what it's for" },
@@ -592,7 +771,7 @@ export default function TransactionsPage() {
         notes: { label: "Notes", width: 240, entry: true, placeholder: "notes (optional)" },
       }),
     };
-  }, [games, banks, companies, memberSuggestions, MODE_SUGGESTIONS, ASSIGN_SUGGESTIONS]);
+  }, [games, banks, companies, memberSuggestions, MODE_SUGGESTIONS, ASSIGN_SUGGESTIONS, ACCOUNT_SUGGESTIONS, LEADER_SUGGESTIONS]);
 
   const columns = columnsByTab[tab];
 
@@ -603,6 +782,9 @@ export default function TransactionsPage() {
     withdrawal: padDrafts([], "withdrawal"),
     freecredit: padDrafts([], "freecredit"),
     transfer: padDrafts([], "transfer"),
+    leaderwithdrawal: padDrafts([], "leaderwithdrawal"),
+    rebate: padDrafts([], "rebate"),
+    leadertransfer: padDrafts([], "leadertransfer"),
     expense: padDrafts([], "expense"),
   }));
   // Server rejections from the last save, keyed by the draft row's identity.
@@ -657,8 +839,8 @@ export default function TransactionsPage() {
    */
   const enrichMemberChanges = useCallback(
     (prev: string[][], next: string[][]): string[][] => {
-      if (tab === "expense") return next;
-      const memberCol = COL[tab].member;
+      const memberCol = (COL[tab] as Record<string, number | undefined>).member;
+      if (memberCol === undefined) return next; // no player on this sheet
       return next.map((row, i) => {
         const member = row[memberCol]?.trim().toLowerCase() ?? "";
         const prevMember = prev[i]?.[memberCol]?.trim().toLowerCase() ?? "";
@@ -848,7 +1030,7 @@ export default function TransactionsPage() {
               ? transferTone(transfer.status)
               : ("warning" as const),
           cells: toCells("freecredit", {
-            by: userName(f.user_id),
+            assign: assignCell(f.user_id),
             member: p?.username ?? "",
             product: f.game_name ?? "",
             username: gameUsername(p, f.game_name),
@@ -867,7 +1049,7 @@ export default function TransactionsPage() {
       })
       .filter((r) => matchesSearch(r.cells));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [freeCredits, gameTransfers, playerById, month, matchesSearch, selectedCompanyId, selectedLeaderId]);
+  }, [freeCredits, gameTransfers, playerById, month, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId]);
 
   const transferRows = useMemo<SheetRow[]>(() => {
     return gameTransfers
@@ -911,7 +1093,7 @@ export default function TransactionsPage() {
         id: e.expense_id,
         tone: "default" as const,
         cells: toCells("expense", {
-          by: userName(e.recorded_by_user_id),
+          assign: assignCell(e.recorded_by_user_id),
           date: sheetDate(e.expense_date),
           category: e.category,
           description: e.description,
@@ -922,13 +1104,112 @@ export default function TransactionsPage() {
       }))
       .filter((r) => matchesSearch(r.cells));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expenses, companyNameById, month, matchesSearch, selectedCompanyId, selectedLeaderId]);
+  }, [expenses, companyNameById, month, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId]);
+
+  const accountById = useMemo(
+    () => new Map(bankAccounts.map((a) => [a.account_id, a])),
+    [bankAccounts],
+  );
+
+  const leaderWithdrawalRows = useMemo<SheetRow[]>(() => {
+    return cashOuts
+      .filter((c) => companyInScope(c.entity_id))
+      .filter((c) => month === "all" || c.occurred_at.slice(0, 7) === month)
+      .filter(
+        (c) =>
+          statusFilter === "all" ||
+          (statusFilter === "reversed" ? !!c.reversed_at : !c.reversed_at),
+      )
+      .sort((a, b) => a.occurred_at.localeCompare(b.occurred_at))
+      .map((c) => {
+        const a = accountById.get(c.account_id);
+        return {
+          id: c.cash_out_id,
+          tone: c.reversed_at ? ("muted" as const) : ("default" as const),
+          cells: toCells("leaderwithdrawal", {
+            assign: assignCell(c.recorded_by_user_id),
+            date: sheetDate(c.occurred_at),
+            time: formatClock(c.occurred_at),
+            account: a ? `${a.bank_name} ${a.account_number}` : `#${c.account_id}`,
+            amount: fmtAmount(c.amount),
+            takenby: c.taken_by,
+            notes: c.notes ?? "",
+            status: c.reversed_at ? "Reversed" : "Debited",
+          }),
+        };
+      })
+      .filter((r) => matchesSearch(r.cells));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cashOuts, accountById, month, statusFilter, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId]);
+
+  const rebateRows = useMemo<SheetRow[]>(() => {
+    const tone = (st: RebateLiveStatus): SheetRow["tone"] =>
+      st === "credited"
+        ? "success"
+        : st === "failed"
+          ? "danger"
+          : st === "pending"
+            ? "warning"
+            : st === "skipped"
+              ? "muted"
+              : "default";
+    return rebatePayouts
+      .filter((r) => r.company_entity_id === null || companyInScope(r.company_entity_id))
+      .filter((r) => month === "all" || r.window_end.slice(0, 7) === month)
+      .filter((r) => statusFilter === "all" || r.live_status === statusFilter)
+      .sort((a, b) => a.window_end.localeCompare(b.window_end) || b.net_loss - a.net_loss)
+      .map((r) => ({
+        id: r.payout_id,
+        tone: tone(r.live_status),
+        cells: toCells("rebate", {
+          plan: `${r.plan_name} · ${BONUS_PERIOD_LABELS[r.period]}`,
+          window: `${sheetDate(r.window_start)} – ${sheetDate(r.window_end)}`,
+          member: r.username,
+          name: r.full_name,
+          product: r.game_name ?? "",
+          username: r.game_username ?? "",
+          deposits: fmtAmount(r.deposits_total),
+          withdrawals: fmtAmount(r.withdrawals_total),
+          loss: fmtAmount(r.net_loss),
+          pct: `${r.percentage}%`,
+          amount: fmtAmount(r.amount),
+          status: REBATE_STATUS_LABEL[r.live_status],
+          paidby: r.paid_by_user_id ? userName(r.paid_by_user_id) : "",
+          paidat: r.paid_at ? `${sheetDate(r.paid_at)} ${formatClock(r.paid_at)}` : "",
+        }),
+      }))
+      .filter((r) => matchesSearch(r.cells));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rebatePayouts, month, statusFilter, matchesSearch, userName, selectedCompanyId, selectedLeaderId]);
+
+  const leaderTransferRows = useMemo<SheetRow[]>(() => {
+    return leaderTransfers
+      .filter((t) => month === "all" || t.created_at.slice(0, 7) === month)
+      .sort((a, b) => a.created_at.localeCompare(b.created_at))
+      .map((t) => ({
+        id: t.transfer_id,
+        tone: "default" as const,
+        cells: toCells("leadertransfer", {
+          assign: assignCell(t.created_by_user_id),
+          date: sheetDate(t.created_at),
+          time: formatClock(t.created_at),
+          from: entityName(t.from_leader_entity_id),
+          to: entityName(t.to_leader_entity_id),
+          amount: fmtAmount(t.amount),
+          note: t.note ?? "",
+        }),
+      }))
+      .filter((r) => matchesSearch(r.cells));
+  }, [leaderTransfers, month, matchesSearch, assignCell, entityName]);
 
   const rowsByTab: Record<TabKey, SheetRow[]> = {
     deposit: depositRows,
     withdrawal: withdrawalRows,
     freecredit: freeCreditRows,
     transfer: transferRows,
+    leaderwithdrawal: leaderWithdrawalRows,
+    rebate: rebateRows,
+    leadertransfer: leaderTransferRows,
     expense: expenseRows,
   };
   const rows = rowsByTab[tab];
@@ -1167,6 +1448,8 @@ export default function TransactionsPage() {
   const parseFreeCreditDraft = useCallback(
     (d: string[]): Parsed => {
       const c = COL.freecredit;
+      if (parseAssign(d[c.assign] ?? "") === null)
+        return { ok: false, error: `Assign to me must be yes or no, not "${d[c.assign]?.trim()}"` };
       const member = d[c.member] ?? "";
       const username = d[c.username] ?? "";
       const product = d[c.product] ?? "";
@@ -1248,6 +1531,8 @@ export default function TransactionsPage() {
   const parseExpenseDraft = useCallback(
     (d: string[]): Parsed => {
       const c = COL.expense;
+      if (parseAssign(d[c.assign] ?? "") === null)
+        return { ok: false, error: `Assign to me must be yes or no, not "${d[c.assign]?.trim()}"` };
       const date = d[c.date] ?? "";
       const category = d[c.category] ?? "";
       const description = d[c.description] ?? "";
@@ -1285,11 +1570,94 @@ export default function TransactionsPage() {
     [companyByName],
   );
 
+  const parseLeaderWithdrawalDraft = useCallback(
+    (d: string[]): Parsed => {
+      const c = COL.leaderwithdrawal;
+      if (parseAssign(d[c.assign] ?? "") === null)
+        return { ok: false, error: `Assign to me must be yes or no, not "${d[c.assign]?.trim()}"` };
+      const accountCell = (d[c.account] ?? "").trim();
+      const account = accountByLabel.get(accountCell.toLowerCase());
+      if (!account) return { ok: false, error: `Unknown bank account "${accountCell}"` };
+      if (!companyInScope(account.entity_id))
+        return { ok: false, error: `${account.bank_name} ${account.account_number} is outside your scope` };
+      const amt = parseAmount(d[c.amount] ?? "");
+      if (amt === null || amt <= 0) return { ok: false, error: `Bad amount "${d[c.amount]}"` };
+      if (amt > account.current_balance)
+        return { ok: false, error: `Exceeds the account balance (${fmtAmount(account.current_balance)})` };
+      const takenCell = (d[c.takenby] ?? "").trim();
+      if (!takenCell) return { ok: false, error: "Say who took the cash" };
+      const leaderId = leaderByName.get(takenCell.toLowerCase()) ?? null;
+      const dateCell = (d[c.date] ?? "").trim();
+      const ymd = dateCell ? parseSheetDate(dateCell) : new Date().toISOString().slice(0, 10);
+      if (!ymd) return { ok: false, error: `Bad date "${dateCell}" (use 31/8/2026)` };
+      const timeCell = (d[c.time] ?? "").trim();
+      const hm = timeCell ? parseSheetTime(timeCell) : null;
+      if (timeCell && !hm) return { ok: false, error: `Bad time "${timeCell}" (use 14:30)` };
+      const [y, m, day] = ymd.split("-").map(Number);
+      // No time typed = now on that date, so the record isn't stamped at midnight.
+      const nowD = new Date();
+      const occurred = hm
+        ? new Date(y, m - 1, day, hm[0], hm[1])
+        : new Date(y, m - 1, day, nowD.getHours(), nowD.getMinutes());
+      if (occurred.getTime() > Date.now() + 5 * 60_000)
+        return { ok: false, error: "The withdrawal time can't be in the future" };
+      const notes = (d[c.notes] ?? "").trim();
+      return {
+        ok: true,
+        payload: {
+          account_id: account.account_id,
+          amount: amt,
+          ...(leaderId ? { taken_by_entity_id: leaderId } : { taken_by: takenCell }),
+          occurred_at: occurred.toISOString(),
+          ...(notes ? { notes } : {}),
+        },
+      };
+    },
+    [accountByLabel, leaderByName, companyInScope],
+  );
+
+  const parseLeaderTransferDraft = useCallback(
+    (d: string[]): Parsed => {
+      const c = COL.leadertransfer;
+      if (parseAssign(d[c.assign] ?? "") === null)
+        return { ok: false, error: `Assign to me must be yes or no, not "${d[c.assign]?.trim()}"` };
+      const fromCell = (d[c.from] ?? "").trim();
+      const toCell = (d[c.to] ?? "").trim();
+      const fromId = leaderByName.get(fromCell.toLowerCase());
+      if (!fromId) return { ok: false, error: `Unknown leader "${fromCell}"` };
+      const toId = leaderByName.get(toCell.toLowerCase());
+      if (!toId) return { ok: false, error: `Unknown leader "${toCell}"` };
+      if (fromId === toId) return { ok: false, error: "From and To are the same leader" };
+      const amt = parseAmount(d[c.amount] ?? "");
+      if (amt === null || amt <= 0) return { ok: false, error: `Bad amount "${d[c.amount]}"` };
+      const note = (d[c.note] ?? "").trim();
+      return {
+        ok: true,
+        payload: {
+          from_leader_entity_id: fromId,
+          to_leader_entity_id: toId,
+          amount: amt,
+          ...(note ? { note } : {}),
+        },
+      };
+    },
+    [leaderByName],
+  );
+
+  // Rebates aren't typed in — they're generated on the Rebates page.
+  const parseRebateDraft = useCallback(
+    (): Parsed => ({ ok: false, error: "Rebates are generated on the Rebates page, not typed here" }),
+    [],
+  );
+
   const parseByTab: Record<TabKey, (d: string[]) => Parsed> = {
     deposit: parseDepositDraft,
     withdrawal: parseWithdrawalDraft,
     freecredit: parseFreeCreditDraft,
     transfer: parseTransferDraft,
+    leaderwithdrawal: parseLeaderWithdrawalDraft,
+    rebate: parseRebateDraft,
+    leadertransfer: parseLeaderTransferDraft,
     expense: parseExpenseDraft,
   };
   const parseDraft = parseByTab[tab];
@@ -1424,6 +1792,34 @@ export default function TransactionsPage() {
         : [],
     [tab, selectedNumericIds, expenseById],
   );
+  const cashOutById = useMemo(() => {
+    const m = new Map<number, BankCashOut>();
+    for (const c of cashOuts) m.set(c.cash_out_id, c);
+    return m;
+  }, [cashOuts]);
+  const selectedCashOuts = useMemo(
+    () =>
+      tab === "leaderwithdrawal"
+        ? selectedNumericIds
+            .map((id) => cashOutById.get(id))
+            .filter((c): c is BankCashOut => !!c)
+        : [],
+    [tab, selectedNumericIds, cashOutById],
+  );
+  const rebateById = useMemo(() => {
+    const m = new Map<number, RebatePayoutLedgerRow>();
+    for (const r of rebatePayouts) m.set(r.payout_id, r);
+    return m;
+  }, [rebatePayouts]);
+  const selectedRebates = useMemo(
+    () =>
+      tab === "rebate"
+        ? selectedNumericIds
+            .map((id) => rebateById.get(id))
+            .filter((r): r is RebatePayoutLedgerRow => !!r)
+        : [],
+    [tab, selectedNumericIds, rebateById],
+  );
 
   /** Run one store action over ids, sequentially, and report the outcome. */
   const runBulk = useCallback(
@@ -1510,7 +1906,9 @@ export default function TransactionsPage() {
 
   const can = useMemo(
     () => ({
-      assign: tab !== "expense" && selectedNumericIds.length > 0,
+      assign:
+        (tab === "deposit" || tab === "withdrawal" || tab === "transfer") &&
+        selectedNumericIds.length > 0,
       approve: selectedDeposits.some((d) => ["pending", "matched"].includes(d.status)),
       complete: selectedDeposits.some((d) => ["approved", "processing"].includes(d.status)),
       retryDep: selectedDeposits.some((d) => d.status === "failed"),
@@ -1522,8 +1920,19 @@ export default function TransactionsPage() {
       rejectWd: selectedWithdrawals.some((w) => w.status === "requested"),
       retryTf: selectedTransfers.some((t) => t.status === "failed"),
       delExp: tab === "expense" && selectedExpenses.length > 0,
+      // Reversing a cash-out is a leader's call; paying/skipping a rebate is CS work.
+      revCash:
+        tab === "leaderwithdrawal" &&
+        (me?.role === "super_admin" || me?.role === "company_leader") &&
+        selectedCashOuts.some((c) => !c.reversed_at),
+      payReb: selectedRebates.some((r) => r.live_status === "pending"),
+      skipReb: selectedRebates.some((r) => r.live_status === "pending"),
+      unskipReb: selectedRebates.some((r) => r.live_status === "skipped"),
     }),
-    [tab, selectedNumericIds, selectedDeposits, selectedWithdrawals, selectedTransfers, selectedExpenses],
+    [
+      tab, me, selectedNumericIds, selectedDeposits, selectedWithdrawals, selectedTransfers,
+      selectedExpenses, selectedCashOuts, selectedRebates,
+    ],
   );
 
   // The player behind the current selection — set only when every selected row
@@ -1534,8 +1943,9 @@ export default function TransactionsPage() {
     for (const d of selectedDeposits) if (d.player_id) ids.add(d.player_id);
     for (const w of selectedWithdrawals) ids.add(w.player_id);
     for (const t of selectedTransfers) ids.add(t.player_id);
+    for (const r of selectedRebates) ids.add(r.player_id);
     return ids.size === 1 ? [...ids][0] : null;
-  }, [selectedDeposits, selectedWithdrawals, selectedTransfers]);
+  }, [selectedDeposits, selectedWithdrawals, selectedTransfers, selectedRebates]);
 
   const handleViewPlayer = useCallback(() => {
     if (selectedPlayerId) openPlayer(selectedPlayerId);
@@ -1620,6 +2030,41 @@ export default function TransactionsPage() {
       }),
     [selectedExpenses],
   );
+  const handleReverseCashOuts = useCallback(
+    () =>
+      setConfirming({
+        kind: "reverse-cashout",
+        ids: selectedCashOuts.filter((c) => !c.reversed_at).map((c) => c.cash_out_id),
+      }),
+    [selectedCashOuts],
+  );
+  const handlePayRebates = useCallback(
+    (byHand: boolean) =>
+      setConfirming({
+        kind: byHand ? "pay-rebate-manual" : "pay-rebate",
+        ids: selectedRebates.filter((r) => r.live_status === "pending").map((r) => r.payout_id),
+      }),
+    [selectedRebates],
+  );
+  /** Skip / unskip go straight through — nothing moves money. */
+  const setRebateStatus = useCallback(
+    async (status: "pending" | "skipped") => {
+      const from = status === "skipped" ? "pending" : "skipped";
+      const ids = selectedRebates.filter((r) => r.live_status === from).map((r) => r.payout_id);
+      await runBulk(status === "skipped" ? "Skip" : "Unskip", ids, async (id) => {
+        const res = await fetch(`/api/rebates/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status }),
+        });
+        if (res.ok) return { ok: true };
+        const d = (await res.json().catch(() => null)) as { error?: string } | null;
+        return { ok: false, error: d?.error ?? `Request failed (${res.status})` };
+      });
+      await loadRebatePayouts();
+    },
+    [selectedRebates, runBulk, loadRebatePayouts],
+  );
 
   // Single-letter shortcuts, live while saved rows are selected and no editor
   // is open. Capture phase, so the grid's type-to-edit never sees these keys.
@@ -1684,7 +2129,9 @@ export default function TransactionsPage() {
       "withdrawal",
       "freecredit",
       "transfer",
-      ...(isAdmin ? (["expense"] as TabKey[]) : []),
+      "leaderwithdrawal",
+      "rebate",
+      ...(isAdmin ? (["leadertransfer", "expense"] as TabKey[]) : []),
     ];
     const onKey = (e: KeyboardEvent) => {
       const mod = IS_MAC ? e.metaKey : e.ctrlKey;
@@ -1711,6 +2158,9 @@ export default function TransactionsPage() {
     withdrawal: "/api/withdrawals",
     freecredit: "/api/free-credits",
     transfer: "/api/game-transfers",
+    leaderwithdrawal: "/api/bank-accounts/cash-outs",
+    rebate: "/api/rebates/payouts", // never posted to — the sheet is read-only
+    leadertransfer: "/api/leader-transfers",
     expense: "/api/expenses",
   };
 
@@ -1746,13 +2196,16 @@ export default function TransactionsPage() {
     setDraftsByTab((prev) => ({ ...prev, [tab]: padDrafts(remaining, tab) }));
     setCommitErrors(failures);
     setSaving(false);
-    await Promise.all([refresh(), loadFreeCredits()]);
+    await Promise.all([refresh(), loadLedgers()]);
     const failed = jobs.length - succeeded.size;
     const noun = {
       deposit: "deposit",
       withdrawal: "withdrawal",
       freecredit: "free credit",
       transfer: "transfer",
+      leaderwithdrawal: "cash withdrawal",
+      rebate: "rebate",
+      leadertransfer: "leader transfer",
       expense: "expense",
     }[tab];
     if (failed) {
@@ -1763,7 +2216,7 @@ export default function TransactionsPage() {
       toast.success(`${succeeded.size} ${noun}${succeeded.size === 1 ? "" : "s"} saved`);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [saving, isViewer, drafts, parseDraft, tab, commitErrors, draftKey, refresh, loadFreeCredits]);
+  }, [saving, isViewer, drafts, parseDraft, tab, commitErrors, draftKey, refresh, loadLedgers]);
 
   // Cmd/Ctrl+S saves the ready entry rows from anywhere on the page — and
   // preventDefault stops the browser's own "save this page" dialog.
@@ -1790,14 +2243,23 @@ export default function TransactionsPage() {
     for (const t of gameTransfers) set.add(t.created_at.slice(0, 7));
     for (const f of freeCredits) set.add(f.created_at.slice(0, 7));
     for (const e of expenses) set.add(e.expense_date.slice(0, 7));
+    for (const c of cashOuts) set.add(c.occurred_at.slice(0, 7));
+    for (const r of rebatePayouts) set.add(r.window_end.slice(0, 7));
+    for (const t of leaderTransfers) set.add(t.created_at.slice(0, 7));
     return [...set].sort().reverse();
-  }, [deposits, withdrawals, gameTransfers, freeCredits, expenses, currentMonth]);
+  }, [deposits, withdrawals, gameTransfers, freeCredits, expenses, cashOuts, rebatePayouts, leaderTransfers, currentMonth]);
 
   const statusOptionsByTab: Record<TabKey, [string, string][]> = {
     deposit: Object.entries(DEPOSIT_STATUS_LABEL),
     withdrawal: Object.entries(WITHDRAWAL_STATUS_LABEL),
     freecredit: [],
     transfer: Object.entries(TRANSFER_STATUS_LABEL),
+    leaderwithdrawal: [
+      ["debited", "Debited"],
+      ["reversed", "Reversed"],
+    ],
+    rebate: Object.entries(REBATE_STATUS_LABEL),
+    leadertransfer: [],
     expense: [],
   };
   const statusOptions = statusOptionsByTab[tab];
@@ -1856,6 +2318,80 @@ export default function TransactionsPage() {
           runBulk("Reject", list.map((w) => w.withdrawal_id), rejectWithdrawal),
       };
     }
+    if (confirming.kind === "reverse-cashout") {
+      const list = confirming.ids
+        .map((id) => cashOutById.get(id))
+        .filter((c): c is BankCashOut => !!c);
+      return {
+        title: `Reverse ${list.length} cash withdrawal${list.length === 1 ? "" : "s"}?`,
+        description: "The amounts go back on their bank accounts. The rows stay, marked reversed.",
+        confirmLabel: "Reverse",
+        summary: [
+          { label: "Withdrawals", value: String(list.length) },
+          {
+            label: "Total amount",
+            value: fmtAmount(list.reduce((a, c) => a + c.amount, 0)),
+            emphasis: true,
+          },
+        ] as SummaryRow[],
+        items: list.map((c) => {
+          const a = accountById.get(c.account_id);
+          return {
+            key: c.cash_out_id,
+            label: c.taken_by,
+            meta: a ? `${a.bank_name} ${a.account_number}` : `#${c.account_id}`,
+            value: fmtAmount(c.amount),
+          };
+        }),
+        run: async () => {
+          await runBulk("Reverse", list.map((c) => c.cash_out_id), reverseBankCashOut);
+          await loadCashOuts();
+        },
+      };
+    }
+    if (confirming.kind === "pay-rebate" || confirming.kind === "pay-rebate-manual") {
+      const byHand = confirming.kind === "pay-rebate-manual";
+      const list = confirming.ids
+        .map((id) => rebateById.get(id))
+        .filter((r): r is RebatePayoutLedgerRow => !!r);
+      return {
+        title: `Pay ${list.length} rebate${list.length === 1 ? "" : "s"}?`,
+        description: byHand
+          ? "Booked as already credited in the back-office — the agent does nothing."
+          : "Each rebate is queued as a free credit for the agent to put into the player's game.",
+        confirmLabel: byHand ? "Book as credited" : "Queue for the agent",
+        summary: [
+          { label: "Rebates", value: String(list.length) },
+          {
+            label: "Total amount",
+            value: fmtAmount(list.reduce((a, r) => a + r.amount, 0)),
+            emphasis: true,
+          },
+        ] as SummaryRow[],
+        items: list.map((r) => ({
+          key: r.payout_id,
+          label: r.username,
+          meta: `${r.plan_name} · ${r.game_name ?? "no game"}`,
+          value: fmtAmount(r.amount),
+        })),
+        run: async () => {
+          await runBulk("Pay", list.map((r) => r.payout_id), async (id) => {
+            const res = await fetch("/api/rebates/pay", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ payouts: [{ payout_id: id }], skip_bot: byHand }),
+            });
+            const d = (await res.json().catch(() => null)) as
+              | { paid?: number; failed?: Array<{ error: string }>; error?: string }
+              | null;
+            if (!res.ok) return { ok: false, error: d?.error ?? `Request failed (${res.status})` };
+            if (d?.failed?.length) return { ok: false, error: d.failed[0].error };
+            return { ok: true };
+          });
+          await loadRebatePayouts();
+        },
+      };
+    }
     const list = confirming.ids
       .map((id) => expenseById.get(id))
       .filter((e): e is Expense => !!e);
@@ -1881,7 +2417,9 @@ export default function TransactionsPage() {
     };
   }, [
     confirming, depositById, withdrawalById, expenseById, playerById,
-    runBulk, rejectDeposit, rejectWithdrawal, deleteExpense,
+    cashOutById, rebateById, accountById,
+    runBulk, rejectDeposit, rejectWithdrawal, deleteExpense, reverseBankCashOut,
+    loadCashOuts, loadRebatePayouts,
   ]);
 
   // ---- Crawl banks (deposit tab): ask the agent to re-read the banks now ----
@@ -1927,8 +2465,16 @@ export default function TransactionsPage() {
     { key: "withdrawal", label: "Withdrawal" },
     { key: "freecredit", label: "Free Credit" },
     { key: "transfer", label: "Game Transfer" },
-    // Expenses are super-admin only — same rule as the Expenses page itself.
-    ...(isAdmin ? [{ key: "expense" as const, label: "Expenses" }] : []),
+    { key: "leaderwithdrawal", label: "Leader Withdrawal" },
+    { key: "rebate", label: "Rebate" },
+    // Leader settlements and expenses are super-admin only — same rule as
+    // their own pages.
+    ...(isAdmin
+      ? [
+          { key: "leadertransfer" as const, label: "Leader Transfer" },
+          { key: "expense" as const, label: "Expenses" },
+        ]
+      : []),
   ];
 
   return (
@@ -2035,7 +2581,7 @@ export default function TransactionsPage() {
             className="h-8 cursor-pointer gap-1.5"
             onClick={async () => {
               setRefreshing(true);
-              await Promise.all([refresh(), loadFreeCredits()]);
+              await Promise.all([refresh(), loadLedgers()]);
               setRefreshing(false);
             }}
           >
@@ -2070,7 +2616,7 @@ export default function TransactionsPage() {
         onDraftsChange={onDraftsChange}
         draftStatus={draftStatus}
         onCommit={handleCommit}
-        readOnly={isViewer}
+        readOnly={isViewer || tab === "rebate"}
         committedEditable={committedEditable}
         onCommittedEdit={onCommittedEdit}
         onSelectedRowsChange={setSelectedIds}
@@ -2244,6 +2790,70 @@ export default function TransactionsPage() {
                 <Trash2 className="h-3 w-3" />
                 Delete
                 <Kbd k={`${MOD_LABEL}D`} />
+              </Button>
+            )}
+            {can.revCash && (
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={acting}
+                onClick={handleReverseCashOuts}
+                title="Put the amount back on the bank account"
+                className="cursor-pointer gap-1 border-red-300 text-red-700 hover:bg-red-50 dark:text-red-300"
+              >
+                <Undo2 className="h-3 w-3" />
+                Reverse
+              </Button>
+            )}
+            {can.payReb && (
+              <>
+                <Button
+                  size="xs"
+                  disabled={acting}
+                  onClick={() => handlePayRebates(false)}
+                  title="Queue a free credit for the agent"
+                  className="cursor-pointer gap-1"
+                >
+                  <Play className="h-3 w-3" />
+                  Pay
+                </Button>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={acting}
+                  onClick={() => handlePayRebates(true)}
+                  title="CS already credited the game by hand — book it"
+                  className="cursor-pointer gap-1"
+                >
+                  <HandCoins className="h-3 w-3" />
+                  Paid by hand
+                </Button>
+              </>
+            )}
+            {can.skipReb && (
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={acting}
+                onClick={() => void setRebateStatus("skipped")}
+                title="Leave these out of the payout"
+                className="cursor-pointer gap-1"
+              >
+                <Ban className="h-3 w-3" />
+                Skip
+              </Button>
+            )}
+            {can.unskipReb && (
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={acting}
+                onClick={() => void setRebateStatus("pending")}
+                title="Put these back on the payout list"
+                className="cursor-pointer gap-1"
+              >
+                <RotateCcw className="h-3 w-3" />
+                Unskip
               </Button>
             )}
           </div>

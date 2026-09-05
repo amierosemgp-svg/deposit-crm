@@ -32,7 +32,8 @@ export default function LoginPage() {
         setLoading(false);
         return;
       }
-      router.push("/hierarchy");
+      // The workbook is where the day starts.
+      router.push("/transactions");
       router.refresh();
     } catch {
       setError("Network error — please try again");

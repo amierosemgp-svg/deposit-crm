@@ -31,7 +31,7 @@ export async function proxy(request: NextRequest) {
   // Page routes
   if (pathname === "/login") {
     if (session) {
-      return NextResponse.redirect(new URL("/dashboard", request.url));
+      return NextResponse.redirect(new URL("/transactions", request.url));
     }
     return NextResponse.next();
   }
