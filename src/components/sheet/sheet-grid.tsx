@@ -60,13 +60,6 @@ export type SheetColumn = {
   /** Autocomplete suggestions offered while editing (typeahead dropdown). */
   options?: Array<string | SheetSuggestion>;
   /**
-   * Don't spring the dropdown open just because the cell is focused — wait for
-   * the user to start typing. For columns with a huge option list (member
-   * codes), an on-focus dropdown of everything is noise; typing to filter is
-   * what people actually want.
-   */
-  noAutoOpen?: boolean;
-  /**
    * Always present this column as a dropdown cell (chevron, Enter opens the
    * list) even when its suggestions arrive lazily — e.g. bonus plans fetched
    * per player once the edit starts. Columns with static `options` are
@@ -985,41 +978,14 @@ export function SheetGrid({
   }, [readOnly, nCols, isDropdownCell, visibleRows.length, hiddenAbove, drafts.length, draftStart]);
 
   /**
-   * Auto-open the editor when the selection lands on an EMPTY cell that offers
-   * suggestions — the dropdown appears on focus, no extra key or click. Only
-   * empty cells: a filled cell keeps Excel's type-to-replace behavior. Each
-   * cell auto-opens once per visit, so Esc actually closes it (and arrows then
-   * navigate) instead of it springing straight back.
-   */
-  const lastAutoEditRef = useRef("");
-  useEffect(() => {
-    if (readOnly || editing || !sel) return;
-    const key = `${sel.r}-${sel.c}`;
-    if (lastAutoEditRef.current === key) return;
-    lastAutoEditRef.current = key;
-    const isDraft = sel.r >= draftStart;
-    if (!isDraft && !committedEditable?.(sel.r, sel.c)) return;
-    if (isDraft && !columns[sel.c]?.entry) return;
-    if (columns[sel.c]?.noAutoOpen) return; // opens on typing, not on focus
-    if (cellValue(sel.r, sel.c)) return;
-    if (!suggestionsAt(sel.r, sel.c)?.length) return;
-    // Subscription-style reaction to the selection landing; guarded above.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    startEdit(sel.r, sel.c, "");
-  }, [
-    sel, editing, readOnly, draftStart, columns,
-    committedEditable, cellValue, suggestionsAt, startEdit,
-  ]);
-
-  /**
    * Open a cell's list the Excel way (Enter, Alt+↓, or the chevron): select
    * it, then edit in browse mode — whole list, current value highlighted.
+   * Landing on a cell never opens the list by itself — like Excel, the list
+   * waits for the user to ask for it, so arrowing across a row stays quiet.
    */
   const pendingOpenRef = useRef<CellPos | null>(null);
   const openDropdown = useCallback(
     (r: number, c: number) => {
-      // Count as this cell's one auto-open, so Esc closes it for good.
-      lastAutoEditRef.current = `${r}-${c}`;
       if (editing) {
         if (editing.r === r && editing.c === c) return;
         // Another cell is mid-edit: commit it, and only start the new session
@@ -1273,8 +1239,7 @@ export function SheetGrid({
   );
 
   // Tab switch / first load: focus the SAVED LIST (its last, newest row), not
-  // the entry cell — landing on an empty entry cell would pop its dropdown open
-  // on every load. Keyboard is live for arrows/actions; typing starts once the
+  // the entry cell. Keyboard is live for arrows/actions; typing starts once the
   // user clicks into an entry cell. Falls back to the entry area only when
   // there are no saved rows to select.
   useEffect(() => {
