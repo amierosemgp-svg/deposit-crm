@@ -65,6 +65,11 @@ weekly weekday + time, monthly day + time, business time), edited on the page
 by the super admin. An existing database needs
 `migrations/2026-09-05-rebate-payouts.sql`.
 
+**Bank cash-outs**: a leader taking cash out of a company bank account is
+recorded from the Bank Accounts page (any write user in that company). It
+debits the account on the spot; leaders/admins can reverse one. An existing
+database needs `migrations/2026-09-05b-bank-cash-outs.sql`.
+
 ## Crawl banks (on-demand agent commands)
 
 The agent sweeps the banks on its own cycle. When that is too slow — a player

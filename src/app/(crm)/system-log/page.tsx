@@ -98,6 +98,7 @@ const CATEGORY_GROUPS: { label: string; source: LogSource; values: string[] }[] 
       "player_import",
       "recommend_bonus",
       "leader_transfer",
+      "bank_cash_out",
     ],
   },
   {

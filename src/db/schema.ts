@@ -195,6 +195,8 @@ export const auditTypeEnum = pgEnum("audit_type", [
   // A settlement moving funds from one leader to another. Deliberately its own
   // type — not an expense — so leader-to-leader movement reports on its own.
   "leader_transfer",
+  // Cash a leader took out of a company bank account by hand.
+  "bank_cash_out",
 ]);
 
 // ---------- Core hierarchy ----------
@@ -501,6 +503,32 @@ export const bankTransfers = pgTable("bank_transfers", {
   created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
     .notNull()
     .defaultNow(),
+});
+
+/**
+ * Cash a leader took out of a company bank account at the bank — the one way
+ * money leaves an account that no transfer or withdrawal captures. Recording
+ * it debits the account; reversing puts the amount back and keeps the row.
+ */
+export const bankCashOuts = pgTable("bank_cash_outs", {
+  cash_out_id: serial("cash_out_id").primaryKey(),
+  account_id: integer("account_id")
+    .notNull()
+    .references(() => bankAccounts.account_id),
+  entity_id: integer("entity_id")
+    .notNull()
+    .references(() => entities.entity_id),
+  amount: numeric("amount", { precision: 14, scale: 2, mode: "number" }).notNull(),
+  taken_by_entity_id: integer("taken_by_entity_id").references(() => entities.entity_id),
+  taken_by: varchar("taken_by", { length: 120 }).notNull(),
+  occurred_at: timestamp("occurred_at", { withTimezone: true, mode: "string" }).notNull(),
+  notes: text("notes"),
+  recorded_by_user_id: integer("recorded_by_user_id").references(() => users.user_id),
+  created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .notNull()
+    .defaultNow(),
+  reversed_at: timestamp("reversed_at", { withTimezone: true, mode: "string" }),
+  reversed_by_user_id: integer("reversed_by_user_id").references(() => users.user_id),
 });
 
 /**

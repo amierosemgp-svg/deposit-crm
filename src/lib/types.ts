@@ -423,6 +423,22 @@ export type BankAccount = {
   created_at: string;
 };
 
+/** Cash a leader took out of a company bank account, as recorded by CS. */
+export type BankCashOut = {
+  cash_out_id: number;
+  account_id: number;
+  entity_id: number;
+  amount: number;
+  taken_by_entity_id: number | null;
+  taken_by: string;
+  occurred_at: string;
+  notes?: string | null;
+  recorded_by_user_id: number | null;
+  created_at: string;
+  reversed_at?: string | null;
+  reversed_by_user_id?: number | null;
+};
+
 export type BankTransferStatus =
   | "pending_confirmation"
   | "confirmed"
@@ -485,7 +501,8 @@ export type AuditEntry = {
     | "bo_adjustment"
     | "player_import"
     | "recommend_bonus"
-    | "leader_transfer";
+    | "leader_transfer"
+    | "bank_cash_out";
   amount: number;
   game_name?: string | null;
   reference_id?: number | null;

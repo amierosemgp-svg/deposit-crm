@@ -314,6 +314,17 @@ type Store = {
   }) => Promise<MutationResult>;
   confirmBankTransfer: (transferId: number) => Promise<MutationResult>;
   rejectBankTransfer: (transferId: number) => Promise<MutationResult>;
+  /** Record cash a leader took out of a company account; debits the account. */
+  recordBankCashOut: (input: {
+    accountId: number;
+    amount: number;
+    takenByEntityId?: number | null;
+    takenBy?: string;
+    occurredAt?: string;
+    notes?: string;
+  }) => Promise<MutationResult>;
+  /** Undo a cash-out (leaders/admins): the amount goes back on the account. */
+  reverseBankCashOut: (cashOutId: number) => Promise<MutationResult>;
   addBoAccount: (input: {
     company_entity_id: number;
     game_name: string;
@@ -945,6 +956,28 @@ export const useStore = create<Store>((set, get) => {
     deleteBankAccount: (accountId) =>
       mutate(`/api/bank-accounts/${accountId}`, { method: "DELETE" }),
 
+    recordBankCashOut: ({ accountId, amount, takenByEntityId, takenBy, occurredAt, notes }) =>
+      mutate(
+        "/api/bank-accounts/cash-outs",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            account_id: accountId,
+            amount,
+            taken_by_entity_id: takenByEntityId ?? null,
+            taken_by: takenBy,
+            occurred_at: occurredAt,
+            notes,
+          }),
+        },
+        { kind: "transfer", message: `Cash-out of RM ${amount.toFixed(2)} recorded` },
+      ),
+    reverseBankCashOut: (cashOutId) =>
+      mutate(
+        `/api/bank-accounts/cash-outs/${cashOutId}/reverse`,
+        { method: "POST" },
+        { kind: "transfer", message: "Cash-out reversed — amount back on the account" },
+      ),
     createBankTransfer: ({
       fromAccountId,
       toAccountId,

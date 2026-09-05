@@ -26,6 +26,7 @@ const AUDIT_TYPES = [
   "player_import",
   "recommend_bonus",
   "leader_transfer",
+  "bank_cash_out",
 ] as const;
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
