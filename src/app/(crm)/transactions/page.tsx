@@ -93,7 +93,7 @@ const COLUMN_KEYS = {
     "status", "date", "time",
   ],
   transfer: [
-    "assign", "member", "from", "username", "to", "amount",
+    "assign", "member", "from", "username", "to", "to_username", "amount",
     "status", "date", "time", "note",
   ],
   expense: ["by", "date", "category", "description", "amount", "company", "notes"],
@@ -114,13 +114,20 @@ function toCells<T extends TabKey>(tab: T, rec: Partial<Record<ColKey<T>, string
   return (COLUMN_KEYS[tab] as readonly ColKey<T>[]).map((k) => rec[k] ?? "");
 }
 
-/** Per tab, which entry cell holds the game login and which holds its game. */
-const LOGIN_COLS: Record<TabKey, { userCol: number; gameCol: number } | null> = {
-  deposit: { userCol: COL.deposit.username, gameCol: COL.deposit.product },
-  withdrawal: { userCol: COL.withdrawal.username, gameCol: COL.withdrawal.product },
-  freecredit: { userCol: COL.freecredit.username, gameCol: COL.freecredit.product },
-  transfer: { userCol: COL.transfer.username, gameCol: COL.transfer.from },
-  expense: null,
+/**
+ * Per tab, each (login cell, game cell) pair — the login is one of the
+ * player's accounts under that game. A transfer has two: the account the
+ * money leaves and the one it lands in.
+ */
+const LOGIN_PAIRS: Record<TabKey, Array<{ userCol: number; gameCol: number }>> = {
+  deposit: [{ userCol: COL.deposit.username, gameCol: COL.deposit.product }],
+  withdrawal: [{ userCol: COL.withdrawal.username, gameCol: COL.withdrawal.product }],
+  freecredit: [{ userCol: COL.freecredit.username, gameCol: COL.freecredit.product }],
+  transfer: [
+    { userCol: COL.transfer.username, gameCol: COL.transfer.from },
+    { userCol: COL.transfer.to_username, gameCol: COL.transfer.to },
+  ],
+  expense: [],
 };
 
 /** One Free Credit ledger row, as GET /api/free-credits returns it. */
@@ -566,8 +573,9 @@ export default function TransactionsPage() {
         assign,
         member,
         from: { label: "From Game", width: 110, entry: true, required: true, options: games, placeholder: "from game" },
-        username,
+        username: { label: "From Username", width: 130, entry: true, placeholder: "from login" },
         to: { label: "To Game", width: 110, entry: true, required: true, options: games, placeholder: "to game" },
+        to_username: { label: "To Username", width: 130, entry: true, placeholder: "to login" },
         amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "100 / ALL" },
         status,
         date,
@@ -654,10 +662,24 @@ export default function TransactionsPage() {
       return next.map((row, i) => {
         const member = row[memberCol]?.trim().toLowerCase() ?? "";
         const prevMember = prev[i]?.[memberCol]?.trim().toLowerCase() ?? "";
-        if (!member || member === prevMember) return row;
-        const pl = playerByCode.get(member);
+        const pl = member ? playerByCode.get(member) : undefined;
         if (!pl) return row;
         const out = [...row];
+        // A game cell that just changed pulls in the player's login for that
+        // game, if its login cell is still blank — the same fill-only-empty
+        // rule as the member auto-fill below, so a typed login always wins.
+        let touched = false;
+        for (const pair of LOGIN_PAIRS[tab]) {
+          const game = out[pair.gameCol]?.trim().toLowerCase() ?? "";
+          const prevGame = prev[i]?.[pair.gameCol]?.trim().toLowerCase() ?? "";
+          if (!game || game === prevGame || out[pair.userCol]?.trim()) continue;
+          const acct = (pl.game_accounts ?? []).find((a) => a.game_name.toLowerCase() === game);
+          if (acct) {
+            out[pair.userCol] = acct.game_username;
+            touched = true;
+          }
+        }
+        if (member === prevMember) return touched ? out : row;
         const fill = (idx: number, val: string | undefined | null) => {
           if (val && !out[idx]?.trim()) out[idx] = val;
         };
@@ -865,8 +887,9 @@ export default function TransactionsPage() {
             assign: assignCell(t.assigned_to_user_id),
             member: p?.username ?? "",
             from: t.from_game,
-            username: gameUsername(p, t.from_game),
+            username: t.from_game_username ?? gameUsername(p, t.from_game),
             to: t.to_game,
+            to_username: t.to_game_username ?? gameUsername(p, t.to_game),
             amount: t.transfer_all && !t.transfer_amount ? "ALL" : fmtAmount(t.transfer_amount),
             status: TRANSFER_STATUS_LABEL[t.status],
             date: sheetDate(t.created_at),
@@ -1013,13 +1036,13 @@ export default function TransactionsPage() {
       const d = drafts[draftIndex];
       // Login picker: the player's linked logins for the row's game, so CS can
       // choose which account under that game the transaction hits.
-      const loginCfg = LOGIN_COLS[tab];
+      const loginCfg = LOGIN_PAIRS[tab].find((pair) => pair.userCol === colIndex);
       const memberCol = (COL[tab] as Record<string, number | undefined>).member;
       const memberOf = (row: string[] | undefined) =>
         row && memberCol !== undefined
           ? playerByCode.get(row[memberCol]?.trim().toLowerCase() ?? "")
           : undefined;
-      if (loginCfg && colIndex === loginCfg.userCol) {
+      if (loginCfg) {
         const pl = memberOf(d);
         const gameCell = d?.[loginCfg.gameCol]?.trim().toLowerCase() ?? "";
         if (!pl || !gameCell) return undefined;
@@ -1190,6 +1213,7 @@ export default function TransactionsPage() {
       const username = d[c.username] ?? "";
       const from = d[c.from] ?? "";
       const to = d[c.to] ?? "";
+      const toUsername = d[c.to_username] ?? "";
       const amount = d[c.amount] ?? "";
       const assign = parseAssign(d[c.assign] ?? "");
       if (assign === null)
@@ -1212,6 +1236,7 @@ export default function TransactionsPage() {
           from_game: fromGame,
           to_game: toGame,
           ...(username.trim() ? { from_game_username: username.trim() } : {}),
+          ...(toUsername.trim() ? { to_game_username: toUsername.trim() } : {}),
           ...(all ? { transfer_all: true } : { amount: amt }),
           ...(assign ? { assign_to_me: true } : {}),
         },
