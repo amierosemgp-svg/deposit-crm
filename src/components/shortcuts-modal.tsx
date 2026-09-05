@@ -28,7 +28,7 @@ const GROUPS: Group[] = [
     items: [
       { keys: ["↑", "↓", "←", "→"], label: "Move one cell" },
       { keys: ["Tab"], label: "Next cell · Shift+Tab back" },
-      { keys: ["Enter"], label: "Down a row · after a Tab run, back to its first column" },
+      { keys: ["Enter"], label: "Down a row · after a Tab run, back to its first column · on a ▾ cell, opens its list" },
       { keys: ["Shift", "↑↓←→"], label: "Extend the selection" },
       { keys: ["Home"], label: "First column · Shift+Home extends" },
       { keys: ["End"], label: "Last column · Shift+End extends" },
@@ -53,6 +53,7 @@ const GROUPS: Group[] = [
     title: "Suggestion dropdown",
     hint: "Member, product, bank, bonus…",
     items: [
+      { keys: ["Enter"], label: "Open the list on a ▾ cell · Alt+↓ too, and while editing" },
       { keys: ["↑", "↓"], label: "Move through the suggestions" },
       { keys: ["Enter"], label: "Accept — stays on the cell" },
       { keys: ["Tab"], label: "Accept & move to the next cell" },

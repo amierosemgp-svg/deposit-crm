@@ -11,6 +11,7 @@
  *   arrows / Tab / Enter    move the selected cell (Shift reverses)
  *   Shift+arrows            grow the selection
  *   type / F2 / double-click edit a draft cell (typing replaces, F2 appends)
+ *   Enter / Alt+↓           on a dropdown cell, open its list (Excel's Alt+↓)
  *   Esc                     cancel the edit
  *   Ctrl/Cmd+C / V          copy any range · paste a TSV block into the drafts
  *   Delete / Backspace      clear the selected draft cells
@@ -30,6 +31,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -64,6 +66,13 @@ export type SheetColumn = {
    * what people actually want.
    */
   noAutoOpen?: boolean;
+  /**
+   * Always present this column as a dropdown cell (chevron, Enter opens the
+   * list) even when its suggestions arrive lazily — e.g. bonus plans fetched
+   * per player once the edit starts. Columns with static `options` are
+   * dropdown cells automatically.
+   */
+  dropdown?: boolean;
   /**
    * Ghost hint shown in this cell while empty — but only on the first entry row
    * that's still blank, so it reads as a template for the next row to fill,
@@ -109,6 +118,11 @@ type Editing = CellPos & {
   value: string;
   /** Started by typing — arrows commit-and-move instead of moving the caret. */
   replace: boolean;
+  /**
+   * Opened as a dropdown (Enter / Alt+↓ / chevron click): the full list shows
+   * with the current value highlighted, and typing starts filtering.
+   */
+  browse: boolean;
 };
 
 function colLetter(index: number): string {
@@ -154,9 +168,11 @@ const GridRow = memo(function GridRow({
   sel,
   editing,
   editorProps,
+  dropdownCols,
   onCellMouseDown,
   onCellMouseEnter,
   onCellDoubleClick,
+  onDropdownOpen,
 }: {
   rIdx: number;
   gutter: string;
@@ -173,10 +189,21 @@ const GridRow = memo(function GridRow({
   /** Column being edited in this row, or -1. */
   editing: number;
   editorProps: EditorProps | null;
+  /**
+   * Columns of this row that behave as dropdown cells (editable + a list to
+   * pick from), as a comma-joined string so memo() compares it by value.
+   */
+  dropdownCols: string;
   onCellMouseDown: (r: number, c: number, shift: boolean) => void;
   onCellMouseEnter: (r: number, c: number) => void;
   onCellDoubleClick: (r: number, c: number) => void;
+  /** The chevron was clicked: select the cell and open its list. */
+  onDropdownOpen: (r: number, c: number) => void;
 }) {
+  const dropdownSet = useMemo(
+    () => new Set(dropdownCols ? dropdownCols.split(",").map(Number) : []),
+    [dropdownCols],
+  );
   return (
     <tr
       className={cn(
@@ -198,6 +225,7 @@ const GridRow = memo(function GridRow({
         const selected = sel !== null && c >= sel.c1 && c <= sel.c2;
         const isAnchor = sel !== null && c === sel.anchorC;
         const isEditing = editing === c;
+        const isDropdown = dropdownSet.has(c);
         return (
           <td
             key={col.key}
@@ -214,6 +242,8 @@ const GridRow = memo(function GridRow({
               col.align === "center" && "text-center",
               tone !== "default" && TONE_TEXT[tone],
               isDraft && !col.entry && "italic text-muted-foreground",
+              // Room for the chevron, so the value never runs underneath it.
+              isDropdown && "pr-5",
               selected && "bg-emerald-600/10 dark:bg-emerald-400/10",
               isAnchor &&
                 "outline outline-2 -outline-offset-1 outline-emerald-600 dark:outline-emerald-400",
@@ -227,6 +257,31 @@ const GridRow = memo(function GridRow({
               <span className="italic text-muted-foreground/45">{col.placeholder}</span>
             ) : (
               ""
+            )}
+            {isDropdown && !isEditing && (
+              // Excel's data-validation arrow: a faint hint on every list
+              // cell, and a proper button on the active one. mousedown (not
+              // click) so it wins over the cell's own select-on-mousedown.
+              <button
+                type="button"
+                tabIndex={-1}
+                aria-label="Open list"
+                onMouseDown={(e) => {
+                  if (e.button !== 0) return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onDropdownOpen(rIdx, c);
+                }}
+                onDoubleClick={(e) => e.stopPropagation()}
+                className={cn(
+                  "absolute inset-y-0 right-0 flex w-4 cursor-pointer items-center justify-center",
+                  isAnchor
+                    ? "border-l border-border bg-muted text-foreground hover:bg-emerald-600/20 dark:hover:bg-emerald-400/20"
+                    : "text-muted-foreground/40 hover:text-foreground",
+                )}
+              >
+                <ChevronDown className="size-3" strokeWidth={isAnchor ? 2.25 : 2} />
+              </button>
             )}
           </td>
         );
@@ -243,6 +298,8 @@ type EditorProps = {
   align?: "left" | "right" | "center";
   /** Typeahead entries for this column; empty/absent = plain text editing. */
   suggestions?: SheetSuggestion[];
+  /** Opened as a dropdown: show the whole list, current value highlighted. */
+  browse: boolean;
   onChange: (v: string) => void;
   onKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => void;
   onBlur: () => void;
@@ -250,8 +307,14 @@ type EditorProps = {
   onPick: (value: string, move: "down" | "right" | "left" | "up" | "none") => void;
 };
 
-/** How many suggestions the dropdown shows at once. */
+/** How many suggestions the typeahead shows while filtering. */
 const MAX_SUGGESTIONS = 8;
+/**
+ * How many the list shows when opened as a dropdown (Enter / Alt+↓ / chevron)
+ * before any typing — it scrolls, like Excel's validation list, but a
+ * thousand member codes is still a wall, so it's capped and typing filters.
+ */
+const MAX_BROWSE = 100;
 
 /**
  * The in-cell editor, with an Excel-style typeahead: matching suggestions drop
@@ -266,25 +329,37 @@ function CellEditor({
   value,
   align,
   suggestions,
+  browse,
   onChange,
   onKeyDown,
   onBlur,
   onPick,
 }: EditorProps) {
   const ref = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(true);
   const [highlight, setHighlight] = useState(-1);
   const [rect, setRect] = useState<DOMRect | null>(null);
+  // Browse mode ignores the cell's current value as a filter until the user
+  // actually types — the point of opening the list is to see all of it.
+  const [browsing, setBrowsing] = useState(browse);
 
   useEffect(() => {
     ref.current?.focus();
-    // Caret at the end, matching Excel's edit-in-place feel.
-    ref.current?.setSelectionRange(value.length, value.length);
+    if (browse) {
+      // Excel's dropdown: the value is shown selected, so typing replaces it
+      // and starts filtering from scratch.
+      ref.current?.setSelectionRange(0, value.length);
+    } else {
+      // Caret at the end, matching Excel's edit-in-place feel.
+      ref.current?.setSelectionRange(value.length, value.length);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const matches = useMemo(() => {
     if (!suggestions?.length) return [];
+    if (browsing) return suggestions.slice(0, MAX_BROWSE);
     const q = value.trim().toLowerCase();
     const starts: SheetSuggestion[] = [];
     const contains: SheetSuggestion[] = [];
@@ -306,7 +381,7 @@ function CellEditor({
       if (starts.length >= MAX_SUGGESTIONS) break;
     }
     return [...starts, ...contains].slice(0, MAX_SUGGESTIONS);
-  }, [suggestions, value]);
+  }, [suggestions, value, browsing]);
 
   /** Walk the highlight up/down, skipping rows that can't be picked. */
   const stepHighlight = (dir: 1 | -1) =>
@@ -319,6 +394,27 @@ function CellEditor({
       }
       return h;
     });
+
+  // Opened as a dropdown: land the highlight on the cell's current value (or
+  // the first pickable row), so Enter straight away re-confirms it and ↑/↓
+  // step from where the cell already is — the way Excel's list opens.
+  const seededRef = useRef(false);
+  useEffect(() => {
+    if (!browsing || seededRef.current || !matches.length) return;
+    seededRef.current = true;
+    const cur = value.trim().toLowerCase();
+    let i = cur ? matches.findIndex((m) => !m.disabled && m.value.toLowerCase() === cur) : -1;
+    if (i < 0) i = matches.findIndex((m) => !m.disabled);
+    // Subscription-style: reacts to the (possibly lazy) list arriving.
+    setHighlight(i);
+  }, [browsing, matches, value]);
+
+  // Keep the highlighted row in view as ↑/↓ walk past the list's edge.
+  useEffect(() => {
+    if (highlight < 0) return;
+    const el = listRef.current?.querySelector<HTMLElement>(`[data-idx="${highlight}"]`);
+    el?.scrollIntoView({ block: "nearest" });
+  }, [highlight]);
 
   // Anchor the portal to the input; re-measure as typing changes the matches.
   useLayoutEffect(() => {
@@ -333,6 +429,15 @@ function CellEditor({
   const openUp = rect ? rect.bottom + listMaxH + 4 > window.innerHeight : false;
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    // Alt+↓ — Excel's "open the list" key — brings the full list back after
+    // an Esc, or when typing filtered everything away.
+    if (e.altKey && e.key === "ArrowDown" && suggestions?.length) {
+      e.preventDefault();
+      seededRef.current = false;
+      setBrowsing(true);
+      setOpen(true);
+      return;
+    }
     if (showList) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -377,6 +482,7 @@ function CellEditor({
         value={value}
         onChange={(e) => {
           onChange(e.target.value);
+          setBrowsing(false);
           setOpen(true);
           setHighlight(-1);
         }}
@@ -384,10 +490,37 @@ function CellEditor({
         onBlur={onBlur}
         className={cn(
           "absolute inset-0 z-10 w-full border-2 border-emerald-600 bg-background px-1 text-[13px] outline-none dark:border-emerald-400",
+          !!suggestions?.length && "pr-5",
           align === "right" && "text-right",
           align === "center" && "text-center",
         )}
       />
+      {!!suggestions?.length && (
+        // The chevron stays while editing and toggles the list — mousedown
+        // is prevented so the input keeps focus and nothing commits.
+        <button
+          type="button"
+          tabIndex={-1}
+          aria-label={showList ? "Close list" : "Open list"}
+          onMouseDown={(e) => {
+            e.preventDefault();
+            if (showList) {
+              setOpen(false);
+              setHighlight(-1);
+            } else {
+              seededRef.current = false;
+              setBrowsing(true);
+              setOpen(true);
+            }
+          }}
+          className="absolute inset-y-0.5 right-0.5 z-20 flex w-4 cursor-pointer items-center justify-center bg-muted text-foreground hover:bg-emerald-600/20 dark:hover:bg-emerald-400/20"
+        >
+          <ChevronDown
+            className={cn("size-3 transition-transform", showList && "rotate-180")}
+            strokeWidth={2.25}
+          />
+        </button>
+      )}
       {showList &&
         rect &&
         createPortal(
@@ -409,6 +542,7 @@ function CellEditor({
                 ? { bottom: window.innerHeight - rect.top + 2 }
                 : { top: rect.bottom + 2 }),
             }}
+            ref={listRef}
             className="z-50 overflow-y-auto rounded-md border border-border bg-popover py-0.5 shadow-lg"
           >
             {matches.map((sg, i) =>
@@ -417,6 +551,7 @@ function CellEditor({
                 // figure on the right; disabled rows show their reason greyed.
                 <div
                   key={`${sg.title}-${i}`}
+                  data-idx={i}
                   onMouseDown={(e) => {
                     e.preventDefault();
                     if (!sg.disabled) onPick(sg.value, "none");
@@ -468,6 +603,7 @@ function CellEditor({
               ) : (
                 <div
                   key={sg.value}
+                  data-idx={i}
                   // mousedown, and prevented: a click must not blur the input
                   // first, or the half-typed value commits before the pick lands.
                   onMouseDown={(e) => {
@@ -723,7 +859,7 @@ export function SheetGrid({
   // ---- editing ----
 
   const startEdit = useCallback(
-    (r: number, c: number, seed?: string) => {
+    (r: number, c: number, seed?: string, browse = false) => {
       if (readOnly) return;
       if (r < draftStart && !committedEditable?.(r, c)) {
         flash(
@@ -738,6 +874,7 @@ export function SheetGrid({
         c,
         value: seed !== undefined ? seed : cellValue(r, c),
         replace: seed !== undefined,
+        browse,
       });
     },
     [readOnly, draftStart, cellValue, flash, committedEditable, onEditStart],
@@ -807,6 +944,46 @@ export function SheetGrid({
     [draftStart, draftSuggestions, committedSuggestions, columns],
   );
 
+  /** Can this cell be edited at all (an entry cell, or an editable saved one)? */
+  const isEditableCell = useCallback(
+    (r: number, c: number): boolean =>
+      !readOnly &&
+      (r >= draftStart ? !!columns[c]?.entry : !!committedEditable?.(r, c)),
+    [readOnly, draftStart, columns, committedEditable],
+  );
+
+  /**
+   * A dropdown cell: editable, and there's a list to pick from — static column
+   * options, a column flagged `dropdown` (its list loads lazily), or a dynamic
+   * per-cell list (a player's logins, their bonus plans).
+   */
+  const isDropdownCell = useCallback(
+    (r: number, c: number): boolean => {
+      if (!isEditableCell(r, c)) return false;
+      const col = columns[c];
+      if (col?.dropdown || col?.options?.length) return true;
+      return !!suggestionsAt(r, c)?.length;
+    },
+    [isEditableCell, columns, suggestionsAt],
+  );
+
+  /**
+   * Which columns of each rendered row are dropdown cells, as "0,6,7" strings
+   * so the memoised rows only re-render when a row's set actually changes.
+   */
+  const dropdownColsByRow = useMemo(() => {
+    const m = new Map<number, string>();
+    if (readOnly) return m;
+    const collect = (r: number) => {
+      const cols: number[] = [];
+      for (let c = 0; c < nCols; c++) if (isDropdownCell(r, c)) cols.push(c);
+      if (cols.length) m.set(r, cols.join(","));
+    };
+    for (let i = 0; i < visibleRows.length; i++) collect(hiddenAbove + i);
+    for (let i = 0; i < drafts.length; i++) collect(draftStart + i);
+    return m;
+  }, [readOnly, nCols, isDropdownCell, visibleRows.length, hiddenAbove, drafts.length, draftStart]);
+
   /**
    * Auto-open the editor when the selection lands on an EMPTY cell that offers
    * suggestions — the dropdown appears on focus, no extra key or click. Only
@@ -833,6 +1010,39 @@ export function SheetGrid({
     sel, editing, readOnly, draftStart, columns,
     committedEditable, cellValue, suggestionsAt, startEdit,
   ]);
+
+  /**
+   * Open a cell's list the Excel way (Enter, Alt+↓, or the chevron): select
+   * it, then edit in browse mode — whole list, current value highlighted.
+   */
+  const pendingOpenRef = useRef<CellPos | null>(null);
+  const openDropdown = useCallback(
+    (r: number, c: number) => {
+      // Count as this cell's one auto-open, so Esc closes it for good.
+      lastAutoEditRef.current = `${r}-${c}`;
+      if (editing) {
+        if (editing.r === r && editing.c === c) return;
+        // Another cell is mid-edit: commit it, and only start the new session
+        // once that editor has unmounted — its unmount blur fires with the
+        // old closure and would otherwise cancel the session opened here.
+        pendingOpenRef.current = { r, c };
+        commitEdit("none");
+        setSel({ r, c });
+        setExt(null);
+        return;
+      }
+      setSel({ r, c });
+      setExt(null);
+      startEdit(r, c, undefined, true);
+    },
+    [editing, commitEdit, startEdit],
+  );
+  useEffect(() => {
+    if (editing || !pendingOpenRef.current) return;
+    const { r, c } = pendingOpenRef.current;
+    pendingOpenRef.current = null;
+    startEdit(r, c, undefined, true);
+  }, [editing, startEdit]);
 
   // ---- clipboard ----
 
@@ -919,6 +1129,17 @@ export function SheetGrid({
           e.preventDefault();
           moveTo(draftStart, 0);
         }
+        return;
+      }
+
+      // On a dropdown cell, Enter (and Excel's Alt+↓) opens its list instead
+      // of moving down — ↓ / Tab still move on; Esc closes it.
+      if (
+        ((e.key === "Enter" && !e.shiftKey) || (e.key === "ArrowDown" && e.altKey)) &&
+        isDropdownCell(sel.r, sel.c)
+      ) {
+        e.preventDefault();
+        openDropdown(sel.r, sel.c);
         return;
       }
 
@@ -1014,6 +1235,7 @@ export function SheetGrid({
     [
       editing, sel, ext, bounds, nRows, nCols, draftStart, readOnly,
       moveTo, startEdit, clearDraftRange, onCommit, flash,
+      isDropdownCell, openDropdown,
     ],
   );
 
@@ -1124,6 +1346,7 @@ export function SheetGrid({
         value: editing.value,
         align: columns[editing.c]?.align,
         suggestions: suggestionsAt(editing.r, editing.c),
+        browse: editing.browse,
         onChange: (v) => setEditing((prev) => (prev ? { ...prev, value: v } : prev)),
         onKeyDown: (e) => {
           if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
@@ -1263,9 +1486,11 @@ export function SheetGrid({
                 }
                 editing={editing && editing.r === r ? editing.c : -1}
                 editorProps={editing && editing.r === r ? editorProps : null}
+                dropdownCols={dropdownColsByRow.get(r) ?? ""}
                 onCellMouseDown={onCellMouseDown}
                 onCellMouseEnter={onCellMouseEnter}
                 onCellDoubleClick={onCellDoubleClick}
+                onDropdownOpen={openDropdown}
               />
               );
             })}
@@ -1280,7 +1505,7 @@ export function SheetGrid({
           <div className="flex items-center gap-2 border-b border-border bg-emerald-600/10 px-2 py-0.5 text-[11px] font-medium text-emerald-800 dark:bg-emerald-400/10 dark:text-emerald-300">
             <span className="font-bold">NEW ENTRIES</span>
             <span className="font-normal text-emerald-800/80 dark:text-emerald-300/80">
-              type or paste here · Enter/Tab move · Ctrl/⌘+S saves the ✓ rows
+              type or paste here · Enter/Tab move · Enter on a ▾ cell opens its list · Ctrl/⌘+S saves the ✓ rows
             </span>
           </div>
           <div
@@ -1344,9 +1569,11 @@ export function SheetGrid({
                       }
                       editing={editing && editing.r === r ? editing.c : -1}
                       editorProps={editing && editing.r === r ? editorProps : null}
+                      dropdownCols={dropdownColsByRow.get(r) ?? ""}
                       onCellMouseDown={onCellMouseDown}
                       onCellMouseEnter={onCellMouseEnter}
                       onCellDoubleClick={onCellDoubleClick}
+                      onDropdownOpen={openDropdown}
                     />
                   );
                   });

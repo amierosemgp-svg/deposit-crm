@@ -428,7 +428,7 @@ export default function TransactionsPage() {
         { key: "time", label: "Time", width: 56, align: "center" },
         { key: "username", label: "Username", width: 130, entry: true, placeholder: "game login" },
         { key: "product", label: "Product", width: 110, entry: true, options: games, placeholder: "game" },
-        { key: "bonuspct", label: "Bonus %", width: 76, align: "right", numeric: true, entry: true, placeholder: "10" },
+        { key: "bonuspct", label: "Bonus %", width: 76, align: "right", numeric: true, entry: true, placeholder: "10", dropdown: true },
         { key: "bank", label: "Bank", width: 110, entry: true, required: true, options: banks, placeholder: "bank" },
         { key: "amount", label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "100" },
         { key: "bonus", label: "Bonus", width: 90, align: "right", numeric: true },
