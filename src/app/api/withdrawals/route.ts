@@ -19,6 +19,9 @@ const createSchema = z.object({
   bank_account_number: z.string().optional(),
   // Fully manual: the agent never auto-pulls/pays this — CS handles it.
   skip_bot: z.boolean().optional(),
+  // Claim it under the caller's name as it's created (the sheet's "Assign to
+  // me" cell) — the same ownership marker POST /api/assignments sets.
+  assign_to_me: z.boolean().optional(),
 });
 
 /** POST /api/withdrawals — CS logs a withdrawal request received on Telegram/WeChat. */
@@ -94,6 +97,9 @@ export async function POST(request: Request) {
         source: "manual",
         skip_bot: body.skip_bot ?? false,
         handled_by_user_id: user.user_id,
+        ...(body.assign_to_me
+          ? { assigned_to_user_id: user.user_id, assigned_at: new Date().toISOString() }
+          : {}),
       })
       .returning();
 

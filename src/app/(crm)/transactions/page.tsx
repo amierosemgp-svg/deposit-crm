@@ -81,11 +81,11 @@ type TabKey = "deposit" | "withdrawal" | "freecredit" | "transfer" | "expense";
  */
 const COLUMN_KEYS = {
   deposit: [
-    "assignee", "member", "product", "username", "amount", "bonuspct", "bonus",
+    "assign", "member", "product", "username", "amount", "bonuspct", "bonus",
     "bank", "status", "date", "time", "remark", "bankdesc",
   ],
   withdrawal: [
-    "assignee", "member", "product", "username", "amount", "bank", "account",
+    "assign", "member", "product", "username", "amount", "bank", "account",
     "status", "date", "time", "remark2",
   ],
   freecredit: [
@@ -93,7 +93,7 @@ const COLUMN_KEYS = {
     "status", "date", "time",
   ],
   transfer: [
-    "assignee", "member", "from", "username", "to", "amount",
+    "assign", "member", "from", "username", "to", "amount",
     "status", "date", "time", "note",
   ],
   expense: ["by", "date", "category", "description", "amount", "company", "notes"],
@@ -267,24 +267,40 @@ async function post(path: string, body: unknown): Promise<{ ok: boolean; error?:
 }
 
 /**
- * A fresh entry row. Not quite empty: the Date cell is pre-filled with today,
- * since a row typed now happened now (the server stamps the real time at
- * save; a bot-sourced row shows its own date and time once it's committed).
+ * Cells a fresh entry row starts with already filled: Date is today (a row
+ * typed now happened now — the server stamps the real time at save; a
+ * bot-sourced row shows its own date and time once committed), and "Assign
+ * to me" is yes, since the CS typing the row is normally the one working it.
  */
+function autoCells(tab: TabKey): Array<[number, string]> {
+  const col = COL[tab] as Record<string, number | undefined>;
+  const out: Array<[number, string]> = [];
+  if (col.date !== undefined) out.push([col.date, todaySheetDate()]);
+  if (col.assign !== undefined) out.push([col.assign, "yes"]);
+  return out;
+}
+
 function blankRow(tab: TabKey): string[] {
   const row = Array<string>(COLUMN_KEYS[tab].length).fill("");
-  const dateCol = (COL[tab] as Record<string, number | undefined>).date;
-  if (dateCol !== undefined) row[dateCol] = todaySheetDate();
+  for (const [i, v] of autoCells(tab)) row[i] = v;
   return row;
 }
 
 /**
- * "Blank" for an entry row means nothing typed — the auto-filled Date cell
- * doesn't count, or every padding row would read as a half-entered one.
+ * "Blank" for an entry row means nothing typed — the auto-filled cells don't
+ * count, or every padding row would read as a half-entered one.
  */
 function isBlankDraft(tab: TabKey, d: string[]): boolean {
-  const dateCol = (COL[tab] as Record<string, number | undefined>).date;
-  return d.every((v, i) => i === dateCol || !v.trim());
+  const auto = new Set(autoCells(tab).map(([i]) => i));
+  return d.every((v, i) => auto.has(i) || !v.trim());
+}
+
+/** The "Assign to me" cell: yes/no (and the usual spellings), blank = no. */
+function parseAssign(raw: string): boolean | null {
+  const v = raw.trim().toLowerCase();
+  if (!v || ["no", "n", "false", "0", "-", "—"].includes(v)) return false;
+  if (["yes", "y", "true", "1", "me"].includes(v)) return true;
+  return null;
 }
 
 /** Keep the entry area padded with blank rows so there is always room to type. */
@@ -478,6 +494,13 @@ export default function TransactionsPage() {
     ],
     [],
   );
+  const ASSIGN_SUGGESTIONS = useMemo<SheetSuggestion[]>(
+    () => [
+      { value: "yes", hint: "claim it under my name on save" },
+      { value: "no", hint: "leave it unassigned" },
+    ],
+    [],
+  );
 
   // Column definitions by key; COLUMN_KEYS decides the order they appear in.
   const columnsByTab = useMemo<Record<TabKey, SheetColumn[]>>(() => {
@@ -487,12 +510,20 @@ export default function TransactionsPage() {
     const date: Def = { label: "Date", width: 82, align: "center" };
     const time: Def = { label: "Time", width: 56, align: "center" };
     const status: Def = { label: "Status", width: 116 };
-    const assignee: Def = { label: "Assignee", width: 110 };
+    // Yes = claim the row under my name when it saves. Saved rows show "Yes"
+    // when it's mine, the colleague's name when it's theirs, blank if nobody's.
+    const assign: Def = {
+      label: "Assign to me",
+      width: 110,
+      entry: true,
+      options: ASSIGN_SUGGESTIONS,
+      placeholder: "yes / no",
+    };
     const order = <T extends TabKey>(tab: T, defs: Record<ColKey<T>, Def>): SheetColumn[] =>
       (COLUMN_KEYS[tab] as readonly ColKey<T>[]).map((key) => ({ key, ...defs[key] }));
     return {
       deposit: order("deposit", {
-        assignee,
+        assign,
         member,
         product: { label: "Product", width: 110, entry: true, options: games, placeholder: "game" },
         username,
@@ -507,7 +538,7 @@ export default function TransactionsPage() {
         bankdesc: { label: "Bank Description", width: 260 },
       }),
       withdrawal: order("withdrawal", {
-        assignee,
+        assign,
         member,
         product: { label: "Product", width: 110, entry: true, required: true, options: games, placeholder: "game" },
         username,
@@ -532,7 +563,7 @@ export default function TransactionsPage() {
         time,
       }),
       transfer: order("transfer", {
-        assignee,
+        assign,
         member,
         from: { label: "From Game", width: 110, entry: true, required: true, options: games, placeholder: "from game" },
         username,
@@ -553,7 +584,7 @@ export default function TransactionsPage() {
         notes: { label: "Notes", width: 240, entry: true, placeholder: "notes (optional)" },
       }),
     };
-  }, [games, banks, companies, memberSuggestions, MODE_SUGGESTIONS]);
+  }, [games, banks, companies, memberSuggestions, MODE_SUGGESTIONS, ASSIGN_SUGGESTIONS]);
 
   const columns = columnsByTab[tab];
 
@@ -687,6 +718,13 @@ export default function TransactionsPage() {
     [search],
   );
 
+  /** The "Assign to me" cell of a saved row: Yes if mine, else the holder. */
+  const assignCell = useCallback(
+    (userId: number | null | undefined): string =>
+      !userId ? "" : userId === me?.user_id ? "Yes" : userName(userId),
+    [me?.user_id, userName],
+  );
+
   const depositRows = useMemo<SheetRow[]>(() => {
     return deposits
       .filter((d) => d.company_entity_id === null || companyInScope(d.company_entity_id))
@@ -700,7 +738,7 @@ export default function TransactionsPage() {
           id: d.deposit_id,
           tone: depositTone(d.status),
           cells: toCells("deposit", {
-            assignee: d.assigned_to_user_id ? userName(d.assigned_to_user_id) : "",
+            assign: assignCell(d.assigned_to_user_id),
             member: d.player_username ?? p?.username ?? "",
             product: d.selected_game ?? "",
             username: gameUsername(p, d.selected_game),
@@ -724,7 +762,7 @@ export default function TransactionsPage() {
       })
       .filter((r) => matchesSearch(r.cells));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deposits, playerById, month, statusFilter, matchesSearch, selectedCompanyId, selectedLeaderId]);
+  }, [deposits, playerById, month, statusFilter, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId]);
 
   const withdrawalRows = useMemo<SheetRow[]>(() => {
     return withdrawals
@@ -745,7 +783,7 @@ export default function TransactionsPage() {
           id: w.withdrawal_id,
           tone: withdrawalTone(w.status),
           cells: toCells("withdrawal", {
-            assignee: w.assigned_to_user_id ? userName(w.assigned_to_user_id) : "",
+            assign: assignCell(w.assigned_to_user_id),
             member: p?.username ?? "",
             product: w.game_name,
             username: gameUsername(p, w.game_name),
@@ -761,7 +799,7 @@ export default function TransactionsPage() {
       })
       .filter((r) => matchesSearch(r.cells));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [withdrawals, playerById, month, statusFilter, matchesSearch, selectedCompanyId, selectedLeaderId]);
+  }, [withdrawals, playerById, month, statusFilter, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId]);
 
   const freeCreditRows = useMemo<SheetRow[]>(() => {
     // Live status for agent-queued rows comes off the referenced transfer.
@@ -824,7 +862,7 @@ export default function TransactionsPage() {
           id: t.transfer_id,
           tone: transferTone(t.status),
           cells: toCells("transfer", {
-            assignee: t.assigned_to_user_id ? userName(t.assigned_to_user_id) : "",
+            assign: assignCell(t.assigned_to_user_id),
             member: p?.username ?? "",
             from: t.from_game,
             username: gameUsername(p, t.from_game),
@@ -839,7 +877,7 @@ export default function TransactionsPage() {
       })
       .filter((r) => matchesSearch(r.cells));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gameTransfers, playerById, month, statusFilter, matchesSearch, selectedCompanyId, selectedLeaderId]);
+  }, [gameTransfers, playerById, month, statusFilter, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId]);
 
   const expenseRows = useMemo<SheetRow[]>(() => {
     return expenses
@@ -1030,6 +1068,9 @@ export default function TransactionsPage() {
       const bonuspct = d[c.bonuspct] ?? "";
       const bank = d[c.bank] ?? "";
       const amount = d[c.amount] ?? "";
+      const assign = parseAssign(d[c.assign] ?? "");
+      if (assign === null)
+        return { ok: false, error: `Assign to me must be yes or no, not "${d[c.assign]?.trim()}"` };
       const player = playerByCode.get(member.trim().toLowerCase());
       if (!player) return { ok: false, error: `Unknown member code "${member.trim()}"` };
       const amt = parseAmount(amount);
@@ -1057,6 +1098,7 @@ export default function TransactionsPage() {
             ? { selected_game_username: username.trim() }
             : {}),
           ...(pct ? { bonus_percentage: pct } : {}),
+          ...(assign ? { assign_to_me: true } : {}),
         },
       };
     },
@@ -1072,6 +1114,9 @@ export default function TransactionsPage() {
       const bank = d[c.bank] ?? "";
       const amount = d[c.amount] ?? "";
       const account = d[c.account] ?? "";
+      const assign = parseAssign(d[c.assign] ?? "");
+      if (assign === null)
+        return { ok: false, error: `Assign to me must be yes or no, not "${d[c.assign]?.trim()}"` };
       const player = playerByCode.get(member.trim().toLowerCase());
       if (!player) return { ok: false, error: `Unknown member code "${member.trim()}"` };
       const g = gameByName.get(product.trim().toLowerCase());
@@ -1089,6 +1134,7 @@ export default function TransactionsPage() {
           ...(all ? { withdraw_all: true } : { requested_amount: amt }),
           ...(bank.trim() ? { bank_name: bank.trim() } : {}),
           ...(account.trim() ? { bank_account_number: account.trim() } : {}),
+          ...(assign ? { assign_to_me: true } : {}),
         },
       };
     },
@@ -1145,6 +1191,9 @@ export default function TransactionsPage() {
       const from = d[c.from] ?? "";
       const to = d[c.to] ?? "";
       const amount = d[c.amount] ?? "";
+      const assign = parseAssign(d[c.assign] ?? "");
+      if (assign === null)
+        return { ok: false, error: `Assign to me must be yes or no, not "${d[c.assign]?.trim()}"` };
       const player = playerByCode.get(member.trim().toLowerCase());
       if (!player) return { ok: false, error: `Unknown member code "${member.trim()}"` };
       const fromGame = gameByName.get(from.trim().toLowerCase());
@@ -1164,6 +1213,7 @@ export default function TransactionsPage() {
           to_game: toGame,
           ...(username.trim() ? { from_game_username: username.trim() } : {}),
           ...(all ? { transfer_all: true } : { amount: amt }),
+          ...(assign ? { assign_to_me: true } : {}),
         },
       };
     },

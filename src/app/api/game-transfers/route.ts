@@ -18,6 +18,9 @@ const createSchema = z.object({
   // Which specific logins the move is between. Omit for the player's first
   // account on each game.
   from_game_username: z.string().max(120).optional(),
+  // Claim it under the caller's name as it's created (the sheet's "Assign to
+  // me" cell) — the same ownership marker POST /api/assignments sets.
+  assign_to_me: z.boolean().optional(),
   to_game_username: z.string().max(120).optional(),
 });
 
@@ -106,6 +109,9 @@ export async function POST(request: Request) {
           status: "pending",
           started_at: new Date().toISOString(),
           handled_by_user_id: user.user_id,
+          ...(body.assign_to_me
+            ? { assigned_to_user_id: user.user_id, assigned_at: new Date().toISOString() }
+            : {}),
         })
         .returning();
 

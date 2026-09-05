@@ -26,6 +26,9 @@ const createSchema = z.object({
   notes: z.string().optional(),
   // Fully manual: no agent bank-match or top-up — CS approves → completes it.
   skip_bot: z.boolean().optional(),
+  // Claim it under the caller's name as it's created (the sheet's "Assign to
+  // me" cell) — the same ownership marker POST /api/assignments sets.
+  assign_to_me: z.boolean().optional(),
 });
 
 /**
@@ -90,6 +93,9 @@ export async function POST(request: Request) {
         skip_bot: body.skip_bot ?? false,
         receipt_url: body.receipt_url,
         handled_by_user_id: user.user_id,
+        ...(body.assign_to_me
+          ? { assigned_to_user_id: user.user_id, assigned_at: nowIso }
+          : {}),
         created_at: nowIso,
         updated_at: nowIso,
       })
