@@ -2127,10 +2127,10 @@ export default function TransactionsPage() {
     const order: TabKey[] = [
       "deposit",
       "withdrawal",
+      "rebate",
       "freecredit",
       "transfer",
       "leaderwithdrawal",
-      "rebate",
       ...(isAdmin ? (["leadertransfer", "expense"] as TabKey[]) : []),
     ];
     const onKey = (e: KeyboardEvent) => {
@@ -2463,10 +2463,10 @@ export default function TransactionsPage() {
   const tabs: { key: TabKey; label: string }[] = [
     { key: "deposit", label: "Deposit" },
     { key: "withdrawal", label: "Withdrawal" },
+    { key: "rebate", label: "Rebate" },
     { key: "freecredit", label: "Free Credit" },
     { key: "transfer", label: "Game Transfer" },
     { key: "leaderwithdrawal", label: "Leader Withdrawal" },
-    { key: "rebate", label: "Rebate" },
     // Leader settlements and expenses are super-admin only — same rule as
     // their own pages.
     ...(isAdmin
