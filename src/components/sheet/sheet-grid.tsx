@@ -628,6 +628,55 @@ function CellEditor({
   );
 }
 
+/**
+ * The green column-label band. Sits under the letters row on the saved list
+ * and at the very top of the NEW ENTRIES dock, so the labels are in view
+ * wherever the user is typing — the dock is where entry happens, and the
+ * saved list's header is often scrolled far above it.
+ */
+function LabelHeaderRow({
+  columns,
+  offset,
+}: {
+  columns: SheetColumn[];
+  /** Sticky offset: under the letters row ("top-5") or flush ("top-0"). */
+  offset: "top-0" | "top-5";
+}) {
+  return (
+    <tr className="h-7">
+      <th
+        className={cn(
+          "sticky left-0 z-30 border-b border-r border-border bg-emerald-700 dark:bg-emerald-800",
+          offset,
+        )}
+      />
+      {columns.map((c) => (
+        <th
+          key={c.key}
+          title={c.entry ? undefined : "Filled in by the CRM — not saved from entry rows"}
+          className={cn(
+            "sticky z-20 select-none overflow-hidden whitespace-nowrap border-b border-r border-emerald-800 bg-emerald-700 px-1.5 text-left text-[12px] font-semibold text-white dark:border-emerald-700 dark:bg-emerald-800",
+            offset,
+            c.align === "right" && "text-right",
+            c.align === "center" && "text-center",
+            !c.entry && "font-normal text-emerald-100/80",
+          )}
+        >
+          {c.label}
+          {c.required ? " *" : ""}
+        </th>
+      ))}
+      {/* Filler keeps the green header band running edge to edge. */}
+      <th
+        className={cn(
+          "sticky z-20 border-b border-emerald-800 bg-emerald-700 dark:border-emerald-700 dark:bg-emerald-800",
+          offset,
+        )}
+      />
+    </tr>
+  );
+}
+
 export function SheetGrid({
   columns,
   rows,
@@ -757,6 +806,13 @@ export function SheetGrid({
     const covered =
       scroller.getBoundingClientRect().left + GUTTER - el.getBoundingClientRect().left;
     if (covered > 0) scroller.scrollLeft -= covered;
+    // Same for the sticky header band: a row scrolled flush to the top would
+    // sit underneath it, so nudge down by however much the band covers.
+    const head = scroller.querySelector("thead");
+    if (head) {
+      const hidden = head.getBoundingClientRect().bottom - el.getBoundingClientRect().top;
+      if (hidden > 0) scroller.scrollTop -= hidden;
+    }
   }, []);
 
   const moveTo = useCallback(
@@ -1394,26 +1450,7 @@ export function SheetGrid({
               ))}
               <th className="sticky top-0 z-20 border-b border-border bg-muted" />
             </tr>
-            <tr className="h-7">
-              <th className="sticky left-0 top-5 z-30 border-b border-r border-border bg-emerald-700 dark:bg-emerald-800" />
-              {columns.map((c) => (
-                <th
-                  key={c.key}
-                  title={c.entry ? undefined : "Filled in by the CRM — not saved from entry rows"}
-                  className={cn(
-                    "sticky top-5 z-20 select-none overflow-hidden whitespace-nowrap border-b border-r border-emerald-800 bg-emerald-700 px-1.5 text-left text-[12px] font-semibold text-white dark:border-emerald-700 dark:bg-emerald-800",
-                    c.align === "right" && "text-right",
-                    c.align === "center" && "text-center",
-                    !c.entry && "font-normal text-emerald-100/80",
-                  )}
-                >
-                  {c.label}
-                  {c.required ? " *" : ""}
-                </th>
-              ))}
-              {/* Filler keeps the green header band running edge to edge. */}
-              <th className="sticky top-5 z-20 border-b border-emerald-800 bg-emerald-700 dark:border-emerald-700 dark:bg-emerald-800" />
-            </tr>
+            <LabelHeaderRow columns={columns} offset="top-5" />
           </thead>
           <tbody>
             {hiddenAbove > 0 && (
@@ -1481,7 +1518,7 @@ export function SheetGrid({
                 el.scrollLeft = e.currentTarget.scrollLeft;
               }
             }}
-            className="max-h-44 overflow-auto"
+            className="max-h-52 overflow-auto"
           >
             <table className="w-full table-fixed border-separate border-spacing-0">
           <colgroup>
@@ -1492,6 +1529,9 @@ export function SheetGrid({
             {/* Unsized filler column — takes whatever width is left. */}
             <col />
           </colgroup>
+              <thead>
+                <LabelHeaderRow columns={columns} offset="top-0" />
+              </thead>
               <tbody>
                 {(() => {
                   // The one row that carries the placeholder template: the first
