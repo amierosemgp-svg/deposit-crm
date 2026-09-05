@@ -1038,9 +1038,16 @@ export default function TransactionsPage() {
   const freeCreditRows = useMemo<SheetRow[]>(() => {
     // Live status for agent-queued rows comes off the referenced transfer.
     const transferById = new Map(gameTransfers.map((t) => [t.transfer_id, t]));
+    // The status a row shows: credited by hand, or wherever its agent transfer is.
+    const statusOf = (f: FreeCredit) => {
+      if (f.source === "manual") return "credited";
+      const t = f.game_transfer_id != null ? transferById.get(f.game_transfer_id) : undefined;
+      return t ? t.status : "queued";
+    };
     return [...freeCredits]
       .filter((f) => f.entity_id === null || companyInScope(f.entity_id))
       .filter((f) => inRange(f.created_at, range))
+      .filter((f) => statusFilters.size === 0 || statusFilters.has(statusOf(f)))
       .sort((a, b) => a.created_at.localeCompare(b.created_at))
       .map((f) => {
         const p = f.player_id ? playerById.get(f.player_id) : undefined;
@@ -1079,7 +1086,7 @@ export default function TransactionsPage() {
       })
       .filter((r) => matchesSearch(r.cells));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [freeCredits, gameTransfers, playerById, range, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId]);
+  }, [freeCredits, gameTransfers, playerById, range, statusFilters, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId]);
 
   const transferRows = useMemo<SheetRow[]>(() => {
     return gameTransfers
@@ -1736,18 +1743,50 @@ export default function TransactionsPage() {
     () => new Set([COL.deposit.member, COL.deposit.product, COL.deposit.bonuspct]),
     [],
   );
+  /** The saved sheets whose rows carry a claim — their Assign cell edits in place. */
+  const ASSIGNABLE_TABS = useMemo(() => new Set<TabKey>(["deposit", "withdrawal", "transfer"]), []);
+  const assignColOf = useCallback(
+    (t: TabKey): number | undefined =>
+      ASSIGNABLE_TABS.has(t) ? (COL[t] as Record<string, number | undefined>).assign : undefined,
+    [ASSIGNABLE_TABS],
+  );
   const committedEditable = useCallback(
     (rowIndex: number, colIndex: number): boolean => {
-      if (tab !== "deposit" || isViewer) return false;
+      if (isViewer) return false;
+      // Assign to me: yes claims the row, no releases it — on any saved row of
+      // a sheet that has claims (the server refuses someone else's claim).
+      if (colIndex === assignColOf(tab)) return true;
+      if (tab !== "deposit") return false;
       if (!DEPOSIT_EDITABLE_COLS.has(colIndex)) return false;
       const dep = depositById.get(Number(rows[rowIndex]?.id));
       return !!dep && ["pending_match", "matched", "pending"].includes(dep.status);
     },
-    [tab, isViewer, DEPOSIT_EDITABLE_COLS, depositById, rows],
+    [tab, isViewer, DEPOSIT_EDITABLE_COLS, depositById, rows, assignColOf],
   );
 
   const onCommittedEdit = useCallback(
     async (rowIndex: number, colIndex: number, value: string) => {
+      if (colIndex === assignColOf(tab)) {
+        // The cell shows "Yes" / a colleague's name / blank; what's typed is
+        // yes or no. A name typed back in is a no-op, not an error.
+        const want = parseAssign(value);
+        if (want === null) {
+          const trimmed = value.trim();
+          if (trimmed && trimmed !== (rows[rowIndex]?.cells[colIndex] ?? "")) {
+            toast.error(`Assign to me takes yes or no, not "${trimmed}"`);
+          }
+          return;
+        }
+        const id = Number(rows[rowIndex]?.id);
+        if (!Number.isFinite(id)) return;
+        const res = await setAssignment({
+          kind: tab === "deposit" ? "deposit" : tab === "withdrawal" ? "withdrawal" : "game_transfer",
+          id,
+          assign: want,
+        });
+        if (!res.ok) toast.error(res.error ?? (want ? "Could not claim the row" : "Could not release the row"));
+        return;
+      }
       const dep = depositById.get(Number(rows[rowIndex]?.id));
       if (!dep) return;
       const v = value.trim();
@@ -1782,7 +1821,7 @@ export default function TransactionsPage() {
         if (!res.ok) toast.error(res.error ?? "Failed to set bonus");
       }
     },
-    [depositById, rows, playerByCode, gameByName, updateDepositDraft],
+    [tab, assignColOf, setAssignment, depositById, rows, playerByCode, gameByName, updateDepositDraft],
   );
 
   const selectedNumericIds = useMemo(
@@ -2338,7 +2377,11 @@ export default function TransactionsPage() {
   const statusOptionsByTab: Record<TabKey, [string, string][]> = {
     deposit: Object.entries(DEPOSIT_STATUS_LABEL),
     withdrawal: Object.entries(WITHDRAWAL_STATUS_LABEL),
-    freecredit: [],
+    freecredit: [
+      ["credited", "Credited"],
+      ["queued", "Queued"],
+      ...Object.entries(TRANSFER_STATUS_LABEL),
+    ],
     transfer: Object.entries(TRANSFER_STATUS_LABEL),
     leaderwithdrawal: [
       ["debited", "Debited"],
