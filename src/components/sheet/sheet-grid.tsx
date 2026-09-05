@@ -43,6 +43,12 @@ import { cn } from "@/lib/utils";
  */
 const LOAD_CHUNK = 100;
 
+/** NEW ENTRIES dock sizing: default cap, and the floors either side keeps. */
+const DOCK_DEFAULT_MAX = 208;
+const DOCK_MIN = 60;
+const LIST_MIN = 140;
+const DOCK_HEIGHT_KEY = "sheet-grid.dockHeight";
+
 export type SheetColumn = {
   key: string;
   label: string;
@@ -731,6 +737,69 @@ export function SheetGrid({
   const [ext, setExt] = useState<CellPos | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  /**
+   * Height of the NEW ENTRIES dock. Null = the default (up to DOCK_DEFAULT_MAX,
+   * hugging its rows); a number once the user has dragged the divider, kept
+   * per browser so the split survives a reload.
+   */
+  const [dockHeight, setDockHeight] = useState<number | null>(() => {
+    try {
+      const v = Number(localStorage.getItem(DOCK_HEIGHT_KEY));
+      return Number.isFinite(v) && v >= DOCK_MIN ? v : null;
+    } catch {
+      return null;
+    }
+  });
+  const dragRef = useRef<{ startY: number; startH: number } | null>(null);
+
+  /** Drag the divider: up grows the dock, down shrinks it, within limits. */
+  const onDividerPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const target = e.currentTarget;
+    // The dock's scroll area is the last child of the divider's parent.
+    const dock = target.parentElement?.lastElementChild as HTMLElement | null;
+    const startH = dock?.getBoundingClientRect().height ?? DOCK_DEFAULT_MAX;
+    dragRef.current = { startY: e.clientY, startH };
+    target.setPointerCapture(e.pointerId);
+    const move = (ev: PointerEvent) => {
+      const d = dragRef.current;
+      if (!d) return;
+      // The saved list keeps at least a few rows; the dock keeps at least one.
+      const total = containerRef.current?.getBoundingClientRect().height ?? 600;
+      const max = Math.max(DOCK_MIN, total - LIST_MIN);
+      const next = Math.min(max, Math.max(DOCK_MIN, d.startH + (d.startY - ev.clientY)));
+      setDockHeight(Math.round(next));
+    };
+    const up = () => {
+      dragRef.current = null;
+      target.removeEventListener("pointermove", move);
+      target.removeEventListener("pointerup", up);
+      target.removeEventListener("pointercancel", up);
+      setDockHeight((h) => {
+        try {
+          if (h === null) localStorage.removeItem(DOCK_HEIGHT_KEY);
+          else localStorage.setItem(DOCK_HEIGHT_KEY, String(h));
+        } catch {
+          // storage blocked — the split just won't persist
+        }
+        return h;
+      });
+    };
+    target.addEventListener("pointermove", move);
+    target.addEventListener("pointerup", up);
+    target.addEventListener("pointercancel", up);
+  }, []);
+
+  /** Double-click the divider: back to the default split. */
+  const resetDock = useCallback(() => {
+    setDockHeight(null);
+    try {
+      localStorage.removeItem(DOCK_HEIGHT_KEY);
+    } catch {
+      // ignore
+    }
+  }, []);
   const draggingRef = useRef(false);
   /**
    * Where the current Tab-run began. Excel's Enter-after-Tab rule: type across
@@ -1503,7 +1572,20 @@ export function SheetGrid({
       {/* NEW ENTRIES — docked below the rows, always visible, so "where do I
           type" answers itself. Same columns, x-scroll synced with the rows. */}
       {!readOnly && (
-        <div className="shrink-0 border-t-2 border-emerald-600 dark:border-emerald-500">
+        <div className="relative shrink-0 border-t-2 border-emerald-600 dark:border-emerald-500">
+          {/* The divider — drag to trade rows between the saved list and the
+              dock, double-click to go back to the default split. */}
+          <div
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize the entry area"
+            title="Drag to resize · double-click to reset"
+            onPointerDown={onDividerPointerDown}
+            onDoubleClick={resetDock}
+            className="group absolute -top-1.5 left-0 right-0 z-20 h-3 cursor-row-resize touch-none"
+          >
+            <div className="mx-auto mt-1 h-1 w-10 rounded-full bg-emerald-600/40 transition-colors group-hover:bg-emerald-600 dark:bg-emerald-400/40 dark:group-hover:bg-emerald-400" />
+          </div>
           <div className="flex items-center gap-2 border-b border-border bg-emerald-600/10 px-2 py-0.5 text-[11px] font-medium text-emerald-800 dark:bg-emerald-400/10 dark:text-emerald-300">
             <span className="font-bold">NEW ENTRIES</span>
             <span className="font-normal text-emerald-800/80 dark:text-emerald-300/80">
@@ -1518,7 +1600,12 @@ export function SheetGrid({
                 el.scrollLeft = e.currentTarget.scrollLeft;
               }
             }}
-            className="max-h-52 overflow-auto"
+            style={
+              dockHeight === null
+                ? { maxHeight: DOCK_DEFAULT_MAX }
+                : { height: dockHeight, maxHeight: "none" }
+            }
+            className="overflow-auto"
           >
             <table className="w-full table-fixed border-separate border-spacing-0">
           <colgroup>
