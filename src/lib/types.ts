@@ -539,6 +539,12 @@ export type ServerSettings = {
   min_withdrawal_amount?: number;
   games?: string[];
   banks?: string[];
+  /** Rebate window boundaries per period, in business time. See lib/rebates. */
+  rebate_cutoffs?: {
+    daily: { time: string };
+    weekly: { weekday: number; time: string };
+    monthly: { day: number; time: string };
+  };
   [key: string]: unknown;
 };
 

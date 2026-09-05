@@ -16,6 +16,7 @@ import {
   ScrollText,
   Bot,
   Network,
+  Percent,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -67,6 +68,9 @@ const NAV: NavGroup[] = [
         icon: Gift,
         roles: ["super_admin", "company_leader"],
       },
+      // Rebates are paid from a generated list, not on a deposit — the page
+      // is where CS runs and pays each day's / week's / month's list.
+      { href: "/rebates", label: "Rebates", icon: Percent },
       { href: "/bank-accounts", label: "Bank Accounts", icon: Landmark },
       { href: "/provider-accounts", label: "Kiosks Accounts", icon: KeyRound },
       { href: "/hierarchy", label: "Hierarchy", icon: Network },

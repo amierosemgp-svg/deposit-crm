@@ -419,6 +419,7 @@ type Store = {
     transfer_auto_confirm_hours?: number;
     min_withdrawal_amount?: number;
     games?: string[];
+    rebate_cutoffs?: ServerSettings["rebate_cutoffs"];
     banks?: string[];
   }) => Promise<MutationResult>;
 

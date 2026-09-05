@@ -865,6 +865,68 @@ export const referralBonuses = pgTable(
   ],
 );
 
+// ---------- Rebate payouts ----------
+
+export const rebatePayoutStatusEnum = pgEnum("rebate_payout_status", [
+  "pending",
+  "paid",
+  "skipped",
+]);
+
+/**
+ * One rebate owed to one player for one window of one plan — a snapshot of
+ * what they lost between two cutoffs and the share the plan pays on it. Paid
+ * as a free credit; the transfer/transaction ids point at that credit.
+ */
+export const rebatePayouts = pgTable(
+  "rebate_payouts",
+  {
+    payout_id: serial("payout_id").primaryKey(),
+    plan_id: integer("plan_id")
+      .notNull()
+      .references(() => bonusPlans.plan_id),
+    player_id: integer("player_id")
+      .notNull()
+      .references(() => players.player_id),
+    company_entity_id: integer("company_entity_id").references(() => entities.entity_id),
+    period: bonusPeriodEnum("period").notNull(),
+    // The window the loss was measured over: [window_start, window_end).
+    window_start: timestamp("window_start", { withTimezone: true, mode: "string" }).notNull(),
+    window_end: timestamp("window_end", { withTimezone: true, mode: "string" }).notNull(),
+    deposits_total: numeric("deposits_total", { precision: 12, scale: 2, mode: "number" })
+      .notNull()
+      .default(0),
+    withdrawals_total: numeric("withdrawals_total", { precision: 12, scale: 2, mode: "number" })
+      .notNull()
+      .default(0),
+    // deposits_total − withdrawals_total, frozen at generate time.
+    net_loss: numeric("net_loss", { precision: 12, scale: 2, mode: "number" }).notNull(),
+    percentage: numeric("percentage", { precision: 5, scale: 2, mode: "number" }).notNull(),
+    amount: numeric("amount", { precision: 12, scale: 2, mode: "number" }).notNull(),
+    status: rebatePayoutStatusEnum("status").notNull().default("pending"),
+    // Where the credit goes — suggested at generate time, confirmed at pay time.
+    game_name: varchar("game_name", { length: 60 }),
+    game_username: varchar("game_username", { length: 120 }),
+    // True when CS credited the game by hand; false = the agent was asked to.
+    skip_bot: boolean("skip_bot").notNull().default(false),
+    game_transfer_id: integer("game_transfer_id"),
+    // The free-credit ledger row (transactions.game_topup) written at pay time.
+    transaction_id: integer("transaction_id"),
+    generated_by_user_id: integer("generated_by_user_id").references(() => users.user_id),
+    generated_at: timestamp("generated_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+    paid_by_user_id: integer("paid_by_user_id").references(() => users.user_id),
+    paid_at: timestamp("paid_at", { withTimezone: true, mode: "string" }),
+    note: text("note"),
+  },
+  (t) => [
+    // One rebate per player per window per plan — the guard against a second
+    // "generate" paying anyone twice.
+    unique("rebate_payouts_plan_player_window_key").on(t.plan_id, t.player_id, t.window_start),
+  ],
+);
+
 // ---------- Game credits ----------
 
 export const gameCredits = pgTable(

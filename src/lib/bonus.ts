@@ -189,6 +189,11 @@ export async function evaluateBonusPlan(
   if (plan.status !== "active") {
     return deny(`"${plan.name}" is switched off`);
   }
+  // Rebates are paid from the Rebates page's generated list, never on a
+  // deposit — one place pays them, so nothing can pay one twice.
+  if (plan.type === "rebate") {
+    return deny(`"${plan.name}" is a rebate — it's paid from the Rebates page, not on a deposit`);
+  }
   if (
     plan.company_entity_id !== null &&
     plan.company_entity_id !== ctx.companyEntityId
@@ -334,8 +339,10 @@ export async function evaluatePlansForPlayer(
 
   const offered = all.filter(
     (p) =>
-      p.company_entity_id === null ||
-      p.company_entity_id === ctx.companyEntityId,
+      // Rebates don't ride a deposit — see the Rebates page.
+      p.type !== "rebate" &&
+      (p.company_entity_id === null ||
+        p.company_entity_id === ctx.companyEntityId),
   );
 
   return Promise.all(
@@ -431,20 +438,25 @@ export async function resolveBonusForDeposit(input: {
     .from(bonusPlans)
     .where(eq(bonusPlans.plan_id, input.planId));
   if (!plan) return { ok: false, reason: "Bonus not found", status: 404 };
+  // Not even an override puts a rebate on a deposit — it's paid from the
+  // Rebates page against the player's measured loss.
+  if (plan.type === "rebate") {
+    return {
+      ok: false,
+      reason: `"${plan.name}" is a rebate — pay it from the Rebates page`,
+      status: 422,
+    };
+  }
 
   const verdict = await evaluateBonusPlan(plan, ctx);
   if (!verdict.eligible) {
     if (!input.override?.allowed) {
       return { ok: false, reason: verdict.reason ?? "Not eligible", status: 422 };
     }
-    // Forced through: the bonus still pays what the rule says it is worth, and
-    // a rebate the player didn't earn is worth nothing — so an overridden
-    // rebate falls back to the deposit as its basis. Otherwise "override" would
-    // silently credit RM 0 and look like the click didn't work.
-    const basis =
-      plan.type === "rebate" && verdict.basis_amount <= 0
-        ? ctx.depositAmount
-        : verdict.basis_amount || ctx.depositAmount;
+    // Forced through: the bonus still pays what the rule says it is worth —
+    // the deposit is the basis (rebates never reach here; they're paid from
+    // the Rebates page against the measured loss).
+    const basis = verdict.basis_amount || ctx.depositAmount;
     const amount = pct(basis, plan.percentage);
     return {
       ok: true,
@@ -454,7 +466,7 @@ export async function resolveBonusForDeposit(input: {
         bonus_plan_id: plan.plan_id,
         bonus_percentage: plan.percentage,
         bonus_amount: amount,
-        bonus_basis_amount: plan.type === "rebate" ? basis : null,
+        bonus_basis_amount: null,
         bonus_override_reason:
           input.override?.reason?.trim() || `Override: ${verdict.reason}`,
         total_amount: +(ctx.depositAmount + amount).toFixed(2),
@@ -470,7 +482,7 @@ export async function resolveBonusForDeposit(input: {
       bonus_plan_id: plan.plan_id,
       bonus_percentage: plan.percentage,
       bonus_amount: verdict.bonus_amount,
-      bonus_basis_amount: plan.type === "rebate" ? verdict.basis_amount : null,
+      bonus_basis_amount: null,
       bonus_override_reason: null,
       total_amount: +(ctx.depositAmount + verdict.bonus_amount).toFixed(2),
     },

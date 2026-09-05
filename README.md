@@ -57,6 +57,14 @@ snapshots the percentage and amount it was given.
 An existing database needs `migrations/2026-08-16-bonus-plans.sql`; a fresh
 `pnpm db:push` creates it all.
 
+**Rebates** (`/rebates`) are paid from a generated list, not on a deposit: the
+page snapshots each player's loss (completed deposits − paid withdrawals)
+over the latest closed window into `rebate_payouts`, and each row is paid as a
+free credit. Window boundaries are the `rebate_cutoffs` setting (daily time,
+weekly weekday + time, monthly day + time, business time), edited on the page
+by the super admin. An existing database needs
+`migrations/2026-09-05-rebate-payouts.sql`.
+
 ## Crawl banks (on-demand agent commands)
 
 The agent sweeps the banks on its own cycle. When that is too slow — a player

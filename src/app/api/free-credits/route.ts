@@ -1,14 +1,10 @@
 import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { gameTransfers, players, transactions } from "@/db/schema";
+import { players, transactions } from "@/db/schema";
 import { AuthError, authErrorResponse, requireUser, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
-import {
-  creditRecommendBonus,
-  InsufficientBoCreditError,
-} from "@/lib/referral";
-import { resolveGameLogin } from "@/lib/game-credits";
+import { issueFreeCredit } from "@/lib/free-credit";
 
 const createSchema = z.object({
   player_id: z.number().int().positive(),
@@ -58,87 +54,22 @@ export async function POST(request: Request) {
         throw new AuthError(403, "Player is outside your company scope");
       }
 
-      // Credit has to land in an account the player actually holds, or it goes
-      // nowhere the player can reach.
-      const hasGame = (player.game_accounts ?? []).some(
-        (g) => g.game_name.toLowerCase() === game_name.toLowerCase(),
-      );
-      if (!hasGame) {
-        throw new AuthError(
-          422,
-          `${player.username} has no ${game_name} account linked`,
-        );
-      }
-
-      const login = resolveGameLogin(player.game_accounts, game_name, game_username);
-      const nowIso = new Date().toISOString();
-      let gameTransferId: number | null = null;
-
-      if (skip_bot) {
-        // Same booking as a hand-credited referral bonus: player balance up,
-        // company BO pool down. Fails cleanly when the pool can't cover it.
-        try {
-          await creditRecommendBonus(txn, {
-            playerId: player.player_id,
-            companyEntityId: player.company_entity_id,
-            gameName: game_name,
-            gameUsername: login,
-            amount,
-            nowIso,
-          });
-        } catch (e) {
-          if (e instanceof InsufficientBoCreditError) {
-            throw new AuthError(422, e.message);
-          }
-          throw e;
-        }
-      } else {
-        // Queue it for the agent. from_game === to_game marks a credit-in —
-        // the same shape the referral payout uses, so the agent, the stall
-        // sweep and the Game Credit Transfer page all handle it unchanged.
-        const [transfer] = await txn
-          .insert(gameTransfers)
-          .values({
-            player_id: player.player_id,
-            from_game: game_name,
-            to_game: game_name,
-            from_game_username: login,
-            to_game_username: login,
-            transfer_amount: amount,
-            from_game_balance_before: 0,
-            status: "pending",
-            started_at: nowIso,
-            handled_by_user_id: user.user_id,
-            note: `Free credit${reason ? ` — ${reason}` : ""}`,
-          })
-          .returning();
-        gameTransferId = transfer.transfer_id;
-      }
-
-      const [audit] = await txn
-        .insert(transactions)
-        .values({
-          player_id: player.player_id,
-          entity_id: player.company_entity_id,
-          type: "game_topup",
-          amount,
-          game_name,
-          reference_id: gameTransferId,
-          user_id: user.user_id,
-          details: {
-            action: "free_credit",
-            source: skip_bot ? "manual" : "bot",
-            game_username: login,
-            reason: reason ?? null,
-            game_transfer_id: gameTransferId,
-          },
-        })
-        .returning();
-
-      return audit;
+      const issued = await issueFreeCredit(txn, {
+        user,
+        player,
+        gameName: game_name,
+        gameUsername: game_username,
+        amount,
+        reason,
+        skipBot: skip_bot,
+      });
+      return issued;
     });
 
-    return Response.json({ free_credit: result }, { status: 201 });
+    return Response.json(
+      { free_credit: { transaction_id: result.transactionId, game_transfer_id: result.gameTransferId } },
+      { status: 201 },
+    );
   } catch (e) {
     return (
       authErrorResponse(e) ?? (console.error(e), jsonError("Server error", 500))
