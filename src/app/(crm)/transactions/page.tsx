@@ -2593,8 +2593,9 @@ export default function TransactionsPage() {
         </span>
       </div>
 
-      {/* Toolbar */}
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
+      {/* Toolbar — two rows: search, dates and buttons; then the filter pills. */}
+      <div className="shrink-0 space-y-1.5 border-b border-border px-3 py-2">
+        <div className="flex flex-wrap items-center gap-2">
         <div className="relative">
           <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -2644,6 +2645,65 @@ export default function TransactionsPage() {
           />
         </div>
 
+        <span className="text-xs text-muted-foreground">
+          {rows.length} row{rows.length === 1 ? "" : "s"}
+        </span>
+
+        <div className="ml-auto flex items-center gap-2">
+          {tab === "deposit" && !isViewer && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 cursor-pointer gap-1.5"
+              onClick={handleCrawl}
+              disabled={crawling}
+              title={crawlHint(latestCrawl)}
+            >
+              {crawling ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Radar className="h-3.5 w-3.5" />
+              )}
+              {crawling
+                ? latestCrawl?.status === "running"
+                  ? "Crawling…"
+                  : "Queued…"
+                : "Crawl banks"}
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-8 cursor-pointer gap-1.5"
+            onClick={async () => {
+              setRefreshing(true);
+              await Promise.all([refresh(), loadLedgers()]);
+              setRefreshing(false);
+            }}
+          >
+            <RefreshCw className={cn("h-3.5 w-3.5", refreshing && "animate-spin")} />
+            Refresh
+          </Button>
+          {!isViewer && (
+            <Button
+              size="sm"
+              className="h-8 cursor-pointer gap-1.5 bg-emerald-700 text-white hover:bg-emerald-800"
+              disabled={saving || readyCount === 0}
+              onClick={handleCommit}
+            >
+              {saving ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Save className="h-3.5 w-3.5" />
+              )}
+              Save {readyCount > 0 ? `${readyCount} row${readyCount === 1 ? "" : "s"}` : "rows"}
+              <span className="hidden text-[10px] opacity-70 lg:inline">{MOD_LABEL}S</span>
+            </Button>
+          )}
+        </div>
+        </div>
+        {(statusOptions.length > 0 || tab === "rebate") && (
+          <div className="flex flex-wrap items-center gap-2">
         {/* Status pills — click to light any number; none lit = all. */}
         {statusOptions.length > 0 && (
           <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Status">
@@ -2746,62 +2806,8 @@ export default function TransactionsPage() {
             )}
           </>
         )}
-        <span className="text-xs text-muted-foreground">
-          {rows.length} row{rows.length === 1 ? "" : "s"}
-        </span>
-
-        <div className="ml-auto flex items-center gap-2">
-          {tab === "deposit" && !isViewer && (
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-8 cursor-pointer gap-1.5"
-              onClick={handleCrawl}
-              disabled={crawling}
-              title={crawlHint(latestCrawl)}
-            >
-              {crawling ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Radar className="h-3.5 w-3.5" />
-              )}
-              {crawling
-                ? latestCrawl?.status === "running"
-                  ? "Crawling…"
-                  : "Queued…"
-                : "Crawl banks"}
-            </Button>
-          )}
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-8 cursor-pointer gap-1.5"
-            onClick={async () => {
-              setRefreshing(true);
-              await Promise.all([refresh(), loadLedgers()]);
-              setRefreshing(false);
-            }}
-          >
-            <RefreshCw className={cn("h-3.5 w-3.5", refreshing && "animate-spin")} />
-            Refresh
-          </Button>
-          {!isViewer && (
-            <Button
-              size="sm"
-              className="h-8 cursor-pointer gap-1.5 bg-emerald-700 text-white hover:bg-emerald-800"
-              disabled={saving || readyCount === 0}
-              onClick={handleCommit}
-            >
-              {saving ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Save className="h-3.5 w-3.5" />
-              )}
-              Save {readyCount > 0 ? `${readyCount} row${readyCount === 1 ? "" : "s"}` : "rows"}
-              <span className="hidden text-[10px] opacity-70 lg:inline">{MOD_LABEL}S</span>
-            </Button>
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       {/* The grid fills everything that's left. */}
