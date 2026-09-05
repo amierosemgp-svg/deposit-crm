@@ -73,6 +73,14 @@ import {
   type Withdrawal,
 } from "@/lib/types";
 import type { RebateLiveStatus, RebatePayoutLedgerRow } from "@/lib/rebates";
+import {
+  RANGE_PRESETS,
+  inRange,
+  presetRange,
+  rangeLabel,
+  type DateRange,
+  type RangePreset,
+} from "@/lib/date-range";
 
 type TabKey =
   | "deposit"
@@ -493,6 +501,7 @@ export default function TransactionsPage() {
   const entities = useStore((s) => s.entities);
   const entityName = useStore((s) => s.entityName);
   const reverseBankCashOut = useStore((s) => s.reverseBankCashOut);
+  const bonusPlans = useStore((s) => s.bonusPlans);
 
   const games = gamesFn();
   const banks = banksFn();
@@ -560,10 +569,31 @@ export default function TransactionsPage() {
   }, [loadLedgers]);
 
   const [tab, setTab] = useState<TabKey>("deposit");
-  const now = new Date();
-  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-  const [month, setMonth] = useState<string>(currentMonth);
-  const [statusFilter, setStatusFilter] = useState<string>("all");
+  // Date range over the sheet: a quick preset, or custom from/to days.
+  const [preset, setPreset] = useState<RangePreset | "custom">("this_month");
+  const [range, setRange] = useState<DateRange>(() => presetRange("this_month"));
+  const applyPreset = useCallback((key: RangePreset) => {
+    setPreset(key);
+    setRange(presetRange(key));
+  }, []);
+  const setRangeEdge = useCallback((edge: "from" | "to", value: string) => {
+    setPreset("custom");
+    setRange((r) => ({ ...r, [edge]: value || null }));
+  }, []);
+  // Status pills — any number lit; none lit = every status.
+  const [statusFilters, setStatusFilters] = useState<Set<string>>(() => new Set());
+  const toggleStatus = useCallback((value: string) => {
+    setStatusFilters((prev) => {
+      const next = new Set(prev);
+      if (next.has(value)) next.delete(value);
+      else next.add(value);
+      return next;
+    });
+  }, []);
+  // Rebate sheet: which plans, which window.
+  const [rebatePlanFilter, setRebatePlanFilter] = useState<Set<number>>(() => new Set());
+  const [rebateWindowFilter, setRebateWindowFilter] = useState<string>("all");
+  const [generatingRebate, setGeneratingRebate] = useState(false);
   const [search, setSearch] = useState("");
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -585,7 +615,7 @@ export default function TransactionsPage() {
   // A status from one tab means nothing on the next — reset on switch.
   const switchTab = useCallback((next: TabKey) => {
     setTab(next);
-    setStatusFilter("all");
+    setStatusFilters(new Set());
     setSelectedIds([]);
   }, []);
 
@@ -932,8 +962,8 @@ export default function TransactionsPage() {
   const depositRows = useMemo<SheetRow[]>(() => {
     return deposits
       .filter((d) => d.company_entity_id === null || companyInScope(d.company_entity_id))
-      .filter((d) => month === "all" || d.deposit_date.slice(0, 7) === month)
-      .filter((d) => statusFilter === "all" || d.status === statusFilter)
+      .filter((d) => inRange(d.deposit_date, range))
+      .filter((d) => statusFilters.size === 0 || statusFilters.has(d.status))
       .sort((a, b) => a.deposit_date.localeCompare(b.deposit_date))
       .map((d) => {
         const p = d.player_id ? playerById.get(d.player_id) : undefined;
@@ -966,7 +996,7 @@ export default function TransactionsPage() {
       })
       .filter((r) => matchesSearch(r.cells));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deposits, playerById, month, statusFilter, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId]);
+  }, [deposits, playerById, range, statusFilters, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId]);
 
   const withdrawalRows = useMemo<SheetRow[]>(() => {
     return withdrawals
@@ -974,8 +1004,8 @@ export default function TransactionsPage() {
         const p = playerById.get(w.player_id);
         return !p || companyInScope(p.company_entity_id);
       })
-      .filter((w) => month === "all" || w.created_at.slice(0, 7) === month)
-      .filter((w) => statusFilter === "all" || w.status === statusFilter)
+      .filter((w) => inRange(w.created_at, range))
+      .filter((w) => statusFilters.size === 0 || statusFilters.has(w.status))
       .sort((a, b) => a.created_at.localeCompare(b.created_at))
       .map((w) => {
         const p = playerById.get(w.player_id);
@@ -1003,14 +1033,14 @@ export default function TransactionsPage() {
       })
       .filter((r) => matchesSearch(r.cells));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [withdrawals, playerById, month, statusFilter, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId]);
+  }, [withdrawals, playerById, range, statusFilters, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId]);
 
   const freeCreditRows = useMemo<SheetRow[]>(() => {
     // Live status for agent-queued rows comes off the referenced transfer.
     const transferById = new Map(gameTransfers.map((t) => [t.transfer_id, t]));
     return [...freeCredits]
       .filter((f) => f.entity_id === null || companyInScope(f.entity_id))
-      .filter((f) => month === "all" || f.created_at.slice(0, 7) === month)
+      .filter((f) => inRange(f.created_at, range))
       .sort((a, b) => a.created_at.localeCompare(b.created_at))
       .map((f) => {
         const p = f.player_id ? playerById.get(f.player_id) : undefined;
@@ -1049,7 +1079,7 @@ export default function TransactionsPage() {
       })
       .filter((r) => matchesSearch(r.cells));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [freeCredits, gameTransfers, playerById, month, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId]);
+  }, [freeCredits, gameTransfers, playerById, range, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId]);
 
   const transferRows = useMemo<SheetRow[]>(() => {
     return gameTransfers
@@ -1057,8 +1087,8 @@ export default function TransactionsPage() {
         const p = playerById.get(t.player_id);
         return !p || companyInScope(p.company_entity_id);
       })
-      .filter((t) => month === "all" || t.created_at.slice(0, 7) === month)
-      .filter((t) => statusFilter === "all" || t.status === statusFilter)
+      .filter((t) => inRange(t.created_at, range))
+      .filter((t) => statusFilters.size === 0 || statusFilters.has(t.status))
       .sort((a, b) => a.created_at.localeCompare(b.created_at))
       .map((t) => {
         const p = playerById.get(t.player_id);
@@ -1082,12 +1112,12 @@ export default function TransactionsPage() {
       })
       .filter((r) => matchesSearch(r.cells));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gameTransfers, playerById, month, statusFilter, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId]);
+  }, [gameTransfers, playerById, range, statusFilters, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId]);
 
   const expenseRows = useMemo<SheetRow[]>(() => {
     return expenses
       .filter((e) => e.company_entity_id === null || companyInScope(e.company_entity_id))
-      .filter((e) => month === "all" || e.expense_date.slice(0, 7) === month)
+      .filter((e) => inRange(e.expense_date, range))
       .sort((a, b) => a.expense_date.localeCompare(b.expense_date))
       .map((e: Expense) => ({
         id: e.expense_id,
@@ -1104,7 +1134,7 @@ export default function TransactionsPage() {
       }))
       .filter((r) => matchesSearch(r.cells));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expenses, companyNameById, month, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId]);
+  }, [expenses, companyNameById, range, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId]);
 
   const accountById = useMemo(
     () => new Map(bankAccounts.map((a) => [a.account_id, a])),
@@ -1114,11 +1144,10 @@ export default function TransactionsPage() {
   const leaderWithdrawalRows = useMemo<SheetRow[]>(() => {
     return cashOuts
       .filter((c) => companyInScope(c.entity_id))
-      .filter((c) => month === "all" || c.occurred_at.slice(0, 7) === month)
+      .filter((c) => inRange(c.occurred_at, range))
       .filter(
         (c) =>
-          statusFilter === "all" ||
-          (statusFilter === "reversed" ? !!c.reversed_at : !c.reversed_at),
+          statusFilters.size === 0 || statusFilters.has(c.reversed_at ? "reversed" : "debited"),
       )
       .sort((a, b) => a.occurred_at.localeCompare(b.occurred_at))
       .map((c) => {
@@ -1140,7 +1169,7 @@ export default function TransactionsPage() {
       })
       .filter((r) => matchesSearch(r.cells));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cashOuts, accountById, month, statusFilter, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId]);
+  }, [cashOuts, accountById, range, statusFilters, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId]);
 
   const rebateRows = useMemo<SheetRow[]>(() => {
     const tone = (st: RebateLiveStatus): SheetRow["tone"] =>
@@ -1155,8 +1184,10 @@ export default function TransactionsPage() {
               : "default";
     return rebatePayouts
       .filter((r) => r.company_entity_id === null || companyInScope(r.company_entity_id))
-      .filter((r) => month === "all" || r.window_end.slice(0, 7) === month)
-      .filter((r) => statusFilter === "all" || r.live_status === statusFilter)
+      .filter((r) => inRange(r.window_end, range))
+      .filter((r) => rebatePlanFilter.size === 0 || rebatePlanFilter.has(r.plan_id))
+      .filter((r) => rebateWindowFilter === "all" || r.window_start === rebateWindowFilter)
+      .filter((r) => statusFilters.size === 0 || statusFilters.has(r.live_status))
       .sort((a, b) => a.window_end.localeCompare(b.window_end) || b.net_loss - a.net_loss)
       .map((r) => ({
         id: r.payout_id,
@@ -1180,11 +1211,11 @@ export default function TransactionsPage() {
       }))
       .filter((r) => matchesSearch(r.cells));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rebatePayouts, month, statusFilter, matchesSearch, userName, selectedCompanyId, selectedLeaderId]);
+  }, [rebatePayouts, range, statusFilters, rebatePlanFilter, rebateWindowFilter, matchesSearch, userName, selectedCompanyId, selectedLeaderId]);
 
   const leaderTransferRows = useMemo<SheetRow[]>(() => {
     return leaderTransfers
-      .filter((t) => month === "all" || t.created_at.slice(0, 7) === month)
+      .filter((t) => inRange(t.created_at, range))
       .sort((a, b) => a.created_at.localeCompare(b.created_at))
       .map((t) => ({
         id: t.transfer_id,
@@ -1200,7 +1231,7 @@ export default function TransactionsPage() {
         }),
       }))
       .filter((r) => matchesSearch(r.cells));
-  }, [leaderTransfers, month, matchesSearch, assignCell, entityName]);
+  }, [leaderTransfers, range, matchesSearch, assignCell, entityName]);
 
   const rowsByTab: Record<TabKey, SheetRow[]> = {
     deposit: depositRows,
@@ -1792,6 +1823,74 @@ export default function TransactionsPage() {
         : [],
     [tab, selectedNumericIds, expenseById],
   );
+  // Rebate sheet filters: the active rebate plans in scope, and the windows
+  // present in the (plan-filtered) payouts, newest first.
+  const rebatePlans = useMemo(
+    () =>
+      bonusPlans.filter(
+        (b) =>
+          b.type === "rebate" &&
+          b.status === "active" &&
+          (b.company_entity_id === null || companyInScope(b.company_entity_id)),
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [bonusPlans, selectedCompanyId, selectedLeaderId],
+  );
+  const rebateWindows = useMemo(() => {
+    const m = new Map<string, { value: string; label: string; end: string }>();
+    for (const r of rebatePayouts) {
+      if (rebatePlanFilter.size && !rebatePlanFilter.has(r.plan_id)) continue;
+      if (!m.has(r.window_start)) {
+        m.set(r.window_start, {
+          value: r.window_start,
+          label: `${sheetDate(r.window_start)} – ${sheetDate(r.window_end)}`,
+          end: r.window_end,
+        });
+      }
+    }
+    return [...m.values()].sort((a, b) => (a.end < b.end ? 1 : a.end > b.end ? -1 : 0));
+  }, [rebatePayouts, rebatePlanFilter]);
+  const toggleRebatePlan = useCallback((planId: number) => {
+    setRebatePlanFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(planId)) next.delete(planId);
+      else next.add(planId);
+      return next;
+    });
+    setRebateWindowFilter("all");
+  }, []);
+  /** Generate the latest closed window for the one plan lit in the filter. */
+  const handleGenerateRebate = useCallback(async () => {
+    const ids = [...rebatePlanFilter];
+    if (ids.length !== 1 || generatingRebate) return;
+    setGeneratingRebate(true);
+    try {
+      const res = await fetch("/api/rebates/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan_id: ids[0] }),
+      });
+      const d = (await res.json().catch(() => null)) as
+        | { inserted?: number; replaced?: number; error?: string; payouts_for?: string | null }
+        | null;
+      if (!res.ok) {
+        toast.error(d?.error ?? `Request failed (${res.status})`);
+        return;
+      }
+      toast.success(
+        d?.inserted === 0
+          ? "No player lost money in the latest window — nothing to pay"
+          : `${d?.inserted ?? 0} player${d?.inserted === 1 ? "" : "s"} on the list${
+              d?.replaced ? " (previous unpaid list replaced)" : ""
+            }`,
+      );
+      await loadRebatePayouts();
+      if (d?.payouts_for) setRebateWindowFilter(d.payouts_for);
+    } finally {
+      setGeneratingRebate(false);
+    }
+  }, [rebatePlanFilter, generatingRebate, loadRebatePayouts]);
+
   const cashOutById = useMemo(() => {
     const m = new Map<number, BankCashOut>();
     for (const c of cashOuts) m.set(c.cash_out_id, c);
@@ -2236,19 +2335,6 @@ export default function TransactionsPage() {
 
   // ---- filters ----
 
-  const monthOptions = useMemo(() => {
-    const set = new Set<string>([currentMonth]);
-    for (const d of deposits) set.add(d.deposit_date.slice(0, 7));
-    for (const w of withdrawals) set.add(w.created_at.slice(0, 7));
-    for (const t of gameTransfers) set.add(t.created_at.slice(0, 7));
-    for (const f of freeCredits) set.add(f.created_at.slice(0, 7));
-    for (const e of expenses) set.add(e.expense_date.slice(0, 7));
-    for (const c of cashOuts) set.add(c.occurred_at.slice(0, 7));
-    for (const r of rebatePayouts) set.add(r.window_end.slice(0, 7));
-    for (const t of leaderTransfers) set.add(t.created_at.slice(0, 7));
-    return [...set].sort().reverse();
-  }, [deposits, withdrawals, gameTransfers, freeCredits, expenses, cashOuts, rebatePayouts, leaderTransfers, currentMonth]);
-
   const statusOptionsByTab: Record<TabKey, [string, string][]> = {
     deposit: Object.entries(DEPOSIT_STATUS_LABEL),
     withdrawal: Object.entries(WITHDRAWAL_STATUS_LABEL),
@@ -2482,7 +2568,7 @@ export default function TransactionsPage() {
       {/* Always-on-top company info, above everything — the workbook's
           frozen block, in the dashboard's card language. */}
       <div className="shrink-0 px-3 pb-1 pt-2">
-        <CompanyInfoPanel month={month === "all" ? "all" : month} />
+        <CompanyInfoPanel range={range} />
       </div>
 
       {/* Worksheet tabs — Excel style. */}
@@ -2518,36 +2604,147 @@ export default function TransactionsPage() {
             className="h-8 w-52 pl-7 text-[13px]"
           />
         </div>
-        <Select value={month} onValueChange={(v) => setMonth(v ?? "all")}>
-          <SelectTrigger className="h-8 w-36 cursor-pointer text-[13px]">
+        {/* Date range: a quick preset, or type the edges (which makes it custom). */}
+        <Select
+          value={preset}
+          onValueChange={(v) => v && v !== "custom" && applyPreset(v as RangePreset)}
+          items={[...RANGE_PRESETS.map((p) => ({ value: p.key, label: p.label })), { value: "custom", label: "Custom" }]}
+        >
+          <SelectTrigger className="h-8 w-32 cursor-pointer text-[13px]" title={rangeLabel(range)}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All months</SelectItem>
-            {monthOptions.map((m) => (
-              <SelectItem key={m} value={m}>
-                {new Date(`${m}-01T00:00:00`).toLocaleString("en-US", {
-                  month: "short",
-                  year: "numeric",
-                })}
+            {RANGE_PRESETS.map((p) => (
+              <SelectItem key={p.key} value={p.key} className="cursor-pointer">
+                {p.label}
               </SelectItem>
             ))}
+            <SelectItem value="custom" disabled>
+              Custom
+            </SelectItem>
           </SelectContent>
         </Select>
+        <div className="flex items-center gap-1 text-[12px] text-muted-foreground">
+          <Input
+            type="date"
+            value={range.from ?? ""}
+            max={range.to ?? undefined}
+            onChange={(e) => setRangeEdge("from", e.target.value)}
+            className="h-8 w-[138px] text-[12px]"
+            title="From"
+          />
+          <span>–</span>
+          <Input
+            type="date"
+            value={range.to ?? ""}
+            min={range.from ?? undefined}
+            onChange={(e) => setRangeEdge("to", e.target.value)}
+            className="h-8 w-[138px] text-[12px]"
+            title="To"
+          />
+        </div>
+
+        {/* Status pills — click to light any number; none lit = all. */}
         {statusOptions.length > 0 && (
-          <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v ?? "all")}>
-            <SelectTrigger className="h-8 w-40 cursor-pointer text-[13px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All statuses</SelectItem>
-              {statusOptions.map(([value, label]) => (
-                <SelectItem key={value} value={value}>
+          <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Status">
+            {statusOptions.map(([value, label]) => {
+              const on = statusFilters.has(value);
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() => toggleStatus(value)}
+                  className={cn(
+                    "cursor-pointer rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-colors",
+                    on
+                      ? "border-emerald-600 bg-emerald-600 text-white dark:border-emerald-500 dark:bg-emerald-500"
+                      : "border-border bg-background text-muted-foreground hover:border-emerald-600/50 hover:text-foreground",
+                  )}
+                >
                   {label}
+                </button>
+              );
+            })}
+            {statusFilters.size > 0 && (
+              <button
+                type="button"
+                onClick={() => setStatusFilters(new Set())}
+                className="cursor-pointer px-1 text-[11px] text-muted-foreground hover:text-foreground"
+                title="Show every status"
+              >
+                clear
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Rebate sheet: plan pills, window, and generate. */}
+        {tab === "rebate" && (
+          <>
+            <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Rebate plan">
+              {rebatePlans.map((b) => {
+                const on = rebatePlanFilter.has(b.plan_id);
+                return (
+                  <button
+                    key={b.plan_id}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => toggleRebatePlan(b.plan_id)}
+                    title={`${BONUS_PERIOD_LABELS[b.period ?? "daily"]} · ${b.percentage}%`}
+                    className={cn(
+                      "cursor-pointer rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-colors",
+                      on
+                        ? "border-sky-600 bg-sky-600 text-white dark:border-sky-500 dark:bg-sky-500"
+                        : "border-border bg-background text-muted-foreground hover:border-sky-600/50 hover:text-foreground",
+                    )}
+                  >
+                    {b.name}
+                  </button>
+                );
+              })}
+            </div>
+            <Select
+              value={rebateWindowFilter}
+              onValueChange={(v) => setRebateWindowFilter(v ?? "all")}
+              items={[{ value: "all", label: "All windows" }, ...rebateWindows]}
+            >
+              <SelectTrigger className="h-8 w-[220px] cursor-pointer text-[13px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all" className="cursor-pointer">
+                  All windows
                 </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+                {rebateWindows.map((w) => (
+                  <SelectItem key={w.value} value={w.value} className="cursor-pointer">
+                    {w.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {!isViewer && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 cursor-pointer gap-1.5"
+                onClick={handleGenerateRebate}
+                disabled={generatingRebate || rebatePlanFilter.size !== 1}
+                title={
+                  rebatePlanFilter.size === 1
+                    ? "Build the list for the plan's latest closed window"
+                    : "Light exactly one plan pill to generate its latest list"
+                }
+              >
+                {generatingRebate ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5" />
+                )}
+                Generate latest list
+              </Button>
+            )}
+          </>
         )}
         <span className="text-xs text-muted-foreground">
           {rows.length} row{rows.length === 1 ? "" : "s"}

@@ -14,6 +14,7 @@
 
 import { useMemo } from "react";
 import { useStore } from "@/lib/store";
+import { inRange, rangeLabel, type DateRange } from "@/lib/date-range";
 import { formatRM, isBotOnline } from "@/lib/format";
 import { botForName } from "@/lib/bot-category";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -85,7 +86,7 @@ function InfoCard({
   );
 }
 
-export function CompanyInfoPanel({ month }: { month: string | "all" }) {
+export function CompanyInfoPanel({ range }: { range: DateRange }) {
   const bankAccounts = useStore((s) => s.bankAccounts);
   const boAccounts = useStore((s) => s.boAccounts);
   const botHealth = useStore((s) => s.botHealth);
@@ -96,7 +97,7 @@ export function CompanyInfoPanel({ month }: { month: string | "all" }) {
   const companyInScope = useStore((s) => s.companyInScope);
   useStore((s) => s.selectedLeaderId);
 
-  const inMonth = (iso: string) => month === "all" || iso.slice(0, 7) === month;
+  const inMonth = (iso: string) => inRange(iso, range);
 
   const scope = useMemo(() => {
     const banksDeposit = bankAccounts
@@ -145,15 +146,9 @@ export function CompanyInfoPanel({ month }: { month: string | "all" }) {
     }
     return { banksDeposit, banksWithdrawal, games, depTotal, depBonus, depCount, wdTotal, wdCount };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bankAccounts, boAccounts, botHealth, deposits, withdrawals, players, month, selectedCompanyId, companyInScope]);
+  }, [bankAccounts, boAccounts, botHealth, deposits, withdrawals, players, range, selectedCompanyId, companyInScope]);
 
-  const monthLabel =
-    month === "all"
-      ? "All time"
-      : new Date(`${month}-01T00:00:00`).toLocaleString("en-US", {
-          month: "long",
-          year: "numeric",
-        });
+  const monthLabel = rangeLabel(range);
 
   const sum = (rows: { value: number }[]) => rows.reduce((a, r) => a + r.value, 0);
   const net = scope.depTotal - scope.wdTotal;
