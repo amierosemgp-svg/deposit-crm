@@ -46,6 +46,8 @@ import type {
 } from "@/lib/rebates";
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+// Base UI's Select shows the raw value in its trigger unless given the labels.
+const WEEKDAY_ITEMS = WEEKDAYS.map((d, i) => ({ value: String(i), label: d }));
 
 const DEFAULT_CUTOFFS: RebateCutoffs = {
   daily: { time: "00:00" },
@@ -828,6 +830,7 @@ export default function RebatesPage() {
                     setCutoffForm((f) => ({ ...f, weekly: { ...f.weekly, weekday: Number(v) } }))
                   }
                   disabled={!isAdmin}
+                  items={WEEKDAY_ITEMS}
                 >
                   <SelectTrigger className="w-[150px] cursor-pointer">
                     <SelectValue />

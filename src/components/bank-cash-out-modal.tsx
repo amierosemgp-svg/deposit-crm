@@ -62,6 +62,19 @@ export function BankCashOutModal({ open, onOpenChange, account, onRecorded }: Pr
     return company?.parent_entity_id ?? null;
   }, [entities, account]);
 
+  // Base UI's Select renders the raw value in the trigger unless it's told
+  // what each value is called — hence the items map.
+  const takenByItems = useMemo(
+    () => [
+      ...leaders.map((l) => ({
+        value: String(l.entity_id),
+        label: l.entity_id === ownLeaderId ? `${l.name} · this company's leader` : l.name,
+      })),
+      { value: OTHER, label: "Someone else…" },
+    ],
+    [leaders, ownLeaderId],
+  );
+
   const [amount, setAmount] = useState("");
   const [takenBy, setTakenBy] = useState<string>("");
   const [otherName, setOtherName] = useState("");
@@ -153,20 +166,16 @@ export function BankCashOutModal({ open, onOpenChange, account, onRecorded }: Pr
 
             <div className="space-y-1.5">
               <Label>Taken by</Label>
-              <Select value={takenBy} onValueChange={(v) => setTakenBy(v ?? "")}>
+              <Select value={takenBy} onValueChange={(v) => setTakenBy(v ?? "")} items={takenByItems}>
                 <SelectTrigger className="w-full cursor-pointer">
                   <SelectValue placeholder="Who took the cash" />
                 </SelectTrigger>
                 <SelectContent>
-                  {leaders.map((l) => (
-                    <SelectItem key={l.entity_id} value={String(l.entity_id)} className="cursor-pointer">
-                      {l.name}
-                      {l.entity_id === ownLeaderId ? " · this company's leader" : ""}
+                  {takenByItems.map((it) => (
+                    <SelectItem key={it.value} value={it.value} className="cursor-pointer">
+                      {it.label}
                     </SelectItem>
                   ))}
-                  <SelectItem value={OTHER} className="cursor-pointer">
-                    Someone else…
-                  </SelectItem>
                 </SelectContent>
               </Select>
               {takenBy === OTHER && (
