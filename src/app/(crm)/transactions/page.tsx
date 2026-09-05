@@ -72,12 +72,54 @@ import {
 
 type TabKey = "deposit" | "withdrawal" | "freecredit" | "transfer" | "expense";
 
+/**
+ * Column order per sheet, in workflow order: who handles it, then everything
+ * CS fills in for a new row (grouped so a Tab-run walks straight through
+ * them), then what the CRM derives — status, when it happened, remarks.
+ * Every column index in this file comes from here, so reordering a sheet is
+ * a one-line change.
+ */
+const COLUMN_KEYS = {
+  deposit: [
+    "assignee", "member", "product", "username", "amount", "bonuspct", "bonus",
+    "bank", "status", "date", "time", "remark", "bankdesc",
+  ],
+  withdrawal: [
+    "assignee", "member", "product", "username", "amount", "bank", "account",
+    "status", "date", "time", "remark2",
+  ],
+  freecredit: [
+    "by", "member", "product", "username", "amount", "mode", "remark",
+    "status", "date", "time",
+  ],
+  transfer: [
+    "assignee", "member", "from", "username", "to", "amount",
+    "status", "date", "time", "note",
+  ],
+  expense: ["by", "date", "category", "description", "amount", "company", "notes"],
+} as const satisfies Record<TabKey, readonly string[]>;
+
+type ColKey<T extends TabKey> = (typeof COLUMN_KEYS)[T][number];
+
+/** Column index by key, per sheet: `COL.deposit.amount`. */
+const COL = Object.fromEntries(
+  (Object.keys(COLUMN_KEYS) as TabKey[]).map((tab) => [
+    tab,
+    Object.fromEntries(COLUMN_KEYS[tab].map((k, i) => [k, i])),
+  ]),
+) as { [T in TabKey]: Record<ColKey<T>, number> };
+
+/** Cells in a sheet's column order from a record keyed by column. */
+function toCells<T extends TabKey>(tab: T, rec: Partial<Record<ColKey<T>, string>>): string[] {
+  return (COLUMN_KEYS[tab] as readonly ColKey<T>[]).map((k) => rec[k] ?? "");
+}
+
 /** Per tab, which entry cell holds the game login and which holds its game. */
 const LOGIN_COLS: Record<TabKey, { userCol: number; gameCol: number } | null> = {
-  deposit: { userCol: 5, gameCol: 6 },
-  withdrawal: { userCol: 3, gameCol: 4 },
-  freecredit: { userCol: 3, gameCol: 4 },
-  transfer: { userCol: 3, gameCol: 4 },
+  deposit: { userCol: COL.deposit.username, gameCol: COL.deposit.product },
+  withdrawal: { userCol: COL.withdrawal.username, gameCol: COL.withdrawal.product },
+  freecredit: { userCol: COL.freecredit.username, gameCol: COL.freecredit.product },
+  transfer: { userCol: COL.transfer.username, gameCol: COL.transfer.from },
   expense: null,
 };
 
@@ -99,6 +141,12 @@ const MIN_BLANK_ROWS = 8;
 
 function sheetDate(iso: string): string {
   const d = new Date(iso);
+  return `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}`;
+}
+
+/** Today, the workbook's way — what a fresh entry row's Date cell shows. */
+function todaySheetDate(): string {
+  const d = new Date();
   return `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}`;
 }
 
@@ -190,14 +238,6 @@ function transferTone(s: GameTransfer["status"]): SheetRow["tone"] {
   return "default";
 }
 
-function contactType(p: Player | undefined): string {
-  if (!p) return "";
-  if (p.telegram_username) return "Telegram";
-  if (p.wechat_id) return "WeChat";
-  if (p.contact_number) return "Phone";
-  return "";
-}
-
 function gameUsername(p: Player | undefined, game: string | null | undefined): string {
   if (!p?.game_accounts?.length) return "";
   if (game) {
@@ -226,15 +266,35 @@ async function post(path: string, body: unknown): Promise<{ ok: boolean; error?:
   }
 }
 
-const blankRow = (n: number) => Array<string>(n).fill("");
+/**
+ * A fresh entry row. Not quite empty: the Date cell is pre-filled with today,
+ * since a row typed now happened now (the server stamps the real time at
+ * save; a bot-sourced row shows its own date and time once it's committed).
+ */
+function blankRow(tab: TabKey): string[] {
+  const row = Array<string>(COLUMN_KEYS[tab].length).fill("");
+  const dateCol = (COL[tab] as Record<string, number | undefined>).date;
+  if (dateCol !== undefined) row[dateCol] = todaySheetDate();
+  return row;
+}
+
+/**
+ * "Blank" for an entry row means nothing typed — the auto-filled Date cell
+ * doesn't count, or every padding row would read as a half-entered one.
+ */
+function isBlankDraft(tab: TabKey, d: string[]): boolean {
+  const dateCol = (COL[tab] as Record<string, number | undefined>).date;
+  return d.every((v, i) => i === dateCol || !v.trim());
+}
 
 /** Keep the entry area padded with blank rows so there is always room to type. */
-function padDrafts(drafts: string[][], nCols: number): string[][] {
+function padDrafts(drafts: string[][], tab: TabKey): string[][] {
+  const nCols = COLUMN_KEYS[tab].length;
   const next = drafts.filter((d) => d.length === nCols || d.some((v) => v));
   let trailing = 0;
-  for (let i = next.length - 1; i >= 0 && next[i].every((v) => !v); i--) trailing++;
+  for (let i = next.length - 1; i >= 0 && isBlankDraft(tab, next[i]); i--) trailing++;
   const want = Math.max(MIN_BLANK_ROWS - next.length, 3 - trailing);
-  for (let i = 0; i < want; i++) next.push(blankRow(nCols));
+  for (let i = 0; i < want; i++) next.push(blankRow(tab));
   return next;
 }
 
@@ -245,13 +305,14 @@ function padDrafts(drafts: string[][], nCols: number): string[][] {
  * server computes the real figure at save; this cell is the entry-time view.)
  */
 function computeDepositBonus(drafts: string[][]): string[][] {
+  const c = COL.deposit;
   return drafts.map((row) => {
-    const amt = parseAmount(row[9] ?? "");
-    const pct = parseBonusPct(row[7] ?? "");
+    const amt = parseAmount(row[c.amount] ?? "");
+    const pct = parseBonusPct(row[c.bonuspct] ?? "");
     const bonus = amt && pct ? fmtAmount((amt * pct) / 100) : "";
-    if ((row[10] ?? "") === bonus) return row;
+    if ((row[c.bonus] ?? "") === bonus) return row;
     const out = [...row];
-    out[10] = bonus;
+    out[c.bonus] = bonus;
     return out;
   });
 }
@@ -418,90 +479,92 @@ export default function TransactionsPage() {
     [],
   );
 
-  const columnsByTab = useMemo<Record<TabKey, SheetColumn[]>>(
-    () => ({
-      deposit: [
-        { key: "member", label: "Member Code", width: 110, entry: true, required: true, options: memberSuggestions, placeholder: "member code" },
-        { key: "remark", label: "Remark / Name", width: 200 },
-        { key: "contact", label: "Contact Type", width: 100 },
-        { key: "date", label: "Date", width: 82, align: "center" },
-        { key: "time", label: "Time", width: 56, align: "center" },
-        { key: "username", label: "Username", width: 130, entry: true, placeholder: "game login" },
-        { key: "product", label: "Product", width: 110, entry: true, options: games, placeholder: "game" },
-        { key: "bonuspct", label: "Bonus %", width: 76, align: "right", numeric: true, entry: true, placeholder: "10", dropdown: true },
-        { key: "bank", label: "Bank", width: 110, entry: true, required: true, options: banks, placeholder: "bank" },
-        { key: "amount", label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "100" },
-        { key: "bonus", label: "Bonus", width: 90, align: "right", numeric: true },
-        { key: "status", label: "Status", width: 116 },
-        { key: "assignee", label: "Assignee", width: 110 },
-      ],
-      withdrawal: [
-        { key: "member", label: "Member Code", width: 110, entry: true, required: true, options: memberSuggestions, placeholder: "member code" },
-        { key: "date", label: "Date", width: 82, align: "center" },
-        { key: "time", label: "Time", width: 56, align: "center" },
-        { key: "username", label: "Username", width: 130, entry: true, placeholder: "game login" },
-        { key: "product", label: "Product", width: 110, entry: true, required: true, options: games, placeholder: "game" },
-        { key: "bank", label: "Bank", width: 110, entry: true, options: banks, placeholder: "bank" },
-        { key: "amount", label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "100 / ALL" },
-        { key: "account", label: "Bank Account", width: 150, entry: true, placeholder: "account no." },
-        { key: "remark2", label: "Remark 2", width: 200 },
-        { key: "status", label: "Status", width: 116 },
-        { key: "assignee", label: "Assignee", width: 110 },
-      ],
-      freecredit: [
-        { key: "member", label: "Member Code", width: 110, entry: true, required: true, options: memberSuggestions, placeholder: "member code" },
-        { key: "date", label: "Date", width: 82, align: "center" },
-        { key: "time", label: "Time", width: 56, align: "center" },
-        { key: "username", label: "Username", width: 130, entry: true, placeholder: "game login" },
-        { key: "product", label: "Product", width: 110, entry: true, required: true, options: games, placeholder: "game" },
-        { key: "amount", label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "50" },
-        { key: "mode", label: "Mode", width: 90, entry: true, options: MODE_SUGGESTIONS, placeholder: "bot / manual" },
-        { key: "remark", label: "Remark", width: 220, entry: true, placeholder: "reason (optional)" },
-        { key: "status", label: "Status", width: 116 },
-        { key: "by", label: "By", width: 130 },
-      ],
-      transfer: [
-        { key: "member", label: "Member Code", width: 110, entry: true, required: true, options: memberSuggestions, placeholder: "member code" },
-        { key: "date", label: "Date", width: 82, align: "center" },
-        { key: "time", label: "Time", width: 56, align: "center" },
-        { key: "username", label: "Username", width: 130, entry: true, placeholder: "game login" },
-        { key: "from", label: "From Game", width: 110, entry: true, required: true, options: games, placeholder: "from game" },
-        { key: "to", label: "To Game", width: 110, entry: true, required: true, options: games, placeholder: "to game" },
-        { key: "amount", label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "100 / ALL" },
-        { key: "status", label: "Status", width: 116 },
-        { key: "note", label: "Note", width: 240 },
-        { key: "assignee", label: "Assignee", width: 110 },
-      ],
-      expense: [
-        { key: "date", label: "Date", width: 92, align: "center", entry: true, required: true, placeholder: "2026-09-01" },
-        { key: "category", label: "Category", width: 110, entry: true, required: true, options: [...EXPENSE_CATEGORIES], placeholder: "category" },
-        { key: "description", label: "Description", width: 260, entry: true, required: true, placeholder: "what it's for" },
-        { key: "amount", label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "100" },
-        {
-          key: "company",
-          label: "Company",
-          width: 150,
-          entry: true,
-          options: companies.map((c) => c.company_name),
-          placeholder: "company",
-        },
-        { key: "notes", label: "Notes", width: 240, entry: true, placeholder: "notes (optional)" },
-        { key: "by", label: "Recorded By", width: 130 },
-      ],
-    }),
-    [games, banks, companies, memberSuggestions, MODE_SUGGESTIONS],
-  );
+  // Column definitions by key; COLUMN_KEYS decides the order they appear in.
+  const columnsByTab = useMemo<Record<TabKey, SheetColumn[]>>(() => {
+    type Def = Omit<SheetColumn, "key">;
+    const member: Def = { label: "Member Code", width: 110, entry: true, required: true, options: memberSuggestions, placeholder: "member code" };
+    const username: Def = { label: "Username", width: 130, entry: true, placeholder: "game login" };
+    const date: Def = { label: "Date", width: 82, align: "center" };
+    const time: Def = { label: "Time", width: 56, align: "center" };
+    const status: Def = { label: "Status", width: 116 };
+    const assignee: Def = { label: "Assignee", width: 110 };
+    const order = <T extends TabKey>(tab: T, defs: Record<ColKey<T>, Def>): SheetColumn[] =>
+      (COLUMN_KEYS[tab] as readonly ColKey<T>[]).map((key) => ({ key, ...defs[key] }));
+    return {
+      deposit: order("deposit", {
+        assignee,
+        member,
+        product: { label: "Product", width: 110, entry: true, options: games, placeholder: "game" },
+        username,
+        amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "100" },
+        bonuspct: { label: "Bonus %", width: 76, align: "right", numeric: true, entry: true, placeholder: "10", dropdown: true },
+        bonus: { label: "Bonus", width: 90, align: "right", numeric: true },
+        bank: { label: "Bank", width: 110, entry: true, required: true, options: banks, placeholder: "bank" },
+        status,
+        date,
+        time,
+        remark: { label: "Remark / Name", width: 200 },
+        bankdesc: { label: "Bank Description", width: 260 },
+      }),
+      withdrawal: order("withdrawal", {
+        assignee,
+        member,
+        product: { label: "Product", width: 110, entry: true, required: true, options: games, placeholder: "game" },
+        username,
+        amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "100 / ALL" },
+        bank: { label: "Bank", width: 110, entry: true, options: banks, placeholder: "bank" },
+        account: { label: "Bank Account", width: 150, entry: true, placeholder: "account no." },
+        status,
+        date,
+        time,
+        remark2: { label: "Remark 2", width: 200 },
+      }),
+      freecredit: order("freecredit", {
+        by: { label: "By", width: 130 },
+        member,
+        product: { label: "Product", width: 110, entry: true, required: true, options: games, placeholder: "game" },
+        username,
+        amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "50" },
+        mode: { label: "Mode", width: 90, entry: true, options: MODE_SUGGESTIONS, placeholder: "bot / manual" },
+        remark: { label: "Remark", width: 220, entry: true, placeholder: "reason (optional)" },
+        status,
+        date,
+        time,
+      }),
+      transfer: order("transfer", {
+        assignee,
+        member,
+        from: { label: "From Game", width: 110, entry: true, required: true, options: games, placeholder: "from game" },
+        username,
+        to: { label: "To Game", width: 110, entry: true, required: true, options: games, placeholder: "to game" },
+        amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "100 / ALL" },
+        status,
+        date,
+        time,
+        note: { label: "Note", width: 240 },
+      }),
+      expense: order("expense", {
+        by: { label: "Recorded By", width: 130 },
+        date: { label: "Date", width: 92, align: "center", entry: true, required: true, placeholder: "31/8/2026" },
+        category: { label: "Category", width: 110, entry: true, required: true, options: [...EXPENSE_CATEGORIES], placeholder: "category" },
+        description: { label: "Description", width: 260, entry: true, required: true, placeholder: "what it's for" },
+        amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "100" },
+        company: { label: "Company", width: 150, entry: true, options: companies.map((c) => c.company_name), placeholder: "company" },
+        notes: { label: "Notes", width: 240, entry: true, placeholder: "notes (optional)" },
+      }),
+    };
+  }, [games, banks, companies, memberSuggestions, MODE_SUGGESTIONS]);
 
   const columns = columnsByTab[tab];
 
   // ---- drafts, one set per tab so switching loses nothing ----
 
   const [draftsByTab, setDraftsByTab] = useState<Record<TabKey, string[][]>>(() => ({
-    deposit: padDrafts([], 12),
-    withdrawal: padDrafts([], 10),
-    freecredit: padDrafts([], 10),
-    transfer: padDrafts([], 9),
-    expense: padDrafts([], 7),
+    deposit: padDrafts([], "deposit"),
+    withdrawal: padDrafts([], "withdrawal"),
+    freecredit: padDrafts([], "freecredit"),
+    transfer: padDrafts([], "transfer"),
+    expense: padDrafts([], "expense"),
   }));
   // Server rejections from the last save, keyed by the draft row's identity.
   const [commitErrors, setCommitErrors] = useState<Map<string, string>>(new Map());
@@ -556,9 +619,10 @@ export default function TransactionsPage() {
   const enrichMemberChanges = useCallback(
     (prev: string[][], next: string[][]): string[][] => {
       if (tab === "expense") return next;
+      const memberCol = COL[tab].member;
       return next.map((row, i) => {
-        const member = row[0]?.trim().toLowerCase() ?? "";
-        const prevMember = prev[i]?.[0]?.trim().toLowerCase() ?? "";
+        const member = row[memberCol]?.trim().toLowerCase() ?? "";
+        const prevMember = prev[i]?.[memberCol]?.trim().toLowerCase() ?? "";
         if (!member || member === prevMember) return row;
         const pl = playerByCode.get(member);
         if (!pl) return row;
@@ -575,22 +639,25 @@ export default function TransactionsPage() {
           ? pl.bank_accounts[pl.bank_accounts.length - 1]
           : undefined;
         if (tab === "deposit") {
-          fill(1, pl.full_name);
-          fill(2, contactType(pl));
-          fill(5, lastGame?.game_username);
-          fill(6, lastGame?.game_name);
+          const c = COL.deposit;
+          fill(c.remark, pl.full_name);
+          fill(c.username, lastGame?.game_username);
+          fill(c.product, lastGame?.game_name);
         } else if (tab === "withdrawal") {
-          fill(3, lastGame?.game_username);
-          fill(4, lastGame?.game_name);
-          fill(5, lastBank?.bank_name);
-          fill(7, lastBank?.account_number);
-          fill(8, pl.full_name);
+          const c = COL.withdrawal;
+          fill(c.username, lastGame?.game_username);
+          fill(c.product, lastGame?.game_name);
+          fill(c.bank, lastBank?.bank_name);
+          fill(c.account, lastBank?.account_number);
+          fill(c.remark2, pl.full_name);
         } else if (tab === "freecredit") {
-          fill(3, lastGame?.game_username);
-          fill(4, lastGame?.game_name);
+          const c = COL.freecredit;
+          fill(c.username, lastGame?.game_username);
+          fill(c.product, lastGame?.game_name);
         } else if (tab === "transfer") {
-          fill(3, lastGame?.game_username);
-          fill(4, lastGame?.game_name);
+          const c = COL.transfer;
+          fill(c.username, lastGame?.game_username);
+          fill(c.from, lastGame?.game_name);
         }
         return out;
       });
@@ -603,9 +670,9 @@ export default function TransactionsPage() {
       setDraftsByTab((prev) => {
         let processed = enrichMemberChanges(prev[tab], next);
         if (tab === "deposit") processed = computeDepositBonus(processed);
-        return { ...prev, [tab]: padDrafts(processed, columns.length) };
+        return { ...prev, [tab]: padDrafts(processed, tab) };
       }),
-    [tab, columns.length, enrichMemberChanges],
+    [tab, enrichMemberChanges],
   );
 
 
@@ -632,24 +699,27 @@ export default function TransactionsPage() {
         return {
           id: d.deposit_id,
           tone: depositTone(d.status),
-          cells: [
-            d.player_username ?? p?.username ?? "",
-            p?.full_name ??
+          cells: toCells("deposit", {
+            assignee: d.assigned_to_user_id ? userName(d.assigned_to_user_id) : "",
+            member: d.player_username ?? p?.username ?? "",
+            product: d.selected_game ?? "",
+            username: gameUsername(p, d.selected_game),
+            amount: fmtAmount(d.deposit_amount),
+            bonuspct: pct ? `${pct}%` : "—",
+            bonus: d.bonus_amount ? fmtAmount(d.bonus_amount) : "—",
+            bank: d.bank_name,
+            status: DEPOSIT_STATUS_LABEL[d.status],
+            // Bot-matched rows carry the bank's own timestamp; a sheet-entered
+            // row only knows its date.
+            date: sheetDate(d.deposit_date),
+            time: d.deposit_time_known ? formatClock(d.deposit_date) : "",
+            remark:
+              p?.full_name ??
               extractSenderName(d.bank_description) ??
               d.bank_account_holder ??
               "",
-            contactType(p),
-            sheetDate(d.deposit_date),
-            d.deposit_time_known ? formatClock(d.deposit_date) : "",
-            gameUsername(p, d.selected_game),
-            d.selected_game ?? "",
-            pct ? `${pct}%` : "—",
-            d.bank_name,
-            fmtAmount(d.deposit_amount),
-            d.bonus_amount ? fmtAmount(d.bonus_amount) : "—",
-            DEPOSIT_STATUS_LABEL[d.status],
-            d.assigned_to_user_id ? userName(d.assigned_to_user_id) : "",
-          ],
+            bankdesc: d.bank_description ?? "",
+          }),
         };
       })
       .filter((r) => matchesSearch(r.cells));
@@ -674,19 +744,19 @@ export default function TransactionsPage() {
         return {
           id: w.withdrawal_id,
           tone: withdrawalTone(w.status),
-          cells: [
-            p?.username ?? "",
-            sheetDate(w.created_at),
-            formatClock(w.created_at),
-            gameUsername(p, w.game_name),
-            w.game_name,
-            w.bank_name ?? "",
-            w.withdraw_all && !amount ? "ALL" : fmtAmount(amount),
-            w.bank_account_number ?? "",
-            p?.full_name ?? "",
-            WITHDRAWAL_STATUS_LABEL[w.status],
-            w.assigned_to_user_id ? userName(w.assigned_to_user_id) : "",
-          ],
+          cells: toCells("withdrawal", {
+            assignee: w.assigned_to_user_id ? userName(w.assigned_to_user_id) : "",
+            member: p?.username ?? "",
+            product: w.game_name,
+            username: gameUsername(p, w.game_name),
+            amount: w.withdraw_all && !amount ? "ALL" : fmtAmount(amount),
+            bank: w.bank_name ?? "",
+            account: w.bank_account_number ?? "",
+            status: WITHDRAWAL_STATUS_LABEL[w.status],
+            date: sheetDate(w.created_at),
+            time: formatClock(w.created_at),
+            remark2: p?.full_name ?? "",
+          }),
         };
       })
       .filter((r) => matchesSearch(r.cells));
@@ -717,22 +787,22 @@ export default function TransactionsPage() {
             : transfer
               ? transferTone(transfer.status)
               : ("warning" as const),
-          cells: [
-            p?.username ?? "",
-            sheetDate(f.created_at),
-            formatClock(f.created_at),
-            gameUsername(p, f.game_name),
-            f.game_name ?? "",
-            fmtAmount(amount),
-            manual ? "manual" : "bot",
-            f.reason ?? "",
-            manual
+          cells: toCells("freecredit", {
+            by: userName(f.user_id),
+            member: p?.username ?? "",
+            product: f.game_name ?? "",
+            username: gameUsername(p, f.game_name),
+            amount: fmtAmount(amount),
+            mode: manual ? "manual" : "bot",
+            remark: f.reason ?? "",
+            status: manual
               ? "Credited"
               : transfer
                 ? TRANSFER_STATUS_LABEL[transfer.status]
                 : "Queued",
-            userName(f.user_id),
-          ],
+            date: sheetDate(f.created_at),
+            time: formatClock(f.created_at),
+          }),
         };
       })
       .filter((r) => matchesSearch(r.cells));
@@ -753,18 +823,18 @@ export default function TransactionsPage() {
         return {
           id: t.transfer_id,
           tone: transferTone(t.status),
-          cells: [
-            p?.username ?? "",
-            sheetDate(t.created_at),
-            formatClock(t.created_at),
-            gameUsername(p, t.from_game),
-            t.from_game,
-            t.to_game,
-            t.transfer_all && !t.transfer_amount ? "ALL" : fmtAmount(t.transfer_amount),
-            TRANSFER_STATUS_LABEL[t.status],
-            t.note ?? "",
-            t.assigned_to_user_id ? userName(t.assigned_to_user_id) : "",
-          ],
+          cells: toCells("transfer", {
+            assignee: t.assigned_to_user_id ? userName(t.assigned_to_user_id) : "",
+            member: p?.username ?? "",
+            from: t.from_game,
+            username: gameUsername(p, t.from_game),
+            to: t.to_game,
+            amount: t.transfer_all && !t.transfer_amount ? "ALL" : fmtAmount(t.transfer_amount),
+            status: TRANSFER_STATUS_LABEL[t.status],
+            date: sheetDate(t.created_at),
+            time: formatClock(t.created_at),
+            note: t.note ?? "",
+          }),
         };
       })
       .filter((r) => matchesSearch(r.cells));
@@ -779,15 +849,15 @@ export default function TransactionsPage() {
       .map((e: Expense) => ({
         id: e.expense_id,
         tone: "default" as const,
-        cells: [
-          sheetDate(e.expense_date),
-          e.category,
-          e.description,
-          fmtAmount(e.amount),
-          e.company_entity_id ? (companyNameById.get(e.company_entity_id) ?? "") : "",
-          e.notes ?? "",
-          userName(e.recorded_by_user_id),
-        ],
+        cells: toCells("expense", {
+          by: userName(e.recorded_by_user_id),
+          date: sheetDate(e.expense_date),
+          category: e.category,
+          description: e.description,
+          amount: fmtAmount(e.amount),
+          company: e.company_entity_id ? (companyNameById.get(e.company_entity_id) ?? "") : "",
+          notes: e.notes ?? "",
+        }),
       }))
       .filter((r) => matchesSearch(r.cells));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -830,11 +900,13 @@ export default function TransactionsPage() {
 
   const handleEditStart = useCallback(
     (rowIndex: number, colIndex: number) => {
-      if (tab !== "deposit" || colIndex !== 7) return;
+      if (tab !== "deposit" || colIndex !== COL.deposit.bonuspct) return;
       if (rowIndex >= rows.length) {
         const d = drafts[rowIndex - rows.length];
-        const pl = d ? playerByCode.get(d[0]?.trim().toLowerCase() ?? "") : undefined;
-        if (pl) loadBonusOptions(pl.player_id, parseAmount(d[9] ?? "") ?? 0);
+        const pl = d
+          ? playerByCode.get(d[COL.deposit.member]?.trim().toLowerCase() ?? "")
+          : undefined;
+        if (pl) loadBonusOptions(pl.player_id, parseAmount(d[COL.deposit.amount] ?? "") ?? 0);
       } else {
         // In-place edit on a saved pending deposit — pass the deposit id so a
         // recurring bonus doesn't count this very deposit against itself.
@@ -887,7 +959,7 @@ export default function TransactionsPage() {
 
   const committedSuggestions = useCallback(
     (rowIndex: number, colIndex: number) => {
-      if (tab !== "deposit" || colIndex !== 7) return undefined;
+      if (tab !== "deposit" || colIndex !== COL.deposit.bonuspct) return undefined;
       const dep = depositById.get(Number(rows[rowIndex]?.id));
       if (!dep?.player_id) return undefined;
       return buildBonusSuggestions(
@@ -904,8 +976,13 @@ export default function TransactionsPage() {
       // Login picker: the player's linked logins for the row's game, so CS can
       // choose which account under that game the transaction hits.
       const loginCfg = LOGIN_COLS[tab];
+      const memberCol = (COL[tab] as Record<string, number | undefined>).member;
+      const memberOf = (row: string[] | undefined) =>
+        row && memberCol !== undefined
+          ? playerByCode.get(row[memberCol]?.trim().toLowerCase() ?? "")
+          : undefined;
       if (loginCfg && colIndex === loginCfg.userCol) {
-        const pl = d ? playerByCode.get(d[0]?.trim().toLowerCase() ?? "") : undefined;
+        const pl = memberOf(d);
         const gameCell = d?.[loginCfg.gameCol]?.trim().toLowerCase() ?? "";
         if (!pl || !gameCell) return undefined;
         const logins = (pl.game_accounts ?? []).filter(
@@ -914,8 +991,8 @@ export default function TransactionsPage() {
         if (logins.length <= 1) return undefined; // one login: nothing to pick
         return logins.map((a) => ({ value: a.game_username, hint: a.game_name }));
       }
-      if (tab !== "deposit" || colIndex !== 7) return undefined;
-      const pl = d ? playerByCode.get(d[0]?.trim().toLowerCase() ?? "") : undefined;
+      if (tab !== "deposit" || colIndex !== COL.deposit.bonuspct) return undefined;
+      const pl = memberOf(d);
       if (!pl) {
         // No player yet — eligibility is meaningless without one, so the
         // dropdown says only that, mirroring the Deposits page's picker.
@@ -929,7 +1006,7 @@ export default function TransactionsPage() {
           },
         ];
       }
-      const amt = parseAmount(d[9] ?? "") ?? 0;
+      const amt = parseAmount(d[COL.deposit.amount] ?? "") ?? 0;
       return buildBonusSuggestions(
         bonusOptionsCache.get(`${pl.player_id}:${amt}:0`),
         amt,
@@ -946,7 +1023,13 @@ export default function TransactionsPage() {
 
   const parseDepositDraft = useCallback(
     (d: string[]): Parsed => {
-      const [member, , , , , username, product, bonuspct, bank, amount] = d;
+      const c = COL.deposit;
+      const member = d[c.member] ?? "";
+      const username = d[c.username] ?? "";
+      const product = d[c.product] ?? "";
+      const bonuspct = d[c.bonuspct] ?? "";
+      const bank = d[c.bank] ?? "";
+      const amount = d[c.amount] ?? "";
       const player = playerByCode.get(member.trim().toLowerCase());
       if (!player) return { ok: false, error: `Unknown member code "${member.trim()}"` };
       const amt = parseAmount(amount);
@@ -982,7 +1065,13 @@ export default function TransactionsPage() {
 
   const parseWithdrawalDraft = useCallback(
     (d: string[]): Parsed => {
-      const [member, , , username, product, bank, amount, account] = d;
+      const c = COL.withdrawal;
+      const member = d[c.member] ?? "";
+      const username = d[c.username] ?? "";
+      const product = d[c.product] ?? "";
+      const bank = d[c.bank] ?? "";
+      const amount = d[c.amount] ?? "";
+      const account = d[c.account] ?? "";
       const player = playerByCode.get(member.trim().toLowerCase());
       if (!player) return { ok: false, error: `Unknown member code "${member.trim()}"` };
       const g = gameByName.get(product.trim().toLowerCase());
@@ -1008,7 +1097,13 @@ export default function TransactionsPage() {
 
   const parseFreeCreditDraft = useCallback(
     (d: string[]): Parsed => {
-      const [member, , , username, product, amount, mode, remark] = d;
+      const c = COL.freecredit;
+      const member = d[c.member] ?? "";
+      const username = d[c.username] ?? "";
+      const product = d[c.product] ?? "";
+      const amount = d[c.amount] ?? "";
+      const mode = d[c.mode] ?? "";
+      const remark = d[c.remark] ?? "";
       const player = playerByCode.get(member.trim().toLowerCase());
       if (!player) return { ok: false, error: `Unknown member code "${member.trim()}"` };
       const g = gameByName.get(product.trim().toLowerCase());
@@ -1044,7 +1139,12 @@ export default function TransactionsPage() {
 
   const parseTransferDraft = useCallback(
     (d: string[]): Parsed => {
-      const [member, , , username, from, to, amount] = d;
+      const c = COL.transfer;
+      const member = d[c.member] ?? "";
+      const username = d[c.username] ?? "";
+      const from = d[c.from] ?? "";
+      const to = d[c.to] ?? "";
+      const amount = d[c.amount] ?? "";
       const player = playerByCode.get(member.trim().toLowerCase());
       if (!player) return { ok: false, error: `Unknown member code "${member.trim()}"` };
       const fromGame = gameByName.get(from.trim().toLowerCase());
@@ -1072,7 +1172,13 @@ export default function TransactionsPage() {
 
   const parseExpenseDraft = useCallback(
     (d: string[]): Parsed => {
-      const [date, category, description, amount, company, notes] = d;
+      const c = COL.expense;
+      const date = d[c.date] ?? "";
+      const category = d[c.category] ?? "";
+      const description = d[c.description] ?? "";
+      const amount = d[c.amount] ?? "";
+      const company = d[c.company] ?? "";
+      const notes = d[c.notes] ?? "";
       const expense_date = date.trim()
         ? parseSheetDate(date)
         : new Date().toISOString().slice(0, 10);
@@ -1117,7 +1223,7 @@ export default function TransactionsPage() {
 
   const draftStatus = useCallback(
     (d: string[]): DraftStatus => {
-      if (d.every((v) => !v.trim())) return { state: "empty" };
+      if (isBlankDraft(tab, d)) return { state: "empty" };
       const rejected = commitErrors.get(draftKey(d));
       if (rejected) return { state: "error", message: rejected };
       const parsed = parseDraft(d);
@@ -1125,7 +1231,7 @@ export default function TransactionsPage() {
         ? { state: "ready" }
         : { state: "error", message: parsed.error };
     },
-    [parseDraft, commitErrors, draftKey],
+    [tab, parseDraft, commitErrors, draftKey],
   );
 
   const readyCount = useMemo(
@@ -1152,7 +1258,10 @@ export default function TransactionsPage() {
   }, [expenses]);
 
   /** Columns of a saved deposit row that edit in place, while it still can. */
-  const DEPOSIT_EDITABLE_COLS = useMemo(() => new Set([0, 6, 7]), []); // member, product, bonus %
+  const DEPOSIT_EDITABLE_COLS = useMemo(
+    () => new Set([COL.deposit.member, COL.deposit.product, COL.deposit.bonuspct]),
+    [],
+  );
   const committedEditable = useCallback(
     (rowIndex: number, colIndex: number): boolean => {
       if (tab !== "deposit" || isViewer) return false;
@@ -1168,7 +1277,7 @@ export default function TransactionsPage() {
       const dep = depositById.get(Number(rows[rowIndex]?.id));
       if (!dep) return;
       const v = value.trim();
-      if (colIndex === 0) {
+      if (colIndex === COL.deposit.member) {
         const pl = playerByCode.get(v.toLowerCase());
         if (!pl) {
           toast.error(`Unknown member code "${v}" — player not changed`);
@@ -1176,7 +1285,7 @@ export default function TransactionsPage() {
         }
         const res = await updateDepositDraft(dep.deposit_id, { player_id: pl.player_id });
         if (!res.ok) toast.error(res.error ?? "Failed to assign player");
-      } else if (colIndex === 6) {
+      } else if (colIndex === COL.deposit.product) {
         if (!v) {
           const res = await updateDepositDraft(dep.deposit_id, { selected_game: null });
           if (!res.ok) toast.error(res.error ?? "Failed to clear game");
@@ -1189,7 +1298,7 @@ export default function TransactionsPage() {
         }
         const res = await updateDepositDraft(dep.deposit_id, { selected_game: g });
         if (!res.ok) toast.error(res.error ?? "Failed to set game");
-      } else if (colIndex === 7) {
+      } else if (colIndex === COL.deposit.bonuspct) {
         const pct = parseBonusPct(value);
         if (pct === null) {
           toast.error(`Bad bonus % "${value}"`);
@@ -1535,7 +1644,7 @@ export default function TransactionsPage() {
     if (saving || isViewer) return;
     const jobs = drafts
       .map((d, i) => ({ d, i, parsed: parseDraft(d) }))
-      .filter((j) => !j.d.every((v) => !v.trim()) && j.parsed.ok) as Array<{
+      .filter((j) => !isBlankDraft(tab, j.d) && j.parsed.ok) as Array<{
       d: string[];
       i: number;
       parsed: { ok: true; payload: Record<string, unknown> };
@@ -1560,7 +1669,7 @@ export default function TransactionsPage() {
       }
     }
     const remaining = drafts.filter((_, i) => !succeeded.has(i));
-    setDraftsByTab((prev) => ({ ...prev, [tab]: padDrafts(remaining, columns.length) }));
+    setDraftsByTab((prev) => ({ ...prev, [tab]: padDrafts(remaining, tab) }));
     setCommitErrors(failures);
     setSaving(false);
     await Promise.all([refresh(), loadFreeCredits()]);
@@ -1580,7 +1689,7 @@ export default function TransactionsPage() {
       toast.success(`${succeeded.size} ${noun}${succeeded.size === 1 ? "" : "s"} saved`);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [saving, isViewer, drafts, parseDraft, tab, commitErrors, draftKey, columns.length, refresh, loadFreeCredits]);
+  }, [saving, isViewer, drafts, parseDraft, tab, commitErrors, draftKey, refresh, loadFreeCredits]);
 
   // Cmd/Ctrl+S saves the ready entry rows from anywhere on the page — and
   // preventDefault stops the browser's own "save this page" dialog.
