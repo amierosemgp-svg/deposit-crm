@@ -9,12 +9,17 @@ import {
   rebatePlanData,
 } from "@/lib/rebates";
 
-const schema = z.object({ plan_id: z.number().int().positive() });
+const schema = z.object({
+  plan_id: z.number().int().positive(),
+  // The end cutoff of the window to build. Omit for the latest closed one.
+  window_end: z.string().optional(),
+});
 
 /**
- * POST /api/rebates/generate — snapshot the latest closed window of a rebate
- * plan into payout rows. Re-running before anything is paid replaces the
- * list; once a row is paid the window is frozen (409).
+ * POST /api/rebates/generate — snapshot a closed window of a rebate plan into
+ * payout rows: the latest by default, or an earlier one named by `window_end`.
+ * Re-running before anything is paid replaces the list; once a row is paid
+ * the window is frozen (409).
  */
 export async function POST(request: Request) {
   try {
@@ -24,7 +29,12 @@ export async function POST(request: Request) {
     const plan = await loadRebatePlanForUser(user, parsed.data.plan_id);
     const cutoffs = await loadRebateCutoffs();
 
-    const result = await generateRebateList(plan, cutoffs, user);
+    let windowEnd: Date | undefined;
+    if (parsed.data.window_end !== undefined) {
+      windowEnd = new Date(parsed.data.window_end);
+      if (Number.isNaN(windowEnd.getTime())) return jsonError("Bad window_end");
+    }
+    const result = await generateRebateList(plan, cutoffs, user, new Date(), windowEnd);
     if (!result.ok) return jsonError(result.reason, result.status);
 
     await logActivity({

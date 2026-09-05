@@ -169,6 +169,23 @@ export function currentWindow(period: BonusPeriod, c: RebateCutoffs, now = new D
   return { start, end: shiftCutoff(period, c, start, 1) };
 }
 
+/** The last `n` closed windows, newest first — what "Generate" may be pointed at. */
+export function recentClosedWindows(
+  period: BonusPeriod,
+  c: RebateCutoffs,
+  n: number,
+  now = new Date(),
+): RebateWindow[] {
+  const out: RebateWindow[] = [];
+  let end = latestCutoff(period, c, now);
+  for (let i = 0; i < n; i++) {
+    const start = shiftCutoff(period, c, end, -1);
+    out.push({ start, end });
+    end = start;
+  }
+  return out;
+}
+
 // ---- who qualifies ----------------------------------------------------------
 
 export type RebateCandidate = {
@@ -321,20 +338,34 @@ export type GenerateResult =
   | { ok: false; status: number; reason: string };
 
 /**
- * Snapshot the latest closed window for a plan. Re-running before anything is
- * paid replaces the list (a withdrawal paid after the first run would change
- * the figures); once any row is paid the list is frozen.
+ * Snapshot one closed window for a plan — the latest by default, or any
+ * earlier one (a day nobody ran) named by its end cutoff. Re-running before
+ * anything is paid replaces the list (a withdrawal paid after the first run
+ * would change the figures); once any row is paid the list is frozen.
  */
 export async function generateRebateList(
   plan: BonusPlan,
   cutoffs: RebateCutoffs,
   user: AuthedUser,
   now = new Date(),
+  windowEnd?: Date,
 ): Promise<GenerateResult> {
   if (plan.type !== "rebate" || !plan.period) {
     return { ok: false, status: 400, reason: `"${plan.name}" is not a rebate plan` };
   }
-  const window = latestClosedWindow(plan.period, cutoffs, now);
+  let window: RebateWindow;
+  if (windowEnd) {
+    // Only a real cutoff instant that has already passed names a window —
+    // anything else would measure a loss over a span no one agreed on.
+    const latest = latestCutoff(plan.period, cutoffs, now);
+    const onCutoff = latestCutoff(plan.period, cutoffs, windowEnd).getTime() === windowEnd.getTime();
+    if (!onCutoff || windowEnd.getTime() > latest.getTime()) {
+      return { ok: false, status: 400, reason: "That isn't a closed window for this plan's cutoffs" };
+    }
+    window = { start: shiftCutoff(plan.period, cutoffs, windowEnd, -1), end: windowEnd };
+  } else {
+    window = latestClosedWindow(plan.period, cutoffs, now);
+  }
   const startIso = window.start.toISOString();
 
   const existing = await db
@@ -426,6 +457,8 @@ export type RebateWindowSummary = {
   window_end: string;
   rows: number;
   paid: number;
+  pending: number;
+  skipped: number;
   total: number;
   generated_at: string;
 };
@@ -446,6 +479,8 @@ export async function listRebateWindows(
       window_end: rebatePayouts.window_end,
       rows: sql<number>`count(*)::int`,
       paid: sql<number>`count(*) filter (where ${rebatePayouts.status} = 'paid')::int`,
+      pending: sql<number>`count(*) filter (where ${rebatePayouts.status} = 'pending')::int`,
+      skipped: sql<number>`count(*) filter (where ${rebatePayouts.status} = 'skipped')::int`,
       total: sql<number>`coalesce(sum(${rebatePayouts.amount}) filter (where ${rebatePayouts.status} <> 'skipped'), 0)::float8`,
       generated_at: sql<string>`max(${rebatePayouts.generated_at})`,
     })
@@ -534,17 +569,42 @@ export async function loadRebatePlanForUser(user: AuthedUser, planId: number): P
   return plan;
 }
 
+/**
+ * One row of the page's window list: a closed window, generated or not.
+ * ISO instants throughout (Postgres' own spelling is normalised away) so the
+ * client can key on `start` and pass it straight back.
+ */
+export type RebateWindowRow = {
+  start: string;
+  end: string;
+  generated: boolean;
+  rows: number;
+  paid: number;
+  pending: number;
+  skipped: number;
+  total: number;
+  generated_at: string | null;
+  /** Something in it is paid — the list can't be regenerated. */
+  frozen: boolean;
+};
+
 /** Everything the Rebates page shows for one plan tab. */
 export type RebatePlanData = {
   plan: BonusPlan;
   cutoffs: RebateCutoffs;
   cutoff_label: string;
-  latest_window: { start: string; end: string; generated: boolean };
   current_window: { start: string; end: string };
-  windows: RebateWindowSummary[];
-  selected_window_start: string | null;
+  /** Recent closed windows plus any older generated ones, newest first. */
+  windows: RebateWindowRow[];
+  /** The window whose payouts were asked for, or null. */
+  payouts_for: string | null;
   payouts: RebatePayoutView[];
 };
+
+/** How many closed windows the list always shows, generated or not. */
+const RECENT_WINDOWS = 14;
+
+const iso = (s: string | Date) => new Date(s).toISOString();
 
 export async function rebatePlanData(
   plan: BonusPlan,
@@ -554,30 +614,65 @@ export async function rebatePlanData(
   now = new Date(),
 ): Promise<RebatePlanData> {
   const period = plan.period ?? "daily";
-  const latest = latestClosedWindow(period, cutoffs, now);
   const current = currentWindow(period, cutoffs, now);
-  const windows = await listRebateWindows(plan.plan_id, companyIds);
-  const latestIso = latest.start.toISOString();
-  // Postgres hands timestamps back in its own spelling, so windows are
-  // matched as instants, never as strings.
-  const sameInstant = (a: string, b: string) => new Date(a).getTime() === new Date(b).getTime();
-  const selected =
-    (requestedWindowStart &&
-      windows.find((w) => sameInstant(w.window_start, requestedWindowStart))?.window_start) ||
-    (windows[0]?.window_start ?? null);
-  const payouts = selected ? await listRebatePayouts(plan.plan_id, selected, companyIds) : [];
+  const generated = await listRebateWindows(plan.plan_id, companyIds);
+  const byStart = new Map(generated.map((g) => [iso(g.window_start), g]));
+
+  const rows = new Map<string, RebateWindowRow>();
+  for (const w of recentClosedWindows(period, cutoffs, RECENT_WINDOWS, now)) {
+    const start = w.start.toISOString();
+    const g = byStart.get(start);
+    rows.set(start, {
+      start,
+      end: w.end.toISOString(),
+      generated: !!g,
+      rows: g?.rows ?? 0,
+      paid: g?.paid ?? 0,
+      pending: g?.pending ?? 0,
+      skipped: g?.skipped ?? 0,
+      total: g?.total ?? 0,
+      generated_at: g ? iso(g.generated_at) : null,
+      frozen: (g?.paid ?? 0) > 0,
+    });
+  }
+  // Older generated windows (or ones from before a cutoff change) still show.
+  for (const g of generated) {
+    const start = iso(g.window_start);
+    if (rows.has(start)) continue;
+    rows.set(start, {
+      start,
+      end: iso(g.window_end),
+      generated: true,
+      rows: g.rows,
+      paid: g.paid,
+      pending: g.pending,
+      skipped: g.skipped,
+      total: g.total,
+      generated_at: iso(g.generated_at),
+      frozen: g.paid > 0,
+    });
+  }
+  const windows = [...rows.values()].sort((a, b) => (a.end < b.end ? 1 : a.end > b.end ? -1 : 0));
+
+  // Payouts for one window, when asked: query by the DB's own spelling of the
+  // start so the equality matches.
+  let payouts: RebatePayoutView[] = [];
+  let payoutsFor: string | null = null;
+  if (requestedWindowStart) {
+    const g = generated.find((x) => iso(x.window_start) === iso(requestedWindowStart));
+    if (g) {
+      payoutsFor = iso(g.window_start);
+      payouts = await listRebatePayouts(plan.plan_id, g.window_start, companyIds);
+    }
+  }
+
   return {
     plan,
     cutoffs,
     cutoff_label: describeCutoff(period, cutoffs),
-    latest_window: {
-      start: latestIso,
-      end: latest.end.toISOString(),
-      generated: windows.some((w) => sameInstant(w.window_start, latestIso)),
-    },
     current_window: { start: current.start.toISOString(), end: current.end.toISOString() },
     windows,
-    selected_window_start: selected,
+    payouts_for: payoutsFor,
     payouts,
   };
 }

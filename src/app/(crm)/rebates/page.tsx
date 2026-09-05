@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import {
-  CheckCircle2,
+  ChevronDown,
   Loader2,
   Percent,
   Play,
@@ -42,6 +42,7 @@ import type {
   RebateLiveStatus,
   RebatePayoutView,
   RebatePlanData,
+  RebateWindowRow,
 } from "@/lib/rebates";
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -79,16 +80,15 @@ const STATUS: Record<RebateLiveStatus, { label: string; className: string }> = {
   },
 };
 
-function StatusPill({ status }: { status: RebateLiveStatus }) {
-  const s = STATUS[status];
+function Pill({ label, className }: { label: string; className: string }) {
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium",
-        s.className,
+        "inline-flex items-center whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium",
+        className,
       )}
     >
-      {s.label}
+      {label}
     </span>
   );
 }
@@ -97,7 +97,19 @@ function windowLabel(start: string, end: string): string {
   return `${formatShortDateTime(start)} → ${formatShortDateTime(end)}`;
 }
 
-async function call<T>(path: string, init?: RequestInit): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
+/** The one-line state of a window, for its collapsed row. */
+function windowPill(w: RebateWindowRow) {
+  if (!w.generated) return <Pill label="Not generated" className={STATUS.skipped.className} />;
+  if (w.rows === 0) return <Pill label="No losses" className={STATUS.skipped.className} />;
+  if (w.pending > 0) return <Pill label={`${w.pending} pending`} className={STATUS.pending.className} />;
+  if (w.paid > 0) return <Pill label={w.paid === w.rows ? "All paid" : `${w.paid} paid`} className={STATUS.credited.className} />;
+  return <Pill label="All skipped" className={STATUS.skipped.className} />;
+}
+
+async function call<T>(
+  path: string,
+  init?: RequestInit,
+): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
   try {
     const res = await fetch(path, {
       ...init,
@@ -112,9 +124,11 @@ async function call<T>(path: string, init?: RequestInit): Promise<{ ok: true; da
 }
 
 /**
- * Rebates — the daily / weekly / monthly lists. One tab per rebate plan;
- * "Generate" snapshots the window that just closed, and each row pays out as
- * a free credit to the game the player lost on.
+ * Rebates — the daily / weekly / monthly lists. One tab per rebate plan; the
+ * tab is a list of closed windows, newest first, each row a summary that
+ * expands into that window's payouts. Any closed window can be generated
+ * from its row (a day nobody ran), and each payout goes out as a free credit
+ * to the game the player lost on.
  */
 export default function RebatesPage() {
   const me = useStore((s) => s.me);
@@ -141,84 +155,137 @@ export default function RebatesPage() {
         )
         .sort((a, b) => {
           const order = { daily: 0, weekly: 1, monthly: 2 } as const;
-          const pa = order[a.period ?? "daily"];
-          const pb = order[b.period ?? "daily"];
-          return pa - pb || a.name.localeCompare(b.name);
+          return (
+            order[a.period ?? "daily"] - order[b.period ?? "daily"] || a.name.localeCompare(b.name)
+          );
         }),
     [bonusPlans, companyInScope],
   );
 
   const [planId, setPlanId] = useState<number | null>(null);
-  const activePlan: BonusPlan | undefined =
-    plans.find((p) => p.plan_id === planId) ?? plans[0];
+  const activePlan: BonusPlan | undefined = plans.find((p) => p.plan_id === planId) ?? plans[0];
+  const activePlanId = activePlan?.plan_id ?? null;
 
-  const [windowStart, setWindowStart] = useState<string | null>(null);
   const [data, setData] = useState<RebatePlanData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [version, setVersion] = useState(0);
-  const [generating, setGenerating] = useState(false);
+  // Expanded windows (by start) and the payouts loaded for each.
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const [payoutsByWindow, setPayoutsByWindow] = useState<Record<string, RebatePayoutView[]>>({});
+  const [loadingWindow, setLoadingWindow] = useState<string | null>(null);
+  const [generatingWindow, setGeneratingWindow] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [version, setVersion] = useState(0);
 
-  const load = useCallback(async () => {
-    if (!activePlan) return;
-    const q = new URLSearchParams({ plan_id: String(activePlan.plan_id) });
-    if (windowStart) q.set("window_start", windowStart);
-    const res = await call<RebatePlanData>(`/api/rebates?${q}`);
+  const loadPlan = useCallback(async (id: number) => {
+    const res = await call<RebatePlanData>(`/api/rebates?plan_id=${id}`);
     if (!res.ok) {
       setLoadError(res.error);
-      return;
+      return null;
     }
     setLoadError(null);
     setData(res.data);
-  }, [activePlan, windowStart]);
+    return res.data;
+  }, []);
 
+  const loadWindow = useCallback(async (id: number, start: string) => {
+    const q = new URLSearchParams({ plan_id: String(id), window_start: start });
+    const res = await call<RebatePlanData>(`/api/rebates?${q}`);
+    if (!res.ok) {
+      toast.error(res.error);
+      return;
+    }
+    setData(res.data);
+    if (res.data.payouts_for) {
+      const key = res.data.payouts_for;
+      const rows = res.data.payouts;
+      setPayoutsByWindow((m) => ({ ...m, [key]: rows }));
+    }
+  }, []);
+
+  // Tab change: fresh list, the newest window open.
   useEffect(() => {
+    if (activePlanId === null) return;
     let cancelled = false;
-    if (!activePlan) return;
     void (async () => {
-      const q = new URLSearchParams({ plan_id: String(activePlan.plan_id) });
-      if (windowStart) q.set("window_start", windowStart);
-      const res = await call<RebatePlanData>(`/api/rebates?${q}`);
-      if (cancelled) return;
-      if (!res.ok) setLoadError(res.error);
-      else {
-        setLoadError(null);
-        setData(res.data);
+      const d = await loadPlan(activePlanId);
+      if (cancelled || !d) return;
+      const first = d.windows[0];
+      if (first) {
+        setExpanded(new Set([first.start]));
+        if (first.generated) await loadWindow(activePlanId, first.start);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [activePlan, windowStart, version]);
+  }, [activePlanId, loadPlan, loadWindow]);
 
-  // Agent progress on queued credits shows up without a click.
+  // Agent progress on queued credits shows up without a click: refresh the
+  // list and every open window every 15 s.
   useEffect(() => {
     const t = setInterval(() => setVersion((v) => v + 1), 15_000);
     return () => clearInterval(t);
   }, []);
+  useEffect(() => {
+    if (version === 0 || activePlanId === null) return;
+    void (async () => {
+      const d = await loadPlan(activePlanId);
+      if (!d) return;
+      for (const start of expanded) {
+        const w = d.windows.find((x) => x.start === start);
+        if (w?.generated) await loadWindow(activePlanId, start);
+      }
+    })();
+    // Only the tick drives this; the rest is read at tick time.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [version]);
 
-  const showing = data && activePlan && data.plan.plan_id === activePlan.plan_id ? data : null;
-  const payouts = showing?.payouts ?? [];
-  const pendingRows = payouts.filter((p) => p.live_status === "pending");
-  const pendingTotal = pendingRows.reduce((s, p) => s + p.amount, 0);
-  const listTotal = payouts
-    .filter((p) => p.live_status !== "skipped")
-    .reduce((s, p) => s + p.amount, 0);
+  const refreshWindow = useCallback(
+    async (start: string) => {
+      if (activePlanId === null) return;
+      await loadWindow(activePlanId, start);
+    },
+    [activePlanId, loadWindow],
+  );
 
-  async function generate() {
-    if (!activePlan || generating) return;
-    setGenerating(true);
+  async function toggle(w: RebateWindowRow) {
+    const next = new Set(expanded);
+    if (next.has(w.start)) {
+      next.delete(w.start);
+      setExpanded(next);
+      return;
+    }
+    next.add(w.start);
+    setExpanded(next);
+    if (w.generated && !payoutsByWindow[w.start] && activePlanId !== null) {
+      setLoadingWindow(w.start);
+      await loadWindow(activePlanId, w.start);
+      setLoadingWindow(null);
+    }
+  }
+
+  async function generate(w: RebateWindowRow) {
+    if (!activePlan || generatingWindow) return;
+    setGeneratingWindow(w.start);
     const res = await call<RebatePlanData & { inserted: number; replaced: number }>(
       "/api/rebates/generate",
-      { method: "POST", body: JSON.stringify({ plan_id: activePlan.plan_id }) },
+      {
+        method: "POST",
+        body: JSON.stringify({ plan_id: activePlan.plan_id, window_end: w.end }),
+      },
     );
-    setGenerating(false);
+    setGeneratingWindow(null);
     if (!res.ok) {
       toast.error(res.error);
       return;
     }
-    setWindowStart(res.data.selected_window_start);
     setData(res.data);
+    if (res.data.payouts_for) {
+      const key = res.data.payouts_for;
+      const rows = res.data.payouts;
+      setPayoutsByWindow((m) => ({ ...m, [key]: rows }));
+    }
+    setExpanded((s) => new Set(s).add(w.start));
     toast.success(
       res.data.inserted === 0
         ? "No player lost money in that window — nothing to pay"
@@ -230,13 +297,13 @@ export default function RebatesPage() {
 
   // ---- pay ----
 
-  type PayTarget = { rows: RebatePayoutView[]; single: boolean };
+  type PayTarget = { rows: RebatePayoutView[]; single: boolean; windowStart: string };
   const [payTarget, setPayTarget] = useState<PayTarget | null>(null);
   const [payGame, setPayGame] = useState("");
   const [paySkipBot, setPaySkipBot] = useState(false);
 
-  function startPay(rows: RebatePayoutView[], single: boolean) {
-    setPayTarget({ rows, single });
+  function startPay(rows: RebatePayoutView[], single: boolean, windowStart: string) {
+    setPayTarget({ rows, single, windowStart });
     setPayGame(single ? (rows[0]?.game_name ?? "") : "");
     setPaySkipBot(false);
   }
@@ -252,34 +319,36 @@ export default function RebatesPage() {
       ),
       skip_bot: paySkipBot,
     };
-    const res = await call<{ paid: number; total: number; failed: Array<{ payout_id: number; error: string }> }>(
-      "/api/rebates/pay",
-      { method: "POST", body: JSON.stringify(body) },
-    );
+    const res = await call<{
+      paid: number;
+      total: number;
+      failed: Array<{ payout_id: number; error: string }>;
+    }>("/api/rebates/pay", { method: "POST", body: JSON.stringify(body) });
     setBusy(false);
     if (!res.ok) {
       toast.error(res.error);
       return;
     }
+    const target = payTarget;
     setPayTarget(null);
     if (res.data.paid) {
       toast.success(
-        `${formatRM(res.data.total)} ${paySkipBot ? "credited" : "queued for the agent"} — ${res.data.paid} rebate${
-          res.data.paid === 1 ? "" : "s"
-        }`,
+        `${formatRM(res.data.total)} ${paySkipBot ? "credited" : "queued for the agent"} — ${
+          res.data.paid
+        } rebate${res.data.paid === 1 ? "" : "s"}`,
       );
     }
     for (const f of res.data.failed.slice(0, 3)) {
-      const row = payouts.find((p) => p.payout_id === f.payout_id);
+      const row = target.rows.find((p) => p.payout_id === f.payout_id);
       toast.error(`${row?.username ?? `#${f.payout_id}`}: ${f.error}`);
     }
     if (res.data.failed.length > 3) {
       toast.error(`${res.data.failed.length - 3} more rows could not be paid`);
     }
-    void load();
+    void refreshWindow(target.windowStart);
   }
 
-  async function setRowStatus(row: RebatePayoutView, status: "pending" | "skipped") {
+  async function setRowStatus(row: RebatePayoutView, status: "pending" | "skipped", windowStart: string) {
     if (busy) return;
     setBusy(true);
     const res = await call(`/api/rebates/${row.payout_id}`, {
@@ -291,7 +360,7 @@ export default function RebatesPage() {
       toast.error(res.error);
       return;
     }
-    void load();
+    void refreshWindow(windowStart);
   }
 
   // ---- cutoffs ----
@@ -301,19 +370,19 @@ export default function RebatesPage() {
   const [savingCutoffs, setSavingCutoffs] = useState(false);
 
   function openCutoffs() {
-    const c = showing?.cutoffs ?? settings.rebate_cutoffs ?? DEFAULT_CUTOFFS;
-    setCutoffForm({
-      daily: { ...c.daily },
-      weekly: { ...c.weekly },
-      monthly: { ...c.monthly },
-    });
+    const c = data?.cutoffs ?? settings.rebate_cutoffs ?? DEFAULT_CUTOFFS;
+    setCutoffForm({ daily: { ...c.daily }, weekly: { ...c.weekly }, monthly: { ...c.monthly } });
     setEditingCutoffs(true);
   }
 
   async function saveCutoffs() {
     if (savingCutoffs) return;
     const timeOk = (t: string) => /^([01]?\d|2[0-3]):[0-5]\d$/.test(t);
-    if (!timeOk(cutoffForm.daily.time) || !timeOk(cutoffForm.weekly.time) || !timeOk(cutoffForm.monthly.time)) {
+    if (
+      !timeOk(cutoffForm.daily.time) ||
+      !timeOk(cutoffForm.weekly.time) ||
+      !timeOk(cutoffForm.monthly.time)
+    ) {
       toast.error("Times must be HH:MM");
       return;
     }
@@ -329,11 +398,13 @@ export default function RebatesPage() {
       return;
     }
     setEditingCutoffs(false);
-    setVersion((v) => v + 1);
+    // New boundaries: the window list is different now.
+    if (activePlanId !== null) void loadPlan(activePlanId);
   }
 
   // ---- render ----
 
+  const showing = data && activePlan && data.plan.plan_id === activePlan.plan_id ? data : null;
   const payGames = payTarget?.single
     ? (playerById(payTarget.rows[0]?.player_id)?.game_accounts ?? []).map((g) => g.game_name)
     : [];
@@ -344,8 +415,8 @@ export default function RebatesPage() {
         <div>
           <h1 className="text-2xl font-semibold">Rebates</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            A share of what each player lost — deposits minus withdrawals — over the
-            day, week or month. Generate the list once the window closes, then pay it.
+            A share of what each player lost — deposits minus withdrawals — over the day,
+            week or month. Each row is one window: generate its list once it closes, then pay it.
           </p>
         </div>
         <Button
@@ -386,8 +457,13 @@ export default function RebatesPage() {
                   key={p.plan_id}
                   type="button"
                   onClick={() => {
+                    if (p.plan_id === activePlan?.plan_id) return;
+                    // A fresh tab: drop the old list so nothing stale shows
+                    // while the new one loads (the effect does the loading).
+                    setData(null);
+                    setExpanded(new Set());
+                    setPayoutsByWindow({});
                     setPlanId(p.plan_id);
-                    setWindowStart(null);
                   }}
                   className={cn(
                     "-mb-px flex cursor-pointer items-center gap-2 border-b-2 px-3 py-2 text-sm transition-colors",
@@ -406,208 +482,246 @@ export default function RebatesPage() {
           </div>
 
           {activePlan && (
-            <Card className="space-y-4 p-5">
-              {/* Window strip: what just closed, what's still open, generate. */}
-              <div className="flex flex-wrap items-end justify-between gap-3">
-                <div className="space-y-1 text-sm">
-                  <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                    Latest closed window · resets {showing?.cutoff_label ?? "…"}
-                  </div>
-                  <div className="font-medium tabular-nums">
-                    {showing ? windowLabel(showing.latest_window.start, showing.latest_window.end) : "…"}
-                    {showing?.latest_window.generated && (
-                      <span className="ml-2 inline-flex items-center gap-1 text-[11px] font-normal text-emerald-700 dark:text-emerald-400">
-                        <CheckCircle2 className="h-3 w-3" /> generated
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-xs text-muted-foreground tabular-nums">
-                    Current window {showing ? windowLabel(showing.current_window.start, showing.current_window.end) : "…"} — closes at the next cutoff
-                  </div>
+            <Card className="p-0">
+              {/* Plan strip: the cutoff rule and the window still open. */}
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-3 text-xs text-muted-foreground">
+                <div>
+                  Resets <span className="font-medium text-foreground">{showing?.cutoff_label ?? "…"}</span>
                   {activePlan.min_loss > 0 && (
-                    <div className="text-xs text-muted-foreground">
-                      Only losses of {formatRM(activePlan.min_loss)} or more qualify
-                    </div>
+                    <> · only losses of {formatRM(activePlan.min_loss)} or more qualify</>
                   )}
                 </div>
-                <div className="flex items-center gap-2">
-                  {showing && showing.windows.length > 0 && (
-                    <Select
-                      value={showing.selected_window_start ?? ""}
-                      onValueChange={(v) => setWindowStart(v || null)}
-                    >
-                      <SelectTrigger className="w-[300px] cursor-pointer">
-                        <SelectValue placeholder="Window" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {showing.windows.map((w) => (
-                          <SelectItem key={w.window_start} value={w.window_start} className="cursor-pointer">
-                            {windowLabel(w.window_start, w.window_end)} · {w.rows} row{w.rows === 1 ? "" : "s"}
-                            {w.paid ? ` · ${w.paid} paid` : ""}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
-                  {!isViewer && (
-                    <Button
-                      onClick={generate}
-                      disabled={generating || !showing}
-                      className="cursor-pointer"
-                      title={
-                        showing?.latest_window.generated
-                          ? "Re-run for the latest closed window (only while nothing in it is paid)"
-                          : "Build the list for the latest closed window"
-                      }
-                    >
-                      {generating ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <RefreshCw className="h-3.5 w-3.5" />
-                      )}
-                      {showing?.latest_window.generated ? "Regenerate latest list" : "Generate latest list"}
-                    </Button>
-                  )}
+                <div className="tabular-nums">
+                  Current window{" "}
+                  {showing ? windowLabel(showing.current_window.start, showing.current_window.end) : "…"} —
+                  closes at the next cutoff
                 </div>
               </div>
 
               {loadError ? (
-                <p className="text-sm text-red-600">{loadError}</p>
+                <p className="px-5 py-4 text-sm text-red-600">{loadError}</p>
               ) : !showing ? (
-                <ListLoading label="Loading…" />
-              ) : payouts.length === 0 ? (
-                <div className="py-10 text-center text-sm text-muted-foreground">
-                  {showing.windows.length === 0
-                    ? "No list generated yet — generate the latest closed window to see who qualifies."
-                    : "No player lost money in this window."}
+                <div className="px-5 py-4">
+                  <ListLoading label="Loading…" />
                 </div>
               ) : (
-                <>
-                  <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-                    <div className="text-muted-foreground">
-                      Showing{" "}
-                      <span className="font-medium text-foreground tabular-nums">
-                        {windowLabel(payouts[0].window_start, payouts[0].window_end)}
-                      </span>
-                      {" · "}
-                      {payouts.length} player{payouts.length === 1 ? "" : "s"} · list total{" "}
-                      <span className="font-medium text-foreground">{formatRM(listTotal)}</span>
-                    </div>
-                    {!isViewer && pendingRows.length > 0 && (
-                      <Button
-                        size="sm"
-                        onClick={() => startPay(pendingRows, false)}
-                        disabled={busy}
-                        className="cursor-pointer"
-                      >
-                        <Play className="h-3.5 w-3.5" />
-                        Pay all pending · {pendingRows.length} · {formatRM(pendingTotal)}
-                      </Button>
-                    )}
-                  </div>
-
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b text-left text-[11px] uppercase tracking-wide text-muted-foreground">
-                          <th className="px-2 py-2 font-medium">Member</th>
-                          <th className="px-2 py-2 font-medium">Company</th>
-                          <th className="px-2 py-2 font-medium">Credit to</th>
-                          <th className="px-2 py-2 text-right font-medium">Deposits</th>
-                          <th className="px-2 py-2 text-right font-medium">Withdrawals</th>
-                          <th className="px-2 py-2 text-right font-medium">Net loss</th>
-                          <th className="px-2 py-2 text-right font-medium">%</th>
-                          <th className="px-2 py-2 text-right font-medium">Rebate</th>
-                          <th className="px-2 py-2 font-medium">Status</th>
-                          <th className="px-2 py-2" />
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {payouts.map((r) => {
-                          const skipped = r.live_status === "skipped";
-                          return (
-                            <tr
-                              key={r.payout_id}
-                              className={cn("border-b last:border-b-0", skipped && "opacity-55")}
-                            >
-                              <td className="px-2 py-2">
-                                <div className="font-medium">
-                                  <PlayerNameLink playerId={r.player_id}>{r.username}</PlayerNameLink>
-                                </div>
-                                <div className="text-[11px] text-muted-foreground">{r.full_name}</div>
-                              </td>
-                              <td className="px-2 py-2 text-xs text-muted-foreground">
-                                {entityName(r.company_entity_id)}
-                              </td>
-                              <td className="px-2 py-2">
-                                {r.game_name ? (
-                                  <>
-                                    <div>{r.game_name}</div>
-                                    <div className="text-[11px] text-muted-foreground">{r.game_username}</div>
-                                  </>
+                <ul className="divide-y divide-border">
+                  {showing.windows.map((w) => {
+                    const open = expanded.has(w.start);
+                    const rows = payoutsByWindow[w.start];
+                    const pendingRows = (rows ?? []).filter((r) => r.live_status === "pending");
+                    const pendingTotal = pendingRows.reduce((s, r) => s + r.amount, 0);
+                    const isGenerating = generatingWindow === w.start;
+                    return (
+                      <li key={w.start}>
+                        {/* Summary row — the whole line toggles; buttons stop the click. */}
+                        <div
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => void toggle(w)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              void toggle(w);
+                            }
+                          }}
+                          className={cn(
+                            "flex cursor-pointer flex-wrap items-center gap-x-4 gap-y-1 px-5 py-2.5 text-sm hover:bg-muted/40",
+                            open && "bg-muted/30",
+                          )}
+                        >
+                          <ChevronDown
+                            className={cn(
+                              "h-4 w-4 shrink-0 text-muted-foreground transition-transform",
+                              open && "rotate-180",
+                            )}
+                          />
+                          <span className="min-w-[300px] font-medium tabular-nums">
+                            {windowLabel(w.start, w.end)}
+                          </span>
+                          {windowPill(w)}
+                          <span className="text-xs text-muted-foreground tabular-nums">
+                            {w.generated ? (
+                              <>
+                                {w.rows} player{w.rows === 1 ? "" : "s"}
+                                {w.paid ? ` · ${w.paid} paid` : ""}
+                                {w.skipped ? ` · ${w.skipped} skipped` : ""}
+                                {" · "}
+                                <span className="font-medium text-foreground">{formatRM(w.total)}</span>
+                                {w.generated_at ? ` · generated ${formatShortDateTime(w.generated_at)}` : ""}
+                              </>
+                            ) : (
+                              "no list yet"
+                            )}
+                          </span>
+                          <span className="ml-auto flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                            {!isViewer && w.generated && pendingRows.length > 0 && open && (
+                              <Button
+                                size="xs"
+                                onClick={() => startPay(pendingRows, false, w.start)}
+                                disabled={busy}
+                                className="cursor-pointer"
+                              >
+                                <Play className="h-3 w-3" />
+                                Pay all · {pendingRows.length} · {formatRM(pendingTotal)}
+                              </Button>
+                            )}
+                            {!isViewer && (
+                              <Button
+                                size="xs"
+                                variant={w.generated ? "outline" : "default"}
+                                onClick={() => void generate(w)}
+                                disabled={isGenerating || w.frozen}
+                                className="cursor-pointer"
+                                title={
+                                  w.frozen
+                                    ? "Something in this window is paid — the list is frozen"
+                                    : w.generated
+                                      ? "Re-run this window; the unpaid list is replaced"
+                                      : "Build the list for this window"
+                                }
+                              >
+                                {isGenerating ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
                                 ) : (
-                                  <span className="text-xs text-red-600">No game account</span>
+                                  <RefreshCw className="h-3 w-3" />
                                 )}
-                              </td>
-                              <td className="px-2 py-2 text-right tabular-nums">{formatRM(r.deposits_total)}</td>
-                              <td className="px-2 py-2 text-right tabular-nums">{formatRM(r.withdrawals_total)}</td>
-                              <td className="px-2 py-2 text-right font-medium tabular-nums">{formatRM(r.net_loss)}</td>
-                              <td className="px-2 py-2 text-right tabular-nums">{r.percentage}%</td>
-                              <td className="px-2 py-2 text-right font-semibold tabular-nums text-emerald-700 dark:text-emerald-400">
-                                {formatRM(r.amount)}
-                              </td>
-                              <td className="px-2 py-2">
-                                <StatusPill status={r.live_status} />
-                                {r.paid_at && (
-                                  <div className="mt-0.5 text-[10px] text-muted-foreground">
-                                    {formatShortDateTime(r.paid_at)} · {userName(r.paid_by_user_id)}
-                                  </div>
-                                )}
-                              </td>
-                              <td className="px-2 py-2 text-right whitespace-nowrap">
-                                {!isViewer && r.live_status === "pending" && (
-                                  <>
-                                    <Button
-                                      size="xs"
-                                      onClick={() => startPay([r], true)}
-                                      disabled={busy}
-                                      className="cursor-pointer"
-                                    >
-                                      Pay
-                                    </Button>
-                                    <Button
-                                      size="xs"
-                                      variant="ghost"
-                                      onClick={() => setRowStatus(r, "skipped")}
-                                      disabled={busy}
-                                      className="ml-1 cursor-pointer text-muted-foreground"
-                                      title="Leave this one out"
-                                    >
-                                      <XCircle className="h-3.5 w-3.5" />
-                                    </Button>
-                                  </>
-                                )}
-                                {!isViewer && skipped && (
-                                  <Button
-                                    size="xs"
-                                    variant="ghost"
-                                    onClick={() => setRowStatus(r, "pending")}
-                                    disabled={busy}
-                                    className="cursor-pointer"
-                                    title="Put it back on the list"
-                                  >
-                                    <Undo2 className="h-3.5 w-3.5" />
-                                    Unskip
-                                  </Button>
-                                )}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </>
+                                {w.generated ? "Regenerate" : "Generate"}
+                              </Button>
+                            )}
+                          </span>
+                        </div>
+
+                        {open && (
+                          <div className="border-t border-border/60 bg-background px-5 py-3">
+                            {!w.generated ? (
+                              <p className="py-3 text-sm text-muted-foreground">
+                                No list for this window yet — Generate measures each player&apos;s loss
+                                between the two cutoffs and lists who qualifies.
+                              </p>
+                            ) : loadingWindow === w.start || !rows ? (
+                              <ListLoading label="Loading payouts…" />
+                            ) : rows.length === 0 ? (
+                              <p className="py-3 text-sm text-muted-foreground">
+                                No player lost money in this window.
+                              </p>
+                            ) : (
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-sm">
+                                  <thead>
+                                    <tr className="border-b text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+                                      <th className="px-2 py-2 font-medium">Member</th>
+                                      <th className="px-2 py-2 font-medium">Company</th>
+                                      <th className="px-2 py-2 font-medium">Credit to</th>
+                                      <th className="px-2 py-2 text-right font-medium">Deposits</th>
+                                      <th className="px-2 py-2 text-right font-medium">Withdrawals</th>
+                                      <th className="px-2 py-2 text-right font-medium">Net loss</th>
+                                      <th className="px-2 py-2 text-right font-medium">%</th>
+                                      <th className="px-2 py-2 text-right font-medium">Rebate</th>
+                                      <th className="px-2 py-2 font-medium">Status</th>
+                                      <th className="px-2 py-2" />
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {rows.map((r) => {
+                                      const skipped = r.live_status === "skipped";
+                                      return (
+                                        <tr
+                                          key={r.payout_id}
+                                          className={cn("border-b last:border-b-0", skipped && "opacity-55")}
+                                        >
+                                          <td className="px-2 py-2">
+                                            <div className="font-medium">
+                                              <PlayerNameLink playerId={r.player_id}>{r.username}</PlayerNameLink>
+                                            </div>
+                                            <div className="text-[11px] text-muted-foreground">{r.full_name}</div>
+                                          </td>
+                                          <td className="px-2 py-2 text-xs text-muted-foreground">
+                                            {entityName(r.company_entity_id)}
+                                          </td>
+                                          <td className="px-2 py-2">
+                                            {r.game_name ? (
+                                              <>
+                                                <div>{r.game_name}</div>
+                                                <div className="text-[11px] text-muted-foreground">
+                                                  {r.game_username}
+                                                </div>
+                                              </>
+                                            ) : (
+                                              <span className="text-xs text-red-600">No game account</span>
+                                            )}
+                                          </td>
+                                          <td className="px-2 py-2 text-right tabular-nums">
+                                            {formatRM(r.deposits_total)}
+                                          </td>
+                                          <td className="px-2 py-2 text-right tabular-nums">
+                                            {formatRM(r.withdrawals_total)}
+                                          </td>
+                                          <td className="px-2 py-2 text-right font-medium tabular-nums">
+                                            {formatRM(r.net_loss)}
+                                          </td>
+                                          <td className="px-2 py-2 text-right tabular-nums">{r.percentage}%</td>
+                                          <td className="px-2 py-2 text-right font-semibold tabular-nums text-emerald-700 dark:text-emerald-400">
+                                            {formatRM(r.amount)}
+                                          </td>
+                                          <td className="px-2 py-2">
+                                            <Pill {...STATUS[r.live_status]} />
+                                            {r.paid_at && (
+                                              <div className="mt-0.5 text-[10px] text-muted-foreground">
+                                                {formatShortDateTime(r.paid_at)} · {userName(r.paid_by_user_id)}
+                                              </div>
+                                            )}
+                                          </td>
+                                          <td className="px-2 py-2 text-right whitespace-nowrap">
+                                            {!isViewer && r.live_status === "pending" && (
+                                              <>
+                                                <Button
+                                                  size="xs"
+                                                  onClick={() => startPay([r], true, w.start)}
+                                                  disabled={busy}
+                                                  className="cursor-pointer"
+                                                >
+                                                  Pay
+                                                </Button>
+                                                <Button
+                                                  size="xs"
+                                                  variant="ghost"
+                                                  onClick={() => setRowStatus(r, "skipped", w.start)}
+                                                  disabled={busy}
+                                                  className="ml-1 cursor-pointer text-muted-foreground"
+                                                  title="Leave this one out"
+                                                >
+                                                  <XCircle className="h-3.5 w-3.5" />
+                                                </Button>
+                                              </>
+                                            )}
+                                            {!isViewer && skipped && (
+                                              <Button
+                                                size="xs"
+                                                variant="ghost"
+                                                onClick={() => setRowStatus(r, "pending", w.start)}
+                                                disabled={busy}
+                                                className="cursor-pointer"
+                                                title="Put it back on the list"
+                                              >
+                                                <Undo2 className="h-3.5 w-3.5" />
+                                                Unskip
+                                              </Button>
+                                            )}
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
               )}
             </Card>
           )}
@@ -663,7 +777,12 @@ export default function RebatesPage() {
                 </label>
               </div>
               <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={() => setPayTarget(null)} disabled={busy} className="cursor-pointer">
+                <Button
+                  variant="outline"
+                  onClick={() => setPayTarget(null)}
+                  disabled={busy}
+                  className="cursor-pointer"
+                >
                   Cancel
                 </Button>
                 <Button
@@ -681,12 +800,15 @@ export default function RebatesPage() {
       </Dialog>
 
       {/* Cutoff times */}
-      <Dialog open={editingCutoffs} onOpenChange={(o) => !o && !savingCutoffs && setEditingCutoffs(false)}>
+      <Dialog
+        open={editingCutoffs}
+        onOpenChange={(o) => !o && !savingCutoffs && setEditingCutoffs(false)}
+      >
         <DialogContent className="sm:max-w-md">
           <DialogTitle>Cutoff times</DialogTitle>
           <DialogDescription>
             When a rebate day, week and month roll over, in Malaysia time. A window runs from
-            one cutoff to the next; &quot;Generate&quot; builds the window that most recently closed.
+            one cutoff to the next; &quot;Generate&quot; measures the loss between them.
             {!isAdmin && " Only the super admin can change these."}
           </DialogDescription>
           <div className="space-y-4 py-2">
@@ -759,7 +881,11 @@ export default function RebatesPage() {
             </p>
           </div>
           <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setEditingCutoffs(false)} className="cursor-pointer">
+            <Button
+              variant="outline"
+              onClick={() => setEditingCutoffs(false)}
+              className="cursor-pointer"
+            >
               {isAdmin ? "Cancel" : "Close"}
             </Button>
             {isAdmin && (
