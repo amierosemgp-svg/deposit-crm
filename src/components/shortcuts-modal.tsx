@@ -89,7 +89,6 @@ const GROUPS: Group[] = [
       { keys: [MOD, "C"], label: "Complete a deposit" },
       { keys: [MOD, "B"], label: "Mark a withdrawal paid" },
       { keys: [MOD, "I"], label: "Retry a failed deposit / transfer" },
-      { keys: [MOD, "R"], label: "Reject" },
       { keys: [MOD, "D"], label: "Delete an expense" },
       { keys: ["Esc"], label: "Clear the selection" },
     ],

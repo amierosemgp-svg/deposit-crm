@@ -1624,12 +1624,12 @@ export default function TransactionsPage() {
         // ⌘I, not ⌘T — the browser reserves ⌘T / Ctrl+T for "new tab" and the
         // page never receives it.
         else if (k === "i" && can.retryDep) run = handleRetryDeposits;
-        else if (k === "r" && can.rejectDep) run = handleRejectDeposits;
+        // No key for Reject on purpose: ⌘R / Ctrl+R is the browser's reload,
+        // and a destructive action must never sit on a reflex keystroke.
       } else if (tab === "withdrawal") {
         if (k === "p" && can.pull) run = handlePull;
         // ⌘B, not ⌘M — ⌘M minimises the window on macOS before the page sees it.
         else if (k === "b" && can.paid) run = handleMarkPaid;
-        else if (k === "r" && can.rejectWd) run = handleRejectWithdrawals;
       } else if (tab === "transfer") {
         if (k === "i" && can.retryTf) run = handleRetryTransfers;
       } else if (tab === "expense") {
@@ -1647,8 +1647,7 @@ export default function TransactionsPage() {
     isViewer, selectedIds.length, tab, acting, confirming, can,
     selectedPlayerId, handleViewPlayer,
     handleAssignToMe, handleApprove, handleComplete, handleRetryDeposits,
-    handleRejectDeposits, handlePull, handleMarkPaid, handleRejectWithdrawals,
-    handleRetryTransfers, handleDeleteExpenses,
+    handlePull, handleMarkPaid, handleRetryTransfers, handleDeleteExpenses,
   ]);
 
   // Shift+Cmd/Ctrl+Left/Right cycles the worksheet tabs — global, so it works
@@ -2158,7 +2157,6 @@ export default function TransactionsPage() {
               >
                 <Ban className="h-3 w-3" />
                 Reject
-                <Kbd k={`${MOD_LABEL}R`} />
               </Button>
             )}
             {can.pull && (
@@ -2195,7 +2193,6 @@ export default function TransactionsPage() {
               >
                 <Ban className="h-3 w-3" />
                 Reject
-                <Kbd k={`${MOD_LABEL}R`} />
               </Button>
             )}
             {can.retryTf && (
