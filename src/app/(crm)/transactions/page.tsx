@@ -2030,32 +2030,43 @@ export default function TransactionsPage() {
   // Approve claims each deposit first — the server requires the approver to
   // hold the row, and doing the claim here saves a click on the obvious path.
   const handleApprove = useCallback(async () => {
+    // Only rows already claimed by the caller — the button is disabled
+    // otherwise, and the keyboard path checks the same flag.
     const ids = selectedDeposits
-      .filter((d) => ["pending", "matched"].includes(d.status))
+      .filter(
+        (d) => ["pending", "matched"].includes(d.status) && d.assigned_to_user_id === me?.user_id,
+      )
       .map((d) => d.deposit_id);
-    await runBulk("Approve", ids, async (id) => {
-      const dep = depositById.get(id);
-      if (dep && dep.assigned_to_user_id !== me?.user_id) {
-        await setAssignment({ kind: "deposit", id, assign: true });
-      }
-      return approveDeposit(id);
-    });
-  }, [selectedDeposits, runBulk, depositById, me, setAssignment, approveDeposit]);
+    await runBulk("Approve", ids, approveDeposit);
+  }, [selectedDeposits, runBulk, me, approveDeposit]);
 
+  // Approve and Reject act only on rows the caller has claimed — a claim is
+  // what says "I'm on this one", and two agents rejecting the same deposit is
+  // exactly the collision the claim exists to prevent. The rows are still
+  // selectable; the buttons show, disabled, with the hint to claim first.
+  const mine = (userId: number | null | undefined) => !!me && userId === me.user_id;
+  const approvable = selectedDeposits.filter((d) => ["pending", "matched"].includes(d.status));
+  const rejectableDep = selectedDeposits.filter((d) =>
+    ["pending_match", "matched", "pending"].includes(d.status),
+  );
+  const rejectableWd = selectedWithdrawals.filter((w) => w.status === "requested");
   const can = useMemo(
     () => ({
       assign:
         (tab === "deposit" || tab === "withdrawal" || tab === "transfer") &&
         selectedNumericIds.length > 0,
-      approve: selectedDeposits.some((d) => ["pending", "matched"].includes(d.status)),
+      approve: approvable.length > 0,
+      approveMine: approvable.length > 0 && approvable.every((d) => mine(d.assigned_to_user_id)),
       complete: selectedDeposits.some((d) => ["approved", "processing"].includes(d.status)),
       retryDep: selectedDeposits.some((d) => d.status === "failed"),
-      rejectDep: selectedDeposits.some((d) =>
-        ["pending_match", "matched", "pending"].includes(d.status),
-      ),
+      rejectDep: rejectableDep.length > 0,
+      rejectDepMine:
+        rejectableDep.length > 0 && rejectableDep.every((d) => mine(d.assigned_to_user_id)),
       pull: selectedWithdrawals.some((w) => w.status === "requested"),
       paid: selectedWithdrawals.some((w) => w.status === "credits_pulled"),
-      rejectWd: selectedWithdrawals.some((w) => w.status === "requested"),
+      rejectWd: rejectableWd.length > 0,
+      rejectWdMine:
+        rejectableWd.length > 0 && rejectableWd.every((w) => mine(w.assigned_to_user_id)),
       retryTf: selectedTransfers.some((t) => t.status === "failed"),
       delExp: tab === "expense" && selectedExpenses.length > 0,
       // Reversing a cash-out is a leader's call; paying/skipping a rebate is CS work.
@@ -2067,6 +2078,7 @@ export default function TransactionsPage() {
       skipReb: selectedRebates.some((r) => r.live_status === "pending"),
       unskipReb: selectedRebates.some((r) => r.live_status === "skipped"),
     }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       tab, me, selectedNumericIds, selectedDeposits, selectedWithdrawals, selectedTransfers,
       selectedExpenses, selectedCashOuts, selectedRebates,
@@ -2114,10 +2126,14 @@ export default function TransactionsPage() {
       setConfirming({
         kind: "reject-deposit",
         ids: selectedDeposits
-          .filter((d) => ["pending_match", "matched", "pending"].includes(d.status))
+          .filter(
+            (d) =>
+              ["pending_match", "matched", "pending"].includes(d.status) &&
+              d.assigned_to_user_id === me?.user_id,
+          )
           .map((d) => d.deposit_id),
       }),
-    [selectedDeposits],
+    [selectedDeposits, me],
   );
   const handlePull = useCallback(
     () =>
@@ -2146,10 +2162,10 @@ export default function TransactionsPage() {
       setConfirming({
         kind: "reject-withdrawal",
         ids: selectedWithdrawals
-          .filter((w) => w.status === "requested")
+          .filter((w) => w.status === "requested" && w.assigned_to_user_id === me?.user_id)
           .map((w) => w.withdrawal_id),
       }),
-    [selectedWithdrawals],
+    [selectedWithdrawals, me],
   );
   const handleRetryTransfers = useCallback(
     () =>
@@ -2227,7 +2243,7 @@ export default function TransactionsPage() {
       if (k === "enter" && selectedPlayerId) run = handleViewPlayer;
       else if (k === "a" && can.assign) run = handleAssignToMe;
       else if (tab === "deposit") {
-        if (k === "p" && can.approve) run = handleApprove;
+        if (k === "p" && can.approveMine) run = handleApprove;
         else if (k === "c" && can.complete) run = handleComplete;
         // ⌘I, not ⌘T — the browser reserves ⌘T / Ctrl+T for "new tab" and the
         // page never receives it.
@@ -2929,9 +2945,10 @@ export default function TransactionsPage() {
             {can.approve && (
               <Button
                 size="xs"
-                disabled={acting}
+                disabled={acting || !can.approveMine}
                 onClick={handleApprove}
-                className="cursor-pointer gap-1 bg-emerald-700 text-white hover:bg-emerald-800"
+                title={can.approveMine ? undefined : "Assign to me first — actions run only on rows you've claimed"}
+                className="cursor-pointer gap-1 bg-emerald-700 text-white hover:bg-emerald-800 disabled:cursor-not-allowed"
               >
                 <CheckCircle2 className="h-3 w-3" />
                 Approve
@@ -2968,7 +2985,8 @@ export default function TransactionsPage() {
               <Button
                 size="xs"
                 variant="outline"
-                disabled={acting}
+                disabled={acting || !can.rejectDepMine}
+                title={can.rejectDepMine ? undefined : "Assign to me first — actions run only on rows you've claimed"}
                 onClick={handleRejectDeposits}
                 className="cursor-pointer gap-1 border-red-300 text-red-700 hover:bg-red-50 dark:text-red-300"
               >
@@ -3004,7 +3022,8 @@ export default function TransactionsPage() {
               <Button
                 size="xs"
                 variant="outline"
-                disabled={acting}
+                disabled={acting || !can.rejectWdMine}
+                title={can.rejectWdMine ? undefined : "Assign to me first — actions run only on rows you've claimed"}
                 onClick={handleRejectWithdrawals}
                 className="cursor-pointer gap-1 border-red-300 text-red-700 hover:bg-red-50 dark:text-red-300"
               >
