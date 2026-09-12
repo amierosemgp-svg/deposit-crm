@@ -23,6 +23,51 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Banknote, Coins, Landmark, Wallet } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+/**
+ * The order the client's own workbook lists kiosks in.
+ *
+ * Deliberately fixed rather than alphabetical or by id: the desk reads this
+ * card against a spreadsheet they have used for years, and a row in a
+ * different place is a row they have to hunt for.
+ *
+ * Each entry holds every spelling that means the same kiosk, because the
+ * sheet and the CRM don't always agree (Joker123 / Joker, LuckyPalace /
+ * LPE88). Matching ignores case and punctuation. A kiosk matching nothing
+ * here still shows — it sorts to the bottom, alphabetically — so a spelling
+ * nobody anticipated is visible and easy to fix rather than silently gone.
+ */
+const KIOSK_ORDER: readonly (readonly string[])[] = [
+  ["rollex", "rollex11"],
+  ["scr888"],
+  ["suncity"],
+  ["luckypalace", "lpe88"],
+  ["3win8"],
+  ["ace333"],
+  ["mega888"],
+  ["sky777"],
+  ["joker123", "joker"],
+  ["xe88"],
+  ["scr918kiss", "918kiss"],
+  ["ac", "allcity"],
+  ["918kaya", "kaya"],
+  ["pussy888"],
+  ["4d"],
+];
+
+/** "Joker 123" and "joker123" are the same kiosk. */
+function kioskKey(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+const KIOSK_RANK = new Map<string, number>(
+  KIOSK_ORDER.flatMap((names, i) => names.map((n) => [n, i] as const)),
+);
+
+/** Where a kiosk sits in the workbook's order; unknown ones go last. */
+function kioskRank(gameName: string): number {
+  return KIOSK_RANK.get(kioskKey(gameName)) ?? Number.MAX_SAFE_INTEGER;
+}
+
 function InfoCard({
   title,
   hint,
@@ -160,13 +205,28 @@ export function CompanyInfoPanel({ range }: { range: DateRange }) {
         value: a.current_balance,
         online: isBotOnline(botForName(botHealth, a.bank_name)?.last_heartbeat_at),
       }));
-    const games = boAccounts
-      .filter((b) => b.status === "active" && companyInScope(b.company_entity_id))
+    const activeKiosks = boAccounts.filter(
+      (b) => b.status === "active" && companyInScope(b.company_entity_id),
+    );
+    // Rows are named after the game, so they read like the workbook. When a
+    // game runs more than one back-office the name alone doesn't say which,
+    // and only those rows carry their account label as well.
+    const kiosksPerGame = new Map<string, number>();
+    for (const b of activeKiosks) {
+      const key = kioskKey(b.game_name);
+      kiosksPerGame.set(key, (kiosksPerGame.get(key) ?? 0) + 1);
+    }
+    const games = activeKiosks
       .map((b) => ({
-        label: b.bo_label || b.game_name,
+        label:
+          (kiosksPerGame.get(kioskKey(b.game_name)) ?? 0) > 1 && b.bo_label
+            ? `${b.game_name} · ${b.bo_label}`
+            : b.game_name,
         value: b.current_credit,
         online: isBotOnline(botForName(botHealth, b.game_name)?.last_heartbeat_at),
-      }));
+        rank: kioskRank(b.game_name),
+      }))
+      .sort((a, b) => a.rank - b.rank || a.label.localeCompare(b.label));
 
     let depTotal = 0;
     let depBonus = 0;
