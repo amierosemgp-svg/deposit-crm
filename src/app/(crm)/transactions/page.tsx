@@ -2347,7 +2347,16 @@ export default function TransactionsPage() {
       else if (k === "a" && can.assign) run = handleAssignToMe;
       else if (tab === "deposit") {
         if (k === "p" && can.approveMine) run = handleApprove;
-        else if (k === "c" && can.complete) run = handleComplete;
+        // ⌘B, never ⌘C. The clipboard keys belong to the sheet — this screen
+        // exists so people can copy rows straight into Excel, and ⌘C is the
+        // most reflexive keystroke there is. It used to sit here, where it
+        // beat the grid's copy (this listener captures and preventDefaults,
+        // so the browser never issued the copy) and completed the deposits
+        // instead, with no confirmation.
+        //
+        // ⌘B also makes the two flows read the same: ⌘P advances a row —
+        // approve a deposit, pull a withdrawal — and ⌘B finishes it.
+        else if (k === "b" && can.complete) run = handleComplete;
         // ⌘I, not ⌘T — the browser reserves ⌘T / Ctrl+T for "new tab" and the
         // page never receives it.
         else if (k === "i" && can.retryDep) run = handleRetryDeposits;
@@ -3070,7 +3079,7 @@ export default function TransactionsPage() {
               >
                 <CheckCircle2 className="h-3 w-3" />
                 Complete
-                <Kbd k={`${MOD_LABEL}C`} />
+                <Kbd k={`${MOD_LABEL}B`} />
               </Button>
             )}
             {can.retryDep && (
