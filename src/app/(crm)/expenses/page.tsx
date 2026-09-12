@@ -262,7 +262,7 @@ export default function ExpensesPage() {
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 data-page-search
-                title="Press / to jump here"
+                title="Press ⌘F / Ctrl+F (or /) to jump here"
                 placeholder="Description, notes…"
                 className="h-8 pl-8"
               />

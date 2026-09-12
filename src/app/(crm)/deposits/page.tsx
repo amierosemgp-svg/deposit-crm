@@ -704,7 +704,7 @@ export default function DepositsPage() {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               data-page-search
-              title="Press / to jump here"
+              title="Press ⌘F / Ctrl+F (or /) to jump here"
               placeholder="Search ref, player, bank, game…"
               className="h-8 w-[230px] pl-8"
             />

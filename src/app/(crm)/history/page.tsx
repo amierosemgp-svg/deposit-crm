@@ -476,7 +476,7 @@ export default function HistoryPage() {
               value={q}
               onChange={(e) => setQ(e.target.value)}
               data-page-search
-              title="Press / to jump here"
+              title="Press ⌘F / Ctrl+F (or /) to jump here"
               placeholder="Search player, reference…"
               className="h-8 w-full rounded-md border border-input bg-background pl-8 pr-3 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/30"
             />

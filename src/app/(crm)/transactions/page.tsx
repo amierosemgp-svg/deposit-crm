@@ -2764,7 +2764,7 @@ export default function TransactionsPage() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             data-page-search
-            title="Press / to jump here"
+            title="Press ⌘F / Ctrl+F (or /) to jump here"
             placeholder="Search rows…"
             className="h-8 w-52 pl-7 text-[13px]"
           />

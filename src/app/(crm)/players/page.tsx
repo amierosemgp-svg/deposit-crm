@@ -734,7 +734,7 @@ export default function PlayersPage() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             data-page-search
-            title="Press / to jump here"
+            title="Press ⌘F / Ctrl+F (or /) to jump here"
             placeholder={tab === "players" ? "Search name, code, phone…" : "Search leads…"}
             className="h-8 w-56 pl-7 text-[13px]"
           />
