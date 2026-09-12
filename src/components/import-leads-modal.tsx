@@ -24,16 +24,47 @@ type Props = {
 
 type ParsedRow = {
   line: number;
+  /** Blank when the source sheet had no number for this lead. */
   phone: string;
   name: string;
   telegram?: string;
   error?: string;
 };
 
+/** Header words a first line may be made of — dropped rather than imported. */
+const HEADER_WORDS =
+  /^(phone|contact|contact_number|number|mobile|hp|name|full_name|telegram|telegram_username)$/i;
+
+function isHeaderLine(cols: string[]): boolean {
+  const filled = cols.filter(Boolean);
+  return (
+    filled.length > 0 &&
+    filled.every((c) => HEADER_WORDS.test(c.replace(/\s+/g, "_")))
+  );
+}
+
+/** Digits and the punctuation phone numbers are written with — no letters. */
+function isNumeric(v: string): boolean {
+  return /^[+\d][\d\s()+.\-]*$/.test(v);
+}
+
+/** A real number, not a stray "12" — Malaysian mobiles run 9–11 digits. */
+function looksLikePhone(v: string): boolean {
+  return isNumeric(v) && v.replace(/\D/g, "").length >= 7;
+}
+
 /**
  * Split a pasted/CSV block into lead rows. One lead per line:
- * phone, name[, telegram]. Commas or tabs separate columns; a header line
- * naming "phone" is dropped.
+ * phone, name[, telegram]. Commas or tabs separate columns; a header line is
+ * dropped.
+ *
+ * The phone is optional — plenty of bought lists arrive as names only, and
+ * refusing them meant retyping the sheet. A first column that reads as a
+ * number is the phone; anything else (or a blank one) means the line starts
+ * at the name. Only the name is actually required.
+ *
+ * A lead with no phone can't be matched to an existing person, so it lands as
+ * a fresh person flagged for review — the modal says so before importing.
  */
 function parseLeads(text: string): ParsedRow[] {
   const lines = text.split(/\r?\n/).map((l) => l.trim());
@@ -41,19 +72,31 @@ function parseLeads(text: string): ParsedRow[] {
   lines.forEach((raw, i) => {
     if (!raw) return;
     const cols = raw.split(/[\t,]/).map((c) => c.trim());
-    if (i === 0 && /phone|contact|number/i.test(cols[0]) && /name/i.test(cols[1] ?? "")) {
-      return; // header row
-    }
-    const [phone, name, telegram] = cols;
-    if (!phone || !name) {
-      out.push({ line: i + 1, phone: phone ?? "", name: name ?? "", error: "Needs phone and name" });
+    if (i === 0 && isHeaderLine(cols)) return;
+
+    // A first column that's numeric but too short is a typo, not a name —
+    // say so rather than quietly importing "0191" as somebody's name.
+    if (cols[0] && isNumeric(cols[0]) && !looksLikePhone(cols[0])) {
+      out.push({ line: i + 1, phone: cols[0], name: cols[1] ?? "", error: "Phone looks invalid" });
       return;
     }
-    if (phone.replace(/\D/g, "").length < 3) {
-      out.push({ line: i + 1, phone, name, error: "Phone looks invalid" });
+
+    let phone = "";
+    let rest = cols;
+    if (looksLikePhone(cols[0] ?? "")) {
+      phone = cols[0];
+      rest = cols.slice(1);
+    } else if (cols[0] === "") {
+      rest = cols.slice(1); // an empty phone column, then the name
+    }
+
+    const name = rest[0] ?? "";
+    const telegram = rest[1] || undefined;
+    if (!name) {
+      out.push({ line: i + 1, phone, name: "", error: "Needs a name" });
       return;
     }
-    out.push({ line: i + 1, phone, name, telegram: telegram || undefined });
+    out.push({ line: i + 1, phone, name, telegram });
   });
   return out;
 }
@@ -68,6 +111,8 @@ export function ImportLeadsModal({ open, onOpenChange, lists, onImported }: Prop
   const parsed = useMemo(() => parseLeads(text), [text]);
   const valid = parsed.filter((r) => !r.error);
   const errors = parsed.filter((r) => r.error);
+  // Imported fine, but unidentifiable later — worth saying out loud.
+  const noPhone = valid.filter((r) => !r.phone).length;
   const targetList = lists.find((l) => String(l.list_id) === listId);
 
   function reset() {
@@ -94,7 +139,7 @@ export function ImportLeadsModal({ open, onOpenChange, lists, onImported }: Prop
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           rows: valid.map((r) => ({
-            contact_number: r.phone,
+            ...(r.phone ? { contact_number: r.phone } : {}),
             full_name: r.name,
             ...(r.telegram ? { telegram_username: r.telegram } : {}),
           })),
@@ -138,7 +183,8 @@ export function ImportLeadsModal({ open, onOpenChange, lists, onImported }: Prop
           <div>
             <h2 className="text-sm font-semibold">Import leads</h2>
             <p className="text-[11px] text-muted-foreground">
-              Paste from your sheet — one lead per line: phone, name, Telegram (optional)
+              Paste from your sheet — one lead per line: phone, name, Telegram.
+              Only the name is required.
             </p>
           </div>
         </div>
@@ -189,15 +235,23 @@ export function ImportLeadsModal({ open, onOpenChange, lists, onImported }: Prop
           <textarea
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder={"0191234567, Ali bin Ahmad\n0197654321, Siti, @sitihandle"}
+            placeholder={
+              "0191234567, Ali bin Ahmad\n0197654321, Siti, @sitihandle\nLee Chee Meng"
+            }
             className="h-40 w-full resize-none rounded-md border border-input bg-background p-2.5 font-mono text-[12px] outline-none focus:border-ring focus:ring-2 focus:ring-ring/30"
           />
 
           {parsed.length > 0 && (
-            <div className="flex items-center gap-3 text-[12px]">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px]">
               <span className="font-medium text-emerald-700 dark:text-emerald-400">
                 {valid.length} ready
               </span>
+              {noPhone > 0 && (
+                <span className="text-muted-foreground">
+                  {noPhone} without a phone — flagged for review, since there&apos;s
+                  no number to match them on later
+                </span>
+              )}
               {errors.length > 0 && (
                 <span className="text-amber-700 dark:text-amber-400">
                   {errors.length} skipped —{" "}

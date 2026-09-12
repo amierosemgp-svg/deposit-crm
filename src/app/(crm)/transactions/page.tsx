@@ -106,7 +106,7 @@ const COLUMN_KEYS = {
   ],
   withdrawal: [
     "assign", "member", "product", "username", "amount", "bank", "account",
-    "status", "date", "time", "remark2",
+    "holder", "status", "date", "time", "remark2",
   ],
   freecredit: [
     "assign", "member", "product", "username", "amount", "mode", "remark",
@@ -724,8 +724,12 @@ export default function TransactionsPage() {
         product: { label: "Product", width: 110, entry: true, required: true, options: games, placeholder: "game" },
         username,
         amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "100 / ALL" },
-        bank: { label: "Bank", width: 110, entry: true, options: banks, placeholder: "bank" },
-        account: { label: "Bank Account", width: 150, entry: true, placeholder: "account no." },
+        bank: { label: "Bank", width: 110, entry: true, options: banks, dropdown: true, placeholder: "bank" },
+        account: { label: "Bank Account", width: 150, entry: true, dropdown: true, placeholder: "account no." },
+        // Whose account the money is going to. Withdrawals don't store a
+        // holder, so it's read off the player's saved accounts — derived,
+        // and there to be checked against the payout before it's sent.
+        holder: { label: "Account Holder", width: 160 },
         status,
         date,
         time,
@@ -861,6 +865,27 @@ export default function TransactionsPage() {
   }, [deposits]);
 
   /**
+   * The player's saved bank account a payout is going to.
+   *
+   * A withdrawal stores only a bank name and an account number, so the holder
+   * — the name CS checks against before releasing money — has to be matched
+   * back off the player. The account number identifies it; the bank name is
+   * the fallback for rows entered before the number was recorded.
+   */
+  const payoutAccountOf = useCallback(
+    (player: Player | undefined, bankName?: string | null, accountNumber?: string | null) => {
+      const accounts = player?.bank_accounts ?? [];
+      const num = accountNumber?.trim();
+      const bank = bankName?.trim().toLowerCase();
+      return (
+        (num ? accounts.find((b) => b.account_number.trim() === num) : undefined) ??
+        (bank ? accounts.find((b) => b.bank_name.trim().toLowerCase() === bank) : undefined)
+      );
+    },
+    [],
+  );
+
+  /**
    * When a row's Member Code changes and resolves, pre-fill the rest of the
    * row from the player record — their last added game and its username, their
    * saved bank for a payout, their name. Only empty cells are filled, so a
@@ -891,6 +916,21 @@ export default function TransactionsPage() {
             touched = true;
           }
         }
+        // The holder cell is derived: whenever the bank or account changes —
+        // picked from the list or typed — it re-reads off the player's saved
+        // accounts, so it can never sit stale next to a different account.
+        if (tab === "withdrawal") {
+          const c = COL.withdrawal;
+          const bankNow = out[c.bank]?.trim() ?? "";
+          const acctNow = out[c.account]?.trim() ?? "";
+          const bankBefore = prev[i]?.[c.bank]?.trim() ?? "";
+          const acctBefore = prev[i]?.[c.account]?.trim() ?? "";
+          if (bankNow !== bankBefore || acctNow !== acctBefore) {
+            const match = payoutAccountOf(pl, bankNow, acctNow);
+            out[c.holder] = match?.account_holder ?? "";
+            touched = true;
+          }
+        }
         if (member === prevMember) return touched ? out : row;
         const fill = (idx: number, val: string | undefined | null) => {
           if (val && !out[idx]?.trim()) out[idx] = val;
@@ -914,6 +954,7 @@ export default function TransactionsPage() {
           fill(c.product, lastGame?.game_name);
           fill(c.bank, lastBank?.bank_name);
           fill(c.account, lastBank?.account_number);
+          fill(c.holder, lastBank?.account_holder);
           fill(c.remark2, pl.full_name);
         } else if (tab === "freecredit") {
           const c = COL.freecredit;
@@ -927,7 +968,7 @@ export default function TransactionsPage() {
         return out;
       });
     },
-    [tab, playerByCode],
+    [tab, playerByCode, payoutAccountOf],
   );
 
   const onDraftsChange = useCallback(
@@ -1024,6 +1065,8 @@ export default function TransactionsPage() {
             amount: w.withdraw_all && !amount ? "ALL" : fmtAmount(amount),
             bank: w.bank_name ?? "",
             account: w.bank_account_number ?? "",
+            holder:
+              payoutAccountOf(p, w.bank_name, w.bank_account_number)?.account_holder ?? "",
             status: WITHDRAWAL_STATUS_LABEL[w.status],
             date: sheetDate(w.created_at),
             time: formatClock(w.created_at),
@@ -1033,7 +1076,7 @@ export default function TransactionsPage() {
       })
       .filter((r) => matchesSearch(r.cells));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [withdrawals, playerById, range, statusFilters, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId]);
+  }, [withdrawals, playerById, range, statusFilters, matchesSearch, assignCell, payoutAccountOf, selectedCompanyId, selectedLeaderId]);
 
   const freeCreditRows = useMemo<SheetRow[]>(() => {
     // Live status for agent-queued rows comes off the referenced transfer.
@@ -1370,6 +1413,35 @@ export default function TransactionsPage() {
         );
         if (logins.length <= 1) return undefined; // one login: nothing to pick
         return logins.map((a) => ({ value: a.game_username, hint: a.game_name }));
+      }
+      /**
+       * Payout bank cells: the player's own saved accounts, holder and all —
+       * so CS pays the account on file instead of retyping one off a chat,
+       * and can see which of several it is. Falls through to the column's
+       * plain bank list when the row has no player yet, or the player has
+       * nothing on file.
+       */
+      if (
+        tab === "withdrawal" &&
+        (colIndex === COL.withdrawal.bank || colIndex === COL.withdrawal.account)
+      ) {
+        const pl = memberOf(d);
+        const accounts = pl?.bank_accounts ?? [];
+        if (!accounts.length) return undefined;
+        const isBankCell = colIndex === COL.withdrawal.bank;
+        // On the account cell, a bank already chosen narrows the list to it.
+        const bankCell = d?.[COL.withdrawal.bank]?.trim().toLowerCase() ?? "";
+        const shown =
+          !isBankCell && bankCell
+            ? accounts.filter((b) => b.bank_name.trim().toLowerCase() === bankCell)
+            : accounts;
+        const list = shown.length ? shown : accounts;
+        return list.map((b) => ({
+          value: isBankCell ? b.bank_name : b.account_number,
+          title: isBankCell ? b.bank_name : b.account_number,
+          detail: b.account_holder,
+          figure: isBankCell ? b.account_number : b.bank_name,
+        }));
       }
       if (tab !== "deposit" || colIndex !== COL.deposit.bonuspct) return undefined;
       const pl = memberOf(d);
@@ -2660,6 +2732,8 @@ export default function TransactionsPage() {
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
+            data-page-search
+            title="Press / to jump here"
             placeholder="Search rows…"
             className="h-8 w-52 pl-7 text-[13px]"
           />

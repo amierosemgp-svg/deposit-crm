@@ -293,7 +293,9 @@ function AddLeadDialog({ listId, onClose, onDone }: { listId: string; onClose: (
   const [phone, setPhone] = useState("");
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
-  const valid = phone.trim().length >= 3 && name.trim();
+  // The name is the only thing required — a list bought without numbers
+  // still has to get in. A phone, when there is one, must look like one.
+  const valid = Boolean(name.trim()) && (!phone.trim() || phone.trim().length >= 3);
   async function submit() {
     if (!valid || busy) return;
     setBusy(true);
@@ -301,7 +303,10 @@ function AddLeadDialog({ listId, onClose, onDone }: { listId: string; onClose: (
       const res = await fetch(`/api/lead-lists/${listId}/leads`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contact_number: phone.trim(), full_name: name.trim() }),
+        body: JSON.stringify({
+          ...(phone.trim() ? { contact_number: phone.trim() } : {}),
+          full_name: name.trim(),
+        }),
       });
       const body = (await res.json().catch(() => null)) as { duplicate?: boolean; error?: string } | null;
       if (!res.ok) { toast.error(body?.error ?? "Failed"); return; }
@@ -317,7 +322,10 @@ function AddLeadDialog({ listId, onClose, onDone }: { listId: string; onClose: (
         <DialogTitle>Add lead</DialogTitle>
         <div className="mt-3 space-y-3">
           <div className="space-y-1.5">
-            <Label>Phone number</Label>
+            <Label>
+              Phone number{" "}
+              <span className="font-normal text-muted-foreground">(optional)</span>
+            </Label>
             <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="0123456789" className="h-9" />
           </div>
           <div className="space-y-1.5">
@@ -325,7 +333,9 @@ function AddLeadDialog({ listId, onClose, onDone }: { listId: string; onClose: (
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Full name" className="h-9" />
           </div>
           <p className="text-[12px] text-muted-foreground">
-            One phone = one person. If this number is already known, it links to the same person.
+            One phone = one person. If this number is already known, it links to the
+            same person. Left blank, the lead is added as a new person flagged for
+            review — there&apos;s no number to match them on later.
           </p>
           <div className="flex justify-end gap-2 pt-1">
             <Button variant="ghost" onClick={onClose} className="cursor-pointer">Cancel</Button>

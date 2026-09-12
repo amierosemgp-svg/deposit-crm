@@ -84,6 +84,7 @@ const GROUPS: Group[] = [
     hint: "Select saved rows first",
     items: [
       { keys: [MOD, "↵"], label: "Open the player's details" },
+      { keys: [MOD, "G"], label: "Link / update a game account (Players page)" },
       { keys: [MOD, "A"], label: "Assign to me / Unassign" },
       { keys: [MOD, "P"], label: "Approve (deposit) · Pull credits (withdrawal)" },
       { keys: [MOD, "C"], label: "Complete a deposit" },
@@ -104,6 +105,7 @@ const GROUPS: Group[] = [
       { keys: ["Shift", MOD, "↓"], label: "Next side-menu page" },
       { keys: ["Shift", MOD, "↑"], label: "Previous side-menu page" },
       { keys: [MOD, "K"], label: "Search players" },
+      { keys: ["/"], label: "Jump to this page's search box · Esc leaves it" },
       { keys: ["?"], label: "Open this shortcut manual" },
     ],
   },

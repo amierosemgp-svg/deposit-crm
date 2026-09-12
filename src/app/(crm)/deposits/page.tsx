@@ -703,6 +703,8 @@ export default function DepositsPage() {
             <Input
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
+              data-page-search
+              title="Press / to jump here"
               placeholder="Search ref, player, bank, game…"
               className="h-8 w-[230px] pl-8"
             />

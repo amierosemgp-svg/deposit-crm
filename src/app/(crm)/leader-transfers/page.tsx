@@ -180,6 +180,8 @@ export default function LeaderTransfersPage() {
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
+              data-page-search
+              title="Press / to jump here"
               placeholder="Search leader or note…"
               className="h-8 w-56 pl-7 text-[13px]"
             />

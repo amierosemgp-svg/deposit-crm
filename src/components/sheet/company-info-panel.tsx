@@ -3,7 +3,9 @@
 /**
  * The block the client keeps at the top of every sheet in their workbook:
  * bank balances, game/kiosk credits, and the running month totals — always
- * visible while rows scroll underneath.
+ * visible while rows scroll underneath. Each collection account also carries
+ * the number of deposits it took over the period, so the balance is read
+ * next to the traffic behind it.
  *
  * Presented as the dashboard's cards (same Card chrome, uppercase muted
  * titles, figure + bordered account list) so the sheet page and the dashboard
@@ -23,24 +25,40 @@ import { cn } from "@/lib/utils";
 
 function InfoCard({
   title,
+  hint,
   icon: Icon,
   total,
   rows,
   totalClassName,
 }: {
   title: string;
+  /** Small note beside the title — what period the row counts cover. */
+  hint?: string;
   icon: React.ComponentType<{ className?: string }>;
   total: number;
-  rows: { label: string; value: number; dim?: boolean; online?: boolean }[];
+  rows: {
+    label: string;
+    value: number;
+    dim?: boolean;
+    online?: boolean;
+    /** Transactions in the period, shown next to the name ("10 dep"). */
+    count?: number;
+    countSuffix?: string;
+  }[];
   totalClassName?: string;
 }) {
   return (
     <Card size="sm" className="gap-1.5">
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-0">
-        <CardTitle className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-          {title}
+        <CardTitle className="flex min-w-0 items-baseline gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+          <span className="truncate">{title}</span>
+          {hint && (
+            <span className="shrink-0 normal-case tracking-normal text-muted-foreground/70">
+              {hint}
+            </span>
+          )}
         </CardTitle>
-        <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+        <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
       </CardHeader>
       <CardContent className="px-3">
         <div className={cn("text-sm font-semibold tabular-nums", totalClassName)}>
@@ -68,6 +86,11 @@ function InfoCard({
                 <span className={cn("truncate", r.dim && "text-muted-foreground")}>
                   {r.label}
                 </span>
+                {r.count !== undefined && (
+                  <span className="shrink-0 rounded-full bg-muted px-1.5 text-[10px] font-medium tabular-nums text-muted-foreground">
+                    {r.count} {r.countSuffix ?? ""}
+                  </span>
+                )}
               </span>
               <span
                 className={cn(
@@ -100,13 +123,36 @@ export function CompanyInfoPanel({ range }: { range: DateRange }) {
   const inMonth = (iso: string) => inRange(iso, range);
 
   const scope = useMemo(() => {
-    const banksDeposit = bankAccounts
-      .filter((a) => a.status === "active" && a.role === "deposit" && companyInScope(a.entity_id))
-      .map((a) => ({
-        label: a.label || `${a.bank_name}`,
-        value: a.current_balance,
-        online: isBotOnline(botForName(botHealth, a.bank_name)?.last_heartbeat_at),
-      }));
+    const depositAccounts = bankAccounts.filter(
+      (a) => a.status === "active" && a.role === "deposit" && companyInScope(a.entity_id),
+    );
+
+    /**
+     * How many deposits each collection account took in over the period —
+     * "Maybank 10, CIMB 15" — so the balance is read next to the traffic that
+     * produced it, and a quiet bank is obvious at a glance.
+     *
+     * A deposit names its account outright when the agent matched one. The
+     * older rows only carry a bank name, so those fall back to the single
+     * in-scope account of that bank; when two accounts share a bank name
+     * there's no way to tell them apart, and the row is left uncounted rather
+     * than counted twice.
+     */
+    const accountById = new Map(depositAccounts.map((a) => [a.account_id, a]));
+    const soleAccountOfBank = new Map<string, number | null>();
+    for (const a of depositAccounts) {
+      const key = a.bank_name.toLowerCase();
+      // Second account on the same bank ⇒ ambiguous, so record null.
+      soleAccountOfBank.set(key, soleAccountOfBank.has(key) ? null : a.account_id);
+    }
+    const depositCount = new Map<number, number>();
+
+    const banksDeposit = depositAccounts.map((a) => ({
+      label: a.label || `${a.bank_name}`,
+      value: a.current_balance,
+      online: isBotOnline(botForName(botHealth, a.bank_name)?.last_heartbeat_at),
+      accountId: a.account_id,
+    }));
     const banksWithdrawal = bankAccounts
       .filter((a) => a.status === "active" && a.role === "withdrawal" && companyInScope(a.entity_id))
       .map((a) => ({
@@ -132,6 +178,14 @@ export function CompanyInfoPanel({ range }: { range: DateRange }) {
       depTotal += d.deposit_amount;
       depBonus += d.bonus_amount;
       depCount++;
+
+      const matched =
+        d.received_into_account_id != null && accountById.has(d.received_into_account_id)
+          ? d.received_into_account_id
+          : (soleAccountOfBank.get(d.bank_name?.toLowerCase() ?? "") ?? null);
+      if (matched != null) {
+        depositCount.set(matched, (depositCount.get(matched) ?? 0) + 1);
+      }
     }
     // Withdrawals carry no company of their own — scope through the player.
     const playerCompany = new Map(players.map((p) => [p.player_id, p.company_entity_id]));
@@ -144,7 +198,20 @@ export function CompanyInfoPanel({ range }: { range: DateRange }) {
       wdTotal += w.status === "paid" ? w.credit_pulled_amount || w.requested_amount : w.requested_amount;
       wdCount++;
     }
-    return { banksDeposit, banksWithdrawal, games, depTotal, depBonus, depCount, wdTotal, wdCount };
+    return {
+      banksDeposit: banksDeposit.map(({ accountId, ...row }) => ({
+        ...row,
+        count: depositCount.get(accountId) ?? 0,
+        countSuffix: "dep",
+      })),
+      banksWithdrawal,
+      games,
+      depTotal,
+      depBonus,
+      depCount,
+      wdTotal,
+      wdCount,
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bankAccounts, boAccounts, botHealth, deposits, withdrawals, players, range, selectedCompanyId, companyInScope]);
 
@@ -157,6 +224,7 @@ export function CompanyInfoPanel({ range }: { range: DateRange }) {
     <div className="grid shrink-0 grid-cols-2 gap-3 xl:grid-cols-4">
       <InfoCard
         title="Bank · Deposit"
+        hint={`${monthLabel} count`}
         icon={Landmark}
         total={sum(scope.banksDeposit)}
         rows={scope.banksDeposit}

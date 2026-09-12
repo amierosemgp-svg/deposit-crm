@@ -1474,6 +1474,7 @@ export function SheetGrid({
           the same whether the selection sits in saved rows or entry rows. */}
       <div
         ref={containerRef}
+        data-sheet-grid=""
         tabIndex={0}
         onKeyDown={handleKeyDown}
         onCopy={handleCopy}

@@ -444,6 +444,8 @@ export default function WithdrawalsPage() {
             <Input
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
+              data-page-search
+              title="Press / to jump here"
               placeholder="Search player, game, bank, amount…"
               className="h-8 w-[240px] pl-8"
             />

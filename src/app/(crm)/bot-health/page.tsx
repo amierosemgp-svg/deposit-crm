@@ -294,6 +294,8 @@ export default function BotHealthPage() {
           <Input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            data-page-search
+            title="Press / to jump here"
             placeholder="Search agent id, step, state…"
             className="h-8 pl-8"
           />

@@ -43,6 +43,7 @@ import { CreatePlayerModal } from "@/components/create-player-modal";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
+  Gamepad2,
   Loader2,
   RefreshCw,
   Save,
@@ -574,6 +575,16 @@ export default function PlayersPage() {
   const handleViewPlayer = useCallback(() => {
     if (selectedPlayerId) openPlayer(selectedPlayerId);
   }, [selectedPlayerId, openPlayer]);
+  /**
+   * ⌘G — straight from the selected member to their game accounts, with the
+   * "link a game" form already open. Linking a kiosk login is the edit CS
+   * makes most, and it was four clicks deep behind the profile modal.
+   */
+  const handleGameAccounts = useCallback(() => {
+    if (selectedPlayerId) {
+      openPlayer(selectedPlayerId, { section: "games", addForm: true });
+    }
+  }, [selectedPlayerId, openPlayer]);
 
   // ⌘↵ opens the player; Esc clears — capture phase so the grid never sees them.
   useEffect(() => {
@@ -596,10 +607,15 @@ export default function PlayersPage() {
         e.stopPropagation();
         handleViewPlayer();
       }
+      if (k === "g" && selectedPlayerId) {
+        e.preventDefault();
+        e.stopPropagation();
+        handleGameAccounts();
+      }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [selectedIds.length, selectedPlayerId, handleViewPlayer]);
+  }, [selectedIds.length, selectedPlayerId, handleViewPlayer, handleGameAccounts]);
 
   // Shift+⌘/Ctrl+←/→ switches between the Players and Leads tabs, wrapping —
   // the same worksheet-tab gesture as the Transactions sheet.
@@ -717,6 +733,8 @@ export default function PlayersPage() {
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
+            data-page-search
+            title="Press / to jump here"
             placeholder={tab === "players" ? "Search name, code, phone…" : "Search leads…"}
             className="h-8 w-56 pl-7 text-[13px]"
           />
@@ -853,7 +871,7 @@ export default function PlayersPage() {
         focusKey={`${tab}:${hydrated}`}
       />
 
-      {/* Floating action bar — member rows only. ⌘↵ opens the player. */}
+      {/* Floating action bar — member rows only. ⌘↵ opens the player, ⌘G their game accounts. */}
       {tab === "players" && selectedIds.length > 0 && (
         <div className="pointer-events-none absolute inset-x-0 bottom-14 z-40 flex justify-center">
           <div className="pointer-events-auto flex max-w-[92%] flex-wrap items-center justify-center gap-1.5 rounded-lg border border-emerald-600/40 bg-background/95 px-3 py-1.5 shadow-xl backdrop-blur">
@@ -884,6 +902,19 @@ export default function PlayersPage() {
               <span className="text-[11px] text-muted-foreground">
                 Select a single member to open their details
               </span>
+            )}
+            {selectedPlayerId && (
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={handleGameAccounts}
+                title="Link or update a game account"
+                className="cursor-pointer gap-1"
+              >
+                <Gamepad2 className="h-3 w-3" />
+                Game acct
+                <Kbd k={`${MOD_LABEL}G`} />
+              </Button>
             )}
           </div>
         </div>

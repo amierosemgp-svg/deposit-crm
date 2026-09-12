@@ -50,11 +50,6 @@ import {
   Gift,
 } from "lucide-react";
 
-type Props = {
-  playerId: number | null;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-};
 
 const EMPTY_BANK = { bank_name: "", account_number: "", account_holder: "" };
 const EMPTY_GAME = { game_name: "", game_username: "" };
@@ -73,8 +68,30 @@ const SECTIONS = [
 
 type SectionId = (typeof SECTIONS)[number]["id"];
 
-export function PlayerProfileModal({ playerId, open, onOpenChange }: Props) {
-  const [section, setSection] = useState<SectionId>("profile");
+/** The profile tabs, for callers that open the modal on a specific one. */
+export type PlayerSection = SectionId;
+
+type Props = {
+  playerId: number | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /**
+   * Section to land on instead of Profile, and whether its add-form should
+   * already be open — what a shortcut like ⌘G ("link a game account") asks
+   * for: one keystroke from a selected member to the form, nothing to click.
+   */
+  initialSection?: SectionId;
+  openAddForm?: boolean;
+};
+
+export function PlayerProfileModal({
+  playerId,
+  open,
+  onOpenChange,
+  initialSection,
+  openAddForm,
+}: Props) {
+  const [section, setSection] = useState<SectionId>(initialSection ?? "profile");
   const player = useStore((s) =>
     playerId ? s.players.find((p) => p.player_id === playerId) : undefined,
   );
@@ -139,15 +156,21 @@ export function PlayerProfileModal({ playerId, open, onOpenChange }: Props) {
 
   // Reset drafts whenever a different player is opened (state-during-render reset).
   const [prevResetKey, setPrevResetKey] = useState("");
-  const resetKey = `${playerId ?? "none"}:${open}`;
+  // The section and add-form flags are part of the key: opening the same
+  // player again straight at Game Accounts has to re-land there, even though
+  // nothing about the player changed.
+  const resetKey = `${playerId ?? "none"}:${open}:${initialSection ?? ""}:${openAddForm ? 1 : 0}`;
   if (resetKey !== prevResetKey) {
     setPrevResetKey(resetKey);
     setNotesDraft(player?.notes ?? "");
-    setBankFormOpen(false);
+    setSection(initialSection ?? "profile");
+    const addBank = open && openAddForm === true && initialSection === "banks";
+    const addGame = open && openAddForm === true && initialSection === "games";
+    setBankFormOpen(addBank);
     setBankForm(EMPTY_BANK);
     setSavingBank(false);
     setEditingBank(null);
-    setGameFormOpen(false);
+    setGameFormOpen(addGame);
     setGameForm(EMPTY_GAME);
     setSavingGame(false);
     setEditingGame(null);
