@@ -1,5 +1,6 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
+import { CREDIT_CONFLICT_TARGET } from "@/lib/game-credits";
 import {
   bonusPlans,
   deposits,
@@ -223,12 +224,15 @@ export async function creditRecommendBonus(
     playerId,
     companyEntityId,
     gameName,
+    gameUsername,
     amount,
     nowIso,
   }: {
     playerId: number;
     companyEntityId: number | null;
     gameName: string;
+    /** Which login the credit lands in. "" = the player's default/only login. */
+    gameUsername: string;
     amount: number;
     nowIso: string;
   },
@@ -266,11 +270,12 @@ export async function creditRecommendBonus(
     .values({
       player_id: playerId,
       game_name: gameName,
+      game_username: gameUsername,
       current_balance: amount,
       last_updated_at: nowIso,
     })
     .onConflictDoUpdate({
-      target: [gameCredits.player_id, gameCredits.game_name],
+      target: [...CREDIT_CONFLICT_TARGET],
       set: {
         current_balance: sql`${gameCredits.current_balance} + ${amount}`,
         last_updated_at: nowIso,

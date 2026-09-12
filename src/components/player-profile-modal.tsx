@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useStore } from "@/lib/store";
 import { formatRM, formatShortDateTime, formatRelative, initialsOf } from "@/lib/format";
@@ -34,6 +34,7 @@ import {
   MessageCircle,
   Phone,
   Calendar,
+  Building2,
   Landmark,
   Gamepad2,
   Loader2,
@@ -61,6 +62,7 @@ const EMPTY_GAME = { game_name: "", game_username: "" };
 const SECTIONS = [
   { id: "profile", label: "Profile", icon: User },
   { id: "balances", label: "Game Balances", icon: Wallet },
+  { id: "memberships", label: "Memberships", icon: Building2 },
   { id: "transactions", label: "Transactions", icon: Receipt },
   { id: "banks", label: "Bank Accounts", icon: Landmark },
   { id: "games", label: "Game Accounts", icon: Gamepad2 },
@@ -87,6 +89,37 @@ export function PlayerProfileModal({ playerId, open, onOpenChange }: Props) {
 
   const isViewer = me?.role === "viewer";
   const banks = banksFn();
+
+  // Arrow Up/Down walks the section tabs while the modal is open — skipping the
+  // notes tab exactly when it's hidden, and never while a text field is focused
+  // (notes editor, the bank/game forms) so it can't fight caret movement.
+  useEffect(() => {
+    if (!open || !player) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      const t = e.target as HTMLElement | null;
+      if (
+        t &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.tagName === "SELECT" ||
+          t.isContentEditable)
+      ) {
+        return;
+      }
+      const visible = SECTIONS.filter(
+        (sec) => !(sec.id === "notes" && isViewer && !player.notes),
+      ).map((sec) => sec.id);
+      const i = visible.indexOf(section);
+      if (i === -1) return;
+      e.preventDefault();
+      const next = e.key === "ArrowUp" ? i - 1 : i + 1;
+      setSection(visible[(next + visible.length) % visible.length]);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open, player, isViewer, section]);
 
   const [notesDraft, setNotesDraft] = useState("");
   const [savingNotes, setSavingNotes] = useState(false);
@@ -446,23 +479,46 @@ export function PlayerProfileModal({ playerId, open, onOpenChange }: Props) {
                                     Current Game Balances
                                   </h3>
                                   <div className="grid grid-cols-2 gap-2">
-                                    {gameNames.map((g) => {
-                                      const row = playerCredits.find((c) => c.game_name === g);
-                                      const bal = row?.current_balance ?? 0;
-                                      return (
-                                        <div
-                                          key={g}
-                                          className="rounded-md border bg-card px-3 py-2 flex items-center justify-between"
-                                        >
-                                          <span className="text-sm font-medium">{g}</span>
-                                          <span className={bal > 0 ? "text-sm font-semibold" : "text-sm text-muted-foreground"}>
-                                            {formatRM(bal)}
-                                          </span>
-                                        </div>
+                                    {gameNames.flatMap((g) => {
+                                      // One tile per login under the game — a
+                                      // player may hold several accounts on one
+                                      // game, each with its own balance.
+                                      const rows = playerCredits.filter(
+                                        (c) => c.game_name.toLowerCase() === g.toLowerCase(),
                                       );
+                                      const logins =
+                                        rows.length > 0
+                                          ? rows
+                                          : [{ game_username: "", current_balance: 0 }];
+                                      return logins.map((row) => {
+                                        const bal = row.current_balance ?? 0;
+                                        const uname = row.game_username ?? "";
+                                        return (
+                                          <div
+                                            key={`${g}::${uname}`}
+                                            className="rounded-md border bg-card px-3 py-2 flex items-center justify-between gap-2"
+                                          >
+                                            <span className="min-w-0">
+                                              <span className="text-sm font-medium">{g}</span>
+                                              {uname && (
+                                                <span className="ml-1.5 truncate text-[11px] text-muted-foreground">
+                                                  {uname}
+                                                </span>
+                                              )}
+                                            </span>
+                                            <span className={bal > 0 ? "text-sm font-semibold" : "text-sm text-muted-foreground"}>
+                                              {formatRM(bal)}
+                                            </span>
+                                          </div>
+                                        );
+                                      });
                                     })}
                                   </div>
                                 </section>
+                )}
+
+                {section === "memberships" && (
+                  <MembershipsTab playerId={player.player_id} />
                 )}
 
                 {section === "transactions" && (
@@ -679,9 +735,6 @@ export function PlayerProfileModal({ playerId, open, onOpenChange }: Props) {
                                               <SelectItem
                                                 key={g}
                                                 value={g}
-                                                disabled={(player.game_accounts ?? []).some(
-                                                  (ga, gi) => ga.game_name === g && gi !== editingGame,
-                                                )}
                                                 className="cursor-pointer"
                                               >
                                                 {g}
@@ -839,5 +892,105 @@ export function PlayerProfileModal({ playerId, open, onOpenChange }: Props) {
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+type MembershipRow = {
+  member_id: number;
+  company: string;
+  member_code: string;
+  status: string;
+  total_deposits: number;
+  total_withdrawals: number;
+  is_current: boolean;
+};
+
+/** This person's presence across every company — the cross-company view. */
+function MembershipsTab({ playerId }: { playerId: number }) {
+  const [rows, setRows] = useState<MembershipRow[] | null>(null);
+  const [total, setTotal] = useState(0);
+  const [review, setReview] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/players/${playerId}/memberships`);
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          memberships?: MembershipRow[];
+          total_companies?: number;
+          person?: { needs_review?: boolean } | null;
+        };
+        if (!alive) return;
+        setRows(data.memberships ?? []);
+        setTotal(data.total_companies ?? 0);
+        setReview(!!data.person?.needs_review);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [playerId]);
+
+  if (!rows) {
+    return <div className="py-8 text-center text-sm text-muted-foreground">Loading…</div>;
+  }
+
+  return (
+    <section>
+      <div className="mb-2 flex items-center justify-between">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Member under {total} {total === 1 ? "company" : "companies"}
+        </h3>
+        {review && (
+          <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300">
+            Identity needs review
+          </span>
+        )}
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+              <th className="px-2 py-1.5 font-medium">Company</th>
+              <th className="px-2 py-1.5 font-medium">Code</th>
+              <th className="px-2 py-1.5 font-medium">Status</th>
+              <th className="px-2 py-1.5 text-right font-medium">Deposits</th>
+              <th className="px-2 py-1.5 text-right font-medium">Withdrawals</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((m) => (
+              <tr
+                key={m.member_id}
+                className={m.is_current ? "bg-primary/5" : undefined}
+              >
+                <td className="px-2 py-1.5 whitespace-nowrap">
+                  {m.company}
+                  {m.is_current && (
+                    <span className="ml-1.5 text-[10px] text-muted-foreground">(this one)</span>
+                  )}
+                </td>
+                <td className="px-2 py-1.5 whitespace-nowrap font-mono text-[12px]">{m.member_code}</td>
+                <td className="px-2 py-1.5 whitespace-nowrap capitalize text-muted-foreground">{m.status}</td>
+                <td className="px-2 py-1.5 text-right tabular-nums">{formatRM(m.total_deposits)}</td>
+                <td className="px-2 py-1.5 text-right tabular-nums">{formatRM(m.total_withdrawals)}</td>
+              </tr>
+            ))}
+            {rows.length > total && null}
+            {total > rows.length && (
+              <tr>
+                <td colSpan={5} className="px-2 py-2 text-[12px] text-muted-foreground">
+                  {total - rows.length} more under companies outside your scope.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }

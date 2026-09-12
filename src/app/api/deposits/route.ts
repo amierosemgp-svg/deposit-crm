@@ -14,6 +14,8 @@ const createSchema = z.object({
   // "pending" = CS already sighted the receipt, straight to approval queue.
   status: z.enum(["pending_match", "pending"]).default("pending_match"),
   selected_game: z.string().optional(),
+  // Which login under selected_game to top up. Omit for the player's first.
+  selected_game_username: z.string().max(120).optional(),
   // The bonus to apply, checked against the player's history before it sticks.
   bonus_plan_id: z.number().int().positive().nullable().optional(),
   // The old free-percentage path, still honoured when no plan is named.
@@ -24,6 +26,9 @@ const createSchema = z.object({
   notes: z.string().optional(),
   // Fully manual: no agent bank-match or top-up — CS approves → completes it.
   skip_bot: z.boolean().optional(),
+  // Claim it under the caller's name as it's created (the sheet's "Assign to
+  // me" cell) — the same ownership marker POST /api/assignments sets.
+  assign_to_me: z.boolean().optional(),
 });
 
 /**
@@ -81,12 +86,16 @@ export async function POST(request: Request) {
         deposit_amount: body.amount,
         bank_name: body.bank_name,
         selected_game: body.selected_game,
+        selected_game_username: body.selected_game_username,
         ...bonus.fields,
         status,
         source: "manual",
         skip_bot: body.skip_bot ?? false,
         receipt_url: body.receipt_url,
         handled_by_user_id: user.user_id,
+        ...(body.assign_to_me
+          ? { assigned_to_user_id: user.user_id, assigned_at: nowIso }
+          : {}),
         created_at: nowIso,
         updated_at: nowIso,
       })

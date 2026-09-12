@@ -5,6 +5,7 @@ import { gameCredits, players, transactions } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
 import { gameCreditJson, jsonError } from "@/lib/bot-crud";
 import { canonicalise } from "@/lib/game-name";
+import { CREDIT_CONFLICT_TARGET, creditWhere, resolveGameLogin } from "@/lib/game-credits";
 
 /** GET /api/bot/game-credits?player_id=&game_name= */
 export async function GET(request: Request) {
@@ -14,10 +15,13 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const playerId = url.searchParams.get("player_id");
   const gameName = url.searchParams.get("game_name");
+  const gameUsername = url.searchParams.get("game_username");
 
   const filters: SQL[] = [];
   if (playerId) filters.push(eq(gameCredits.player_id, Number(playerId)));
   if (gameName) filters.push(eq(gameCredits.game_name, gameName));
+  if (gameUsername !== null)
+    filters.push(eq(gameCredits.game_username, gameUsername));
 
   const rows = await db
     .select()
@@ -31,6 +35,8 @@ export async function GET(request: Request) {
 const upsertSchema = z.object({
   player_id: z.number().int().positive(),
   game_name: z.string().min(1),
+  // Which login's balance to set. Omit for the player's first account.
+  game_username: z.string().max(120).optional(),
   current_balance: z.number().min(0),
 });
 
@@ -59,28 +65,25 @@ export async function POST(request: Request) {
   // used to open a second balance for the same real account and split the
   // player's money in two; resolve to the catalogue's spelling first.
   const gameName = await canonicalise(body.game_name, db);
+  const gameUsername = resolveGameLogin(player.game_accounts, gameName, body.game_username);
 
   const nowIso = new Date().toISOString();
   const [before] = await db
     .select()
     .from(gameCredits)
-    .where(
-      and(
-        eq(gameCredits.player_id, body.player_id),
-        eq(gameCredits.game_name, gameName),
-      ),
-    );
+    .where(creditWhere(body.player_id, gameName, gameUsername));
 
   const [row] = await db
     .insert(gameCredits)
     .values({
       player_id: body.player_id,
       game_name: gameName,
+      game_username: gameUsername,
       current_balance: body.current_balance,
       last_updated_at: nowIso,
     })
     .onConflictDoUpdate({
-      target: [gameCredits.player_id, gameCredits.game_name],
+      target: [...CREDIT_CONFLICT_TARGET],
       set: { current_balance: body.current_balance, last_updated_at: nowIso },
     })
     .returning();
@@ -93,6 +96,7 @@ export async function POST(request: Request) {
     game_name: gameName,
     details: {
       action: "balance_sync",
+      game_username: gameUsername,
       balance_before: before?.current_balance ?? 0,
       balance_after: body.current_balance,
       source: "bot",

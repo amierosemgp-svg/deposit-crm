@@ -1,7 +1,8 @@
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { gameCredits, players, transactions, withdrawals } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
+import { creditWhere, resolveGameLogin } from "@/lib/game-credits";
 import { BotError, botErrorResponse, jsonError, withdrawalJson } from "@/lib/bot-crud";
 
 /**
@@ -38,19 +39,19 @@ export async function POST(
       }
 
       const [player] = await txn
-        .select({ company_entity_id: players.company_entity_id })
+        .select({ company_entity_id: players.company_entity_id, game_accounts: players.game_accounts })
         .from(players)
         .where(eq(players.player_id, row.player_id));
 
+      const login = resolveGameLogin(
+        player?.game_accounts ?? null,
+        row.game_name,
+        row.game_username,
+      );
       const [credit] = await txn
         .select()
         .from(gameCredits)
-        .where(
-          and(
-            eq(gameCredits.player_id, row.player_id),
-            eq(gameCredits.game_name, row.game_name),
-          ),
-        )
+        .where(creditWhere(row.player_id, row.game_name, login))
         .for("update");
       const balance = credit?.current_balance ?? 0;
       // A withdraw-all takes the lot; a fixed request takes what it asked for,
@@ -71,12 +72,7 @@ export async function POST(
           current_balance: +Math.max(0, balance - pulled).toFixed(2),
           last_updated_at: nowIso,
         })
-        .where(
-          and(
-            eq(gameCredits.player_id, row.player_id),
-            eq(gameCredits.game_name, row.game_name),
-          ),
-        );
+        .where(creditWhere(row.player_id, row.game_name, login));
 
       const [updated] = await txn
         .update(withdrawals)

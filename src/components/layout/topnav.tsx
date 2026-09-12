@@ -18,6 +18,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { KillSwitchHeaderButton } from "@/components/kill-switch";
+import { ShortcutsButton } from "@/components/shortcuts-modal";
 import { Skeleton } from "@/components/ui/skeleton";
 import { initialsOf, formatRelative, formatRM } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -121,7 +123,7 @@ export function TopNav() {
   const badgeCount = pendingIncoming.length;
 
   return (
-    <header className="h-14 shrink-0 border-b border-border bg-card/60 backdrop-blur-sm">
+    <header className="relative z-50 h-14 shrink-0 border-b border-border bg-card/60 backdrop-blur-sm">
       <div className="flex h-full items-center">
         {/* Brand cell — same column as the sidebar (and shrinks with it), so
             everything after it lines up with the content area. */}
@@ -237,6 +239,8 @@ export function TopNav() {
           <PlayerSearch />
 
           <div className="ml-auto flex items-center gap-2">
+            <ShortcutsButton />
+            <KillSwitchHeaderButton />
             <ThemeToggle />
             <DropdownMenu>
               <DropdownMenuTrigger

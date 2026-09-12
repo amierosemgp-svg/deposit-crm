@@ -6,6 +6,8 @@ import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import { diffFields, logActivity } from "@/lib/activity-log";
 
+const TIME = z.string().regex(/^([01]?\d|2[0-3]):[0-5]\d$/, "Time must be HH:MM");
+
 const schema = z.object({
   transfer_auto_confirm_hours: z.number().int().min(1).max(168).optional(),
   // Smallest withdrawable balance, in RM. 0 disables the check, which is the
@@ -13,6 +15,15 @@ const schema = z.object({
   min_withdrawal_amount: z.number().min(0).max(1_000_000).optional(),
   games: z.array(z.string().min(1)).optional(),
   banks: z.array(z.string().min(1)).optional(),
+  // When a rebate day / week / month rolls over, in business time. The
+  // Rebates page measures each player's loss between two of these.
+  rebate_cutoffs: z
+    .object({
+      daily: z.object({ time: TIME }),
+      weekly: z.object({ weekday: z.number().int().min(0).max(6), time: TIME }),
+      monthly: z.object({ day: z.number().int().min(1).max(31), time: TIME }),
+    })
+    .optional(),
 });
 
 const KEYS = [
@@ -20,6 +31,7 @@ const KEYS = [
   "min_withdrawal_amount",
   "games",
   "banks",
+  "rebate_cutoffs",
 ] as const;
 
 /** PATCH /api/settings — super_admin edits system configuration. */

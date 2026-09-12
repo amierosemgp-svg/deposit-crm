@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { entities, players } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
+import { findOrCreatePerson } from "@/lib/people";
 import { loadGameCatalogue, normaliseGameAccounts } from "@/lib/game-name";
 import { botErrorResponse, isUniqueViolation, jsonError, playerJson } from "@/lib/bot-crud";
 import {
@@ -87,7 +88,12 @@ export async function POST(request: Request) {
   const [existing] = await db
     .select()
     .from(players)
-    .where(eq(players.username, body.username.toLowerCase()));
+    .where(
+      and(
+        eq(players.company_entity_id, body.company_entity_id),
+        eq(players.username, body.username.toLowerCase()),
+      ),
+    );
   if (existing) {
     return Response.json({ duplicate: true, player: playerJson(existing) }, { status: 200 });
   }
@@ -101,24 +107,38 @@ export async function POST(request: Request) {
   }
 
   try {
-    const [created] = await db
-      .insert(players)
-      .values({
-        username: body.username.toLowerCase(),
-        full_name: body.full_name,
-        telegram_username: body.telegram_username.startsWith("@")
-          ? body.telegram_username
-          : `@${body.telegram_username}`,
-        company_entity_id: body.company_entity_id,
+    const games = body.game_accounts
+      ? normaliseGameAccounts(body.game_accounts, await loadGameCatalogue())
+      : body.game_accounts;
+    const created = await db.transaction(async (txn) => {
+      // One phone = one person: link to an existing person or create one. If the
+      // phone already exists under another company, this attaches to that same
+      // person and makes a new member here (treat as success, not a conflict).
+      const { person } = await findOrCreatePerson(txn, {
         contact_number: body.contact_number,
+        full_name: body.full_name,
+        telegram_username: body.telegram_username,
         wechat_id: body.wechat_id,
-        notes: body.notes,
-        bank_accounts: body.bank_accounts,
-        game_accounts: body.game_accounts
-          ? normaliseGameAccounts(body.game_accounts, await loadGameCatalogue())
-          : body.game_accounts,
-      })
-      .returning();
+      });
+      const [row] = await txn
+        .insert(players)
+        .values({
+          username: body.username.toLowerCase(),
+          full_name: body.full_name,
+          telegram_username: body.telegram_username.startsWith("@")
+            ? body.telegram_username
+            : `@${body.telegram_username}`,
+          company_entity_id: body.company_entity_id,
+          contact_number: body.contact_number,
+          wechat_id: body.wechat_id,
+          notes: body.notes,
+          person_id: person.person_id,
+          bank_accounts: body.bank_accounts,
+          game_accounts: games,
+        })
+        .returning();
+      return row;
+    });
 
     // Pull pool accounts for the requested games. A game the pool has run dry
     // on is reported rather than failing the whole call — the player exists and

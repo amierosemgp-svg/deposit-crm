@@ -136,7 +136,8 @@ type Store = {
 
   // --- derived helpers ---
   companies: () => CompanyView[];
-  getCreditBalance: (playerId: number, game: string) => number;
+  /** Player's balance for a game — summed across all its logins, or one login. */
+  getCreditBalance: (playerId: number, game: string, gameUsername?: string) => number;
   userName: (userId?: number | null) => string;
   playerById: (playerId?: number | null) => Player | undefined;
   entityName: (entityId?: number | null) => string;
@@ -185,6 +186,7 @@ type Store = {
     bank_name: string;
     status?: "pending_match" | "pending";
     selected_game?: string;
+    selected_game_username?: string;
     bonus_plan_id?: number | null;
     bonus_percentage?: number;
     bonus_override_reason?: string;
@@ -197,6 +199,7 @@ type Store = {
     requested_amount?: number;
     withdraw_all?: boolean;
     game_name: string;
+    game_username?: string;
     bank_name?: string;
     bank_account_number?: string;
     skip_bot?: boolean;
@@ -211,6 +214,8 @@ type Store = {
     playerId: number;
     fromGame: string;
     toGame: string;
+    fromGameUsername?: string;
+    toGameUsername?: string;
     /** Omit when transferAll is set — the agent discovers the figure. */
     amount?: number;
     transferAll?: boolean;
@@ -251,6 +256,8 @@ type Store = {
     full_name: string;
     telegram_username?: string;
     company_entity_id: number;
+    /** Convert from a lead-list distribution — member code auto-numbered. */
+    source_dist_id?: number;
     contact_number?: string;
     wechat_id?: string;
     notes?: string;
@@ -307,6 +314,17 @@ type Store = {
   }) => Promise<MutationResult>;
   confirmBankTransfer: (transferId: number) => Promise<MutationResult>;
   rejectBankTransfer: (transferId: number) => Promise<MutationResult>;
+  /** Record cash a leader took out of a company account; debits the account. */
+  recordBankCashOut: (input: {
+    accountId: number;
+    amount: number;
+    takenByEntityId?: number | null;
+    takenBy?: string;
+    occurredAt?: string;
+    notes?: string;
+  }) => Promise<MutationResult>;
+  /** Undo a cash-out (leaders/admins): the amount goes back on the account. */
+  reverseBankCashOut: (cashOutId: number) => Promise<MutationResult>;
   addBoAccount: (input: {
     company_entity_id: number;
     game_name: string;
@@ -412,6 +430,7 @@ type Store = {
     transfer_auto_confirm_hours?: number;
     min_withdrawal_amount?: number;
     games?: string[];
+    rebate_cutoffs?: ServerSettings["rebate_cutoffs"];
     banks?: string[];
   }) => Promise<MutationResult>;
 
@@ -504,6 +523,11 @@ export const useStore = create<Store>((set, get) => {
       );
       if (!res.ok) {
         if (res.status === 401 && typeof window !== "undefined") {
+          // The token may still verify at the Edge proxy (e.g. it was killed by
+          // the session-epoch, which only the DB knows) — so a bare redirect to
+          // /login bounces straight back to /dashboard and loops. Clear the
+          // cookie first, then land on /login with no session at all.
+          await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
           window.location.href = "/login";
         }
         return;
@@ -559,10 +583,16 @@ export const useStore = create<Store>((set, get) => {
         }));
     },
 
-    getCreditBalance: (playerId, game) =>
-      get().gameCredits.find(
-        (c) => c.player_id === playerId && c.game_name === game,
-      )?.current_balance ?? 0,
+    getCreditBalance: (playerId, game, gameUsername) =>
+      get()
+        .gameCredits.filter(
+          (c) =>
+            c.player_id === playerId &&
+            c.game_name.toLowerCase() === game.toLowerCase() &&
+            (gameUsername === undefined ||
+              (c.game_username ?? "").toLowerCase() === gameUsername.toLowerCase()),
+        )
+        .reduce((sum, c) => sum + c.current_balance, 0),
 
     userName: (userId) =>
       get().users.find((u) => u.user_id === userId)?.full_name ?? "—",
@@ -772,13 +802,23 @@ export const useStore = create<Store>((set, get) => {
         { kind: "withdrawal", message: "Withdrawal marked as paid" },
       ),
 
-    createGameTransfer: ({ playerId, fromGame, toGame, amount, transferAll }) =>
+    createGameTransfer: ({
+      playerId,
+      fromGame,
+      toGame,
+      fromGameUsername,
+      toGameUsername,
+      amount,
+      transferAll,
+    }) =>
       mutate("/api/game-transfers", {
         method: "POST",
         body: JSON.stringify({
           player_id: playerId,
           from_game: fromGame,
           to_game: toGame,
+          from_game_username: fromGameUsername,
+          to_game_username: toGameUsername,
           amount,
           transfer_all: transferAll ?? false,
         }),
@@ -916,6 +956,28 @@ export const useStore = create<Store>((set, get) => {
     deleteBankAccount: (accountId) =>
       mutate(`/api/bank-accounts/${accountId}`, { method: "DELETE" }),
 
+    recordBankCashOut: ({ accountId, amount, takenByEntityId, takenBy, occurredAt, notes }) =>
+      mutate(
+        "/api/bank-accounts/cash-outs",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            account_id: accountId,
+            amount,
+            taken_by_entity_id: takenByEntityId ?? null,
+            taken_by: takenBy,
+            occurred_at: occurredAt,
+            notes,
+          }),
+        },
+        { kind: "transfer", message: `Cash-out of RM ${amount.toFixed(2)} recorded` },
+      ),
+    reverseBankCashOut: (cashOutId) =>
+      mutate(
+        `/api/bank-accounts/cash-outs/${cashOutId}/reverse`,
+        { method: "POST" },
+        { kind: "transfer", message: "Cash-out reversed — amount back on the account" },
+      ),
     createBankTransfer: ({
       fromAccountId,
       toAccountId,

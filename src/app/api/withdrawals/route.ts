@@ -13,10 +13,15 @@ const createSchema = z.object({
   requested_amount: z.number().positive().optional(),
   withdraw_all: z.boolean().optional(),
   game_name: z.string().min(1),
+  // Which login under game_name to pull from. Omit for the player's first.
+  game_username: z.string().max(120).optional(),
   bank_name: z.string().optional(),
   bank_account_number: z.string().optional(),
   // Fully manual: the agent never auto-pulls/pays this — CS handles it.
   skip_bot: z.boolean().optional(),
+  // Claim it under the caller's name as it's created (the sheet's "Assign to
+  // me" cell) — the same ownership marker POST /api/assignments sets.
+  assign_to_me: z.boolean().optional(),
 });
 
 /** POST /api/withdrawals — CS logs a withdrawal request received on Telegram/WeChat. */
@@ -86,11 +91,15 @@ export async function POST(request: Request) {
         requested_amount: requested,
         withdraw_all: withdrawAll,
         game_name: body.game_name,
+        game_username: body.game_username,
         bank_name: body.bank_name,
         bank_account_number: body.bank_account_number,
         source: "manual",
         skip_bot: body.skip_bot ?? false,
         handled_by_user_id: user.user_id,
+        ...(body.assign_to_me
+          ? { assigned_to_user_id: user.user_id, assigned_at: new Date().toISOString() }
+          : {}),
       })
       .returning();
 

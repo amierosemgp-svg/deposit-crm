@@ -80,6 +80,14 @@ const TYPE_META: Record<AuditType, { label: string; className: string }> = {
     label: "Recommend Bonus",
     className: "bg-teal-500/10 text-teal-700 dark:text-teal-300",
   },
+  leader_transfer: {
+    label: "Leader Transfer",
+    className: "bg-indigo-500/10 text-indigo-700 dark:text-indigo-300",
+  },
+  bank_cash_out: {
+    label: "Cash Out",
+    className: "bg-orange-500/10 text-orange-700 dark:text-orange-300",
+  },
 };
 
 /**
@@ -107,6 +115,8 @@ const TYPE_ORDER: AuditType[] = [
   "bank_transfer",
   "bo_adjustment",
   "player_import",
+  "leader_transfer",
+  "bank_cash_out",
 ];
 
 const AMOUNTLESS_TYPES = new Set<AuditType>(["player_import"]);

@@ -2,6 +2,7 @@ import {
   and,
   desc,
   eq,
+  gte,
   ilike,
   inArray,
   isNull,
@@ -24,6 +25,8 @@ const AUDIT_TYPES = [
   "bo_adjustment",
   "player_import",
   "recommend_bonus",
+  "leader_transfer",
+  "bank_cash_out",
 ] as const;
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -78,6 +81,16 @@ export async function GET(request: Request) {
     }
 
     const conds: SQL[] = [];
+
+    // CS agents work a rolling day — history past 24h is not theirs to browse.
+    if (user.role === "cs_agent") {
+      conds.push(
+        gte(
+          transactions.created_at,
+          new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+        ),
+      );
+    }
 
     // When narrowed to specific companies, only rows for players in those
     // companies are visible (system/null-player events are excluded). A fully

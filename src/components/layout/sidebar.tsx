@@ -1,22 +1,22 @@
 "use client";
 
+import { useEffect } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
-  LayoutDashboard,
-  Wallet,
-  Users,
-  Banknote,
   ArrowLeftRight,
+  FileSpreadsheet,
+  LayoutDashboard,
+  Users,
   History,
   Settings,
   Landmark,
   KeyRound,
   Gift,
-  Receipt,
   ScrollText,
   Bot,
   Network,
+  Percent,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -52,29 +52,10 @@ const NAV: NavGroup[] = [
     label: "Operation",
     items: [
       { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-      {
-        href: "/deposits",
-        label: "Deposits",
-        icon: Wallet,
-        badge: "pending_deposits",
-      },
-      {
-        href: "/withdrawals",
-        label: "Withdrawals",
-        icon: Banknote,
-        badge: "pending_withdrawals",
-      },
-      {
-        href: "/game-transfer",
-        label: "Game Credit Transfer",
-        icon: ArrowLeftRight,
-      },
-      {
-        href: "/expenses",
-        label: "Expenses",
-        icon: Receipt,
-        roles: ["super_admin"],
-      },
+      // The workbook, rebuilt: deposits, withdrawals, free credit, transfers
+      // and expenses all live in the one Excel-style sheet now — their old
+      // standalone pages still exist by URL but are off the menu.
+      { href: "/transactions", label: "Transactions", icon: FileSpreadsheet },
     ],
   },
   {
@@ -87,9 +68,20 @@ const NAV: NavGroup[] = [
         icon: Gift,
         roles: ["super_admin", "company_leader"],
       },
+      // Rebates are paid from a generated list, not on a deposit — the page
+      // is where CS runs and pays each day's / week's / month's list.
+      { href: "/rebates", label: "Rebates", icon: Percent },
       { href: "/bank-accounts", label: "Bank Accounts", icon: Landmark },
       { href: "/provider-accounts", label: "Kiosks Accounts", icon: KeyRound },
       { href: "/hierarchy", label: "Hierarchy", icon: Network },
+      // Lead lists are managed inside Players → Leads now; the standalone page
+      // stays reachable by URL but is off the menu.
+      {
+        href: "/leader-transfers",
+        label: "Leader Transfers",
+        icon: ArrowLeftRight,
+        roles: ["super_admin"],
+      },
       { href: "/history", label: "Transaction History", icon: History },
     ],
   },
@@ -122,8 +114,12 @@ const NAV: NavGroup[] = [
   },
 ];
 
+const IS_MAC =
+  typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
+
 export function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
   const me = useStore((s) => s.me);
   const collapsed = useStore((s) => s.sidebarCollapsed);
   const pendingDeposits = useStore((s) =>
@@ -143,6 +139,29 @@ export function Sidebar() {
       (item) => !item.roles || (!!me && item.roles.includes(me.role)),
     ),
   })).filter((group) => group.items.length > 0);
+
+  // Shift+⌘/Ctrl+↑/↓ steps through the visible menu pages, top to bottom and
+  // wrapping around — a keyboard way to move between pages without the mouse.
+  const flatHrefs = groups.flatMap((g) => g.items.map((i) => i.href));
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const mod = IS_MAC ? e.metaKey : e.ctrlKey;
+      const wrongMod = IS_MAC ? e.ctrlKey : e.metaKey;
+      if (!mod || wrongMod || !e.shiftKey || e.altKey) return;
+      const dir = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
+      if (!dir || flatHrefs.length === 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const cur = flatHrefs.findIndex(
+        (h) => pathname === h || pathname.startsWith(h + "/"),
+      );
+      const from = cur === -1 ? 0 : cur;
+      const next = (from + dir + flatHrefs.length) % flatHrefs.length;
+      router.push(flatHrefs[next]);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [flatHrefs, pathname, router]);
 
   return (
     <aside

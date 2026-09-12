@@ -10,6 +10,7 @@ import {
   verifySessionToken,
   type SessionPayload,
 } from "./session";
+import { getSessionEpoch } from "@/lib/kill-switch";
 
 export type { SessionPayload };
 
@@ -83,6 +84,17 @@ export async function resolveScope(session: SessionPayload): Promise<AuthedUser>
 export async function requireUser(): Promise<AuthedUser> {
   const session = await getSession();
   if (!session) throw new AuthError(401, "Not authenticated");
+  // Kill-switch epoch: a token minted before the last emergency sign-out is
+  // dead, whatever its own expiry says. `iat` rides in the JWT via
+  // setIssuedAt(), in seconds.
+  const epoch = await getSessionEpoch();
+  if (epoch) {
+    const iatMs =
+      ((session as unknown as { iat?: number }).iat ?? 0) * 1000;
+    if (iatMs < epoch) {
+      throw new AuthError(401, "Signed out by an administrator — please sign in again");
+    }
+  }
   return resolveScope(session);
 }
 
@@ -117,3 +129,4 @@ export async function loadUsersByIds(ids: number[]) {
   if (!ids.length) return [];
   return db.select().from(users).where(inArray(users.user_id, ids));
 }
+

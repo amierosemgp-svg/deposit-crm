@@ -8,8 +8,10 @@ import {
   ArrowRight,
   ArrowRightLeft,
   ArrowUpRight,
+  Banknote,
   Check,
   Hourglass,
+  Undo2,
   Landmark,
   Pencil,
   Plus,
@@ -19,7 +21,7 @@ import {
 } from "lucide-react";
 import { useStore } from "@/lib/store";
 import { formatRM, formatDateTime, formatRelative } from "@/lib/format";
-import type { BankAccount, BankTransfer } from "@/lib/types";
+import type { BankAccount, BankCashOut, BankTransfer } from "@/lib/types";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/status-badge";
@@ -27,6 +29,7 @@ import { Switch } from "@/components/ui/switch";
 import { BankAccountFormModal } from "@/components/bank-account-form-modal";
 import { ListLoading } from "@/components/list-loading";
 import { BankTransferModal } from "@/components/bank-transfer-modal";
+import { BankCashOutModal } from "@/components/bank-cash-out-modal";
 import {
   ConfirmActionDialog,
   type SummaryRow,
@@ -85,6 +88,7 @@ export default function BankAccountsPage() {
   const updateAccount = useStore((s) => s.updateBankAccount);
   const confirmTransfer = useStore((s) => s.confirmBankTransfer);
   const rejectTransfer = useStore((s) => s.rejectBankTransfer);
+  const reverseCashOut = useStore((s) => s.reverseBankCashOut);
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
   const selectedLeaderId = useStore((s) => s.selectedLeaderId);
   const companyInScope = useStore((s) => s.companyInScope);
@@ -93,6 +97,12 @@ export default function BankAccountsPage() {
   const [editingAccount, setEditingAccount] = useState<BankAccount | null>(null);
   const [transferOpen, setTransferOpen] = useState(false);
   const [transferDefaultFrom, setTransferDefaultFrom] = useState<number | null>(null);
+  // Cash a leader took out by hand — recorded here, listed below the accounts.
+  const [cashOutAccount, setCashOutAccount] = useState<BankAccount | null>(null);
+  const [cashOuts, setCashOuts] = useState<BankCashOut[]>([]);
+  const [cashOutsVersion, setCashOutsVersion] = useState(0);
+  const [reversingId, setReversingId] = useState<number | null>(null);
+  const [confirmReverse, setConfirmReverse] = useState<BankCashOut | null>(null);
   const [actingTransferId, setActingTransferId] = useState<number | null>(null);
   const [confirmTransferAction, setConfirmTransferAction] = useState<
     { id: number; kind: "confirm" | "reject" } | null
@@ -107,6 +117,39 @@ export default function BankAccountsPage() {
 
   const canManage =
     !!me && (me.role === "super_admin" || me.role === "company_leader");
+  // Recording a cash-out is CS work; reversing one is a leader's call.
+  const canRecordCashOut = !!me && me.role !== "viewer";
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/bank-accounts/cash-outs")
+      .then((r) => r.json())
+      .then((d: { cash_outs?: BankCashOut[] }) => {
+        if (!cancelled && d.cash_outs) setCashOuts(d.cash_outs);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+    // Refetched after every record / reverse, and on each store refresh so a
+    // colleague's entry shows up too.
+  }, [cashOutsVersion, accounts]);
+
+  const visibleCashOuts = useMemo(
+    () => cashOuts.filter((c) => companyInScope(c.entity_id)),
+    [cashOuts, companyInScope],
+  );
+
+  async function handleReverse(c: BankCashOut) {
+    setReversingId(c.cash_out_id);
+    const res = await reverseCashOut(c.cash_out_id);
+    setReversingId(null);
+    if (!res.ok) toast.error(res.error ?? "Could not reverse the cash-out");
+    else {
+      toast.success(`${formatRM(c.amount)} put back on the account`);
+      setCashOutsVersion((v) => v + 1);
+    }
+  }
 
   const managesEntity = (entityId: number) =>
     !!me && (me.ownedEntityIds === null || me.ownedEntityIds.includes(entityId));
@@ -510,7 +553,7 @@ export default function BankAccountsPage() {
                       Balance
                     </th>
                     <th className="px-3 py-2.5 text-left font-medium">Status</th>
-                    {canManage && (
+                    {(canManage || canRecordCashOut) && (
                       <th className="px-3 py-2.5 text-right font-medium">Actions</th>
                     )}
                   </tr>
@@ -586,9 +629,23 @@ export default function BankAccountsPage() {
                           <StatusBadge status={a.status} />
                         )}
                       </td>
-                      {canManage && (
+                      {(canManage || canRecordCashOut) && (
                         <td className="px-3 py-2">
                           <div className="flex items-center justify-end gap-1">
+                            {canRecordCashOut && (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => setCashOutAccount(a)}
+                                disabled={a.status !== "active"}
+                                className="cursor-pointer h-7 px-2"
+                                title="Record cash a leader withdrew from this account"
+                              >
+                                <Banknote className="h-3.5 w-3.5" />
+                              </Button>
+                            )}
+                            {canManage && (
+                            <>
                             <Button
                               size="sm"
                               variant="ghost"
@@ -621,6 +678,8 @@ export default function BankAccountsPage() {
                             >
                               <Trash2 className="h-3.5 w-3.5" />
                             </Button>
+                            </>
+                            )}
                           </div>
                         </td>
                       )}
@@ -632,6 +691,95 @@ export default function BankAccountsPage() {
           </Card>
         ))
       )}
+
+      {/* Cash withdrawals — money that left an account by hand */}
+      <Card className="overflow-hidden p-0 gap-0">
+        <div className="flex items-center gap-2 border-b bg-muted/30 px-4 py-2.5">
+          <Banknote className="h-3.5 w-3.5 text-muted-foreground" />
+          <h2 className="text-sm font-semibold">Cash Withdrawals</h2>
+          <span className="ml-auto text-[11px] text-muted-foreground">
+            {visibleCashOuts.length} total
+          </span>
+        </div>
+        {visibleCashOuts.length === 0 ? (
+          <p className="px-4 py-6 text-center text-xs text-muted-foreground">
+            None recorded. When a leader takes cash out of an account at the bank, record
+            it with the banknote button on that account so the balance here stays right.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2.5 text-left font-medium">When</th>
+                  <th className="px-3 py-2.5 text-left font-medium">Account</th>
+                  <th className="px-3 py-2.5 text-right font-medium whitespace-nowrap">Amount</th>
+                  <th className="px-3 py-2.5 text-left font-medium">Taken By</th>
+                  <th className="px-3 py-2.5 text-left font-medium">Notes</th>
+                  <th className="px-3 py-2.5 text-left font-medium">Recorded By</th>
+                  <th className="px-3 py-2.5 text-left font-medium">Status</th>
+                  {canManage && <th className="px-3 py-2.5" />}
+                </tr>
+              </thead>
+              <tbody>
+                {visibleCashOuts.map((c) => {
+                  const acct = accountById.get(c.account_id);
+                  const reversed = !!c.reversed_at;
+                  return (
+                    <tr
+                      key={c.cash_out_id}
+                      className={cn("border-t", reversed && "text-muted-foreground line-through decoration-muted-foreground/40")}
+                    >
+                      <td className="px-3 py-2 whitespace-nowrap">{formatDateTime(c.occurred_at)}</td>
+                      <td className="px-3 py-2">
+                        {acct ? (
+                          <>
+                            <div>{acct.bank_name} {maskAccountNumber(acct.account_number)}</div>
+                            <div className="text-[11px] text-muted-foreground">{entityName(acct.entity_id)}</div>
+                          </>
+                        ) : (
+                          <span className="text-muted-foreground">#{c.account_id}</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-right font-semibold tabular-nums">{formatRM(c.amount)}</td>
+                      <td className="px-3 py-2">{c.taken_by}</td>
+                      <td className="px-3 py-2 max-w-[260px] truncate text-muted-foreground" title={c.notes ?? undefined}>
+                        {c.notes ?? "—"}
+                      </td>
+                      <td className="px-3 py-2 whitespace-nowrap">{userName(c.recorded_by_user_id)}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        {reversed ? (
+                          <span className="no-underline text-[11px]">
+                            Reversed {formatRelative(c.reversed_at!)} by {userName(c.reversed_by_user_id)}
+                          </span>
+                        ) : (
+                          <span className="text-[11px] text-emerald-700 dark:text-emerald-400">Debited</span>
+                        )}
+                      </td>
+                      {canManage && (
+                        <td className="px-3 py-2 text-right">
+                          {!reversed && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => setConfirmReverse(c)}
+                              disabled={reversingId === c.cash_out_id}
+                              className="cursor-pointer h-7 px-2"
+                              title="Undo — put the amount back on the account"
+                            >
+                              <Undo2 className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
 
       {/* Transfer history */}
       <Card className="overflow-hidden p-0 gap-0">
@@ -746,6 +894,33 @@ export default function BankAccountsPage() {
         open={transferOpen}
         onOpenChange={setTransferOpen}
         defaultFromAccountId={transferDefaultFrom}
+      />
+      <BankCashOutModal
+        open={cashOutAccount !== null}
+        onOpenChange={(o) => !o && setCashOutAccount(null)}
+        account={cashOutAccount}
+        onRecorded={() => setCashOutsVersion((v) => v + 1)}
+      />
+      <ConfirmActionDialog
+        open={confirmReverse !== null}
+        onOpenChange={(o) => !o && setConfirmReverse(null)}
+        title="Reverse this cash-out?"
+        description="The amount goes back on the account's balance. The record stays, marked reversed."
+        summary={
+          confirmReverse
+            ? [
+                { label: "Amount", value: formatRM(confirmReverse.amount), emphasis: true },
+                { label: "Taken by", value: confirmReverse.taken_by },
+                { label: "When", value: formatDateTime(confirmReverse.occurred_at) },
+              ]
+            : []
+        }
+        confirmLabel="Reverse"
+        tone="danger"
+        onConfirm={async () => {
+          if (confirmReverse) await handleReverse(confirmReverse);
+          setConfirmReverse(null);
+        }}
       />
 
       <ConfirmActionDialog

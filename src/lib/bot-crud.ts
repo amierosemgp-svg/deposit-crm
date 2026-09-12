@@ -142,6 +142,9 @@ export function withdrawalJson(w: typeof withdrawals.$inferSelect) {
     // what it actually pulled.
     withdraw_all: w.withdraw_all,
     game_name: w.game_name,
+    // Which login under game_name to pull from — null = the player's first
+    // account for the game.
+    game_username: w.game_username,
     credit_pulled_amount: w.credit_pulled_amount,
     status: w.status,
     bank_name: w.bank_name,
@@ -158,6 +161,7 @@ export function gameCreditJson(c: typeof gameCredits.$inferSelect) {
   return {
     player_id: c.player_id,
     game_name: c.game_name,
+    game_username: c.game_username,
     current_balance: c.current_balance,
     last_updated_at: c.last_updated_at,
   };
@@ -182,9 +186,13 @@ export function gameTransferJson(
     // The player's account id/login in each game — what you move credits
     // between in the provider back-office. null if not recorded for that game.
     from_game_username:
-      accts?.find((g) => g.game_name === t.from_game)?.game_username ?? null,
+      t.from_game_username ??
+      accts?.find((g) => g.game_name === t.from_game)?.game_username ??
+      null,
     to_game_username:
-      accts?.find((g) => g.game_name === t.to_game)?.game_username ?? null,
+      t.to_game_username ??
+      accts?.find((g) => g.game_name === t.to_game)?.game_username ??
+      null,
     // 0 while transfer_all is true and the transfer is still open — the real
     // figure is whatever you find in the wallet, and it lands here once you
     // report completion.

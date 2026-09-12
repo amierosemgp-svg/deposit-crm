@@ -192,6 +192,11 @@ export const auditTypeEnum = pgEnum("audit_type", [
   // Referral payout credited to an upline. Kept apart from game_topup so
   // bonus spend can be totalled without unpicking deposit-driven top-ups.
   "recommend_bonus",
+  // A settlement moving funds from one leader to another. Deliberately its own
+  // type — not an expense — so leader-to-leader movement reports on its own.
+  "leader_transfer",
+  // Cash a leader took out of a company bank account by hand.
+  "bank_cash_out",
 ]);
 
 // ---------- Core hierarchy ----------
@@ -209,7 +214,7 @@ export const entities = pgTable("entities", {
 
 export const users = pgTable("users", {
   user_id: serial("user_id").primaryKey(),
-  username: varchar("username", { length: 60 }).notNull().unique(),
+  username: varchar("username", { length: 60 }).notNull(),
   email: varchar("email", { length: 160 }).notNull().unique(),
   full_name: varchar("full_name", { length: 120 }).notNull(),
   password_hash: varchar("password_hash", { length: 100 }).notNull(),
@@ -227,11 +232,106 @@ export const users = pgTable("users", {
     .defaultNow(),
 });
 
+/**
+ * A real person — one row per phone number for the whole database.
+ *
+ * Identity is global: the same person appears under many companies as separate
+ * `players` (member) rows, but exists here once. One phone number is one
+ * person; the same human with two numbers is two people (never deduped by name).
+ */
+export const people = pgTable("people", {
+  person_id: serial("person_id").primaryKey(),
+  // The identity key. Globally unique when present; a person with no number on
+  // file is kept distinct (never merged) and flagged for review.
+  contact_number: varchar("contact_number", { length: 40 }).unique(),
+  full_name: varchar("full_name", { length: 120 }).notNull(),
+  telegram_username: varchar("telegram_username", { length: 80 }),
+  wechat_id: varchar("wechat_id", { length: 80 }),
+  // Set when migration couldn't be sure of identity — a blank or duplicated
+  // phone. A human reconciles these; nothing auto-merges.
+  needs_review: boolean("needs_review").notNull().default(false),
+  created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .notNull()
+    .defaultNow(),
+});
+
+/**
+ * A list of leads a leader buys ("list_A"). Grows continuously as they buy more.
+ * The prefix (e.g. "A") labels the list's own lead codes (A0001, A0002…).
+ */
+export const leadLists = pgTable("lead_lists", {
+  list_id: serial("list_id").primaryKey(),
+  owner_leader_entity_id: integer("owner_leader_entity_id")
+    .notNull()
+    .references(() => entities.entity_id),
+  name: varchar("name", { length: 120 }).notNull(),
+  prefix: varchar("prefix", { length: 16 }).notNull(),
+  // Running counter for the next lead code in this list.
+  next_seq: integer("next_seq").notNull().default(1),
+  notes: text("notes"),
+  created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .notNull()
+    .defaultNow(),
+});
+
+/** One lead in a list — a person with the list's own code (A0001). */
+export const listLeads = pgTable(
+  "list_leads",
+  {
+    lead_id: serial("lead_id").primaryKey(),
+    list_id: integer("list_id")
+      .notNull()
+      .references(() => leadLists.list_id),
+    person_id: integer("person_id")
+      .notNull()
+      .references(() => people.person_id),
+    lead_code: varchar("lead_code", { length: 40 }).notNull(),
+    seq: integer("seq").notNull(),
+    created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    unique("list_leads_person_key").on(t.list_id, t.person_id),
+    unique("list_leads_seq_key").on(t.list_id, t.seq),
+  ],
+);
+
+/**
+ * A hand-off of a list to a company (or another leader). This is where the
+ * per-company code prefix and its auto-increment counter live: converting a
+ * lead into a member takes `next_seq`, stamps member_code = prefix + seq, bumps.
+ */
+export const listDistributions = pgTable(
+  "list_distributions",
+  {
+    dist_id: serial("dist_id").primaryKey(),
+    list_id: integer("list_id")
+      .notNull()
+      .references(() => leadLists.list_id),
+    // A company (converts leads to members) or a leader (re-distributes).
+    to_entity_id: integer("to_entity_id")
+      .notNull()
+      .references(() => entities.entity_id),
+    // The prefix this company stamps on members converted from the list ("AZ").
+    prefix: varchar("prefix", { length: 16 }).notNull(),
+    next_seq: integer("next_seq").notNull().default(1),
+    created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [unique("list_distributions_key").on(t.list_id, t.to_entity_id)],
+);
+
 export const players = pgTable("players", {
   player_id: serial("player_id").primaryKey(),
   username: varchar("username", { length: 60 }).notNull().unique(),
   full_name: varchar("full_name", { length: 120 }).notNull(),
   contact_number: varchar("contact_number", { length: 40 }),
+  // The global identity this membership belongs to. Nullable only mid-migration.
+  person_id: integer("person_id").references(() => people.person_id),
+  // Which list distribution this member was converted from (null = direct/legacy).
+  source_dist_id: integer("source_dist_id"),
   telegram_username: varchar("telegram_username", { length: 80 }),
   wechat_id: varchar("wechat_id", { length: 80 }),
   company_entity_id: integer("company_entity_id")
@@ -285,6 +385,55 @@ export const players = pgTable("players", {
     .default(0),
   notes: text("notes"),
 });
+
+/**
+ * A member's bank accounts, per company. Moved off players.bank_accounts jsonb
+ * so the "unique within a company" rule can be a real constraint.
+ */
+export const memberBankAccounts = pgTable(
+  "member_bank_accounts",
+  {
+    id: serial("id").primaryKey(),
+    // The member (players row) this account belongs to.
+    member_id: integer("member_id")
+      .notNull()
+      .references(() => players.player_id),
+    // Denormalised for the per-company uniqueness constraint.
+    company_entity_id: integer("company_entity_id")
+      .notNull()
+      .references(() => entities.entity_id),
+    bank_name: varchar("bank_name", { length: 60 }).notNull(),
+    account_number: varchar("account_number", { length: 60 }).notNull(),
+    account_holder: varchar("account_holder", { length: 120 }).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    // One account number can recur across companies, never within one.
+    unique("member_bank_company_account_key").on(t.company_entity_id, t.account_number),
+  ],
+);
+
+/** A member's kiosk logins, per company. Moved off players.game_accounts jsonb. */
+export const memberGameAccounts = pgTable(
+  "member_game_accounts",
+  {
+    id: serial("id").primaryKey(),
+    member_id: integer("member_id")
+      .notNull()
+      .references(() => players.player_id),
+    game_name: varchar("game_name", { length: 60 }).notNull(),
+    game_username: varchar("game_username", { length: 120 }).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    // The same login can't be linked twice on one member.
+    unique("member_game_login_key").on(t.member_id, t.game_name, t.game_username),
+  ],
+);
 
 // ---------- Money ----------
 
@@ -354,6 +503,32 @@ export const bankTransfers = pgTable("bank_transfers", {
   created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
     .notNull()
     .defaultNow(),
+});
+
+/**
+ * Cash a leader took out of a company bank account at the bank — the one way
+ * money leaves an account that no transfer or withdrawal captures. Recording
+ * it debits the account; reversing puts the amount back and keeps the row.
+ */
+export const bankCashOuts = pgTable("bank_cash_outs", {
+  cash_out_id: serial("cash_out_id").primaryKey(),
+  account_id: integer("account_id")
+    .notNull()
+    .references(() => bankAccounts.account_id),
+  entity_id: integer("entity_id")
+    .notNull()
+    .references(() => entities.entity_id),
+  amount: numeric("amount", { precision: 14, scale: 2, mode: "number" }).notNull(),
+  taken_by_entity_id: integer("taken_by_entity_id").references(() => entities.entity_id),
+  taken_by: varchar("taken_by", { length: 120 }).notNull(),
+  occurred_at: timestamp("occurred_at", { withTimezone: true, mode: "string" }).notNull(),
+  notes: text("notes"),
+  recorded_by_user_id: integer("recorded_by_user_id").references(() => users.user_id),
+  created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .notNull()
+    .defaultNow(),
+  reversed_at: timestamp("reversed_at", { withTimezone: true, mode: "string" }),
+  reversed_by_user_id: integer("reversed_by_user_id").references(() => users.user_id),
 });
 
 /**
@@ -476,6 +651,9 @@ export const deposits = pgTable("deposits", {
     .notNull()
     .default(0),
   selected_game: varchar("selected_game", { length: 60 }),
+  // Which login under selected_game this top-up targets. Null = the player's
+  // first (or only) account for the game — the pre-multi-account default.
+  selected_game_username: varchar("selected_game_username", { length: 120 }),
   status: depositStatusEnum("status").notNull().default("pending"),
   // Agent-detected bank credits default to "agent"; CRM-entered deposits set "manual".
   source: transactionSourceEnum("source").notNull().default("bot"),
@@ -536,6 +714,8 @@ export const withdrawals = pgTable("withdrawals", {
    */
   withdraw_all: boolean("withdraw_all").notNull().default(false),
   game_name: varchar("game_name", { length: 60 }).notNull(),
+  // Which login under game_name to pull from. Null = the player's first account.
+  game_username: varchar("game_username", { length: 120 }),
   credit_pulled_amount: numeric("credit_pulled_amount", {
     precision: 12,
     scale: 2,
@@ -713,6 +893,68 @@ export const referralBonuses = pgTable(
   ],
 );
 
+// ---------- Rebate payouts ----------
+
+export const rebatePayoutStatusEnum = pgEnum("rebate_payout_status", [
+  "pending",
+  "paid",
+  "skipped",
+]);
+
+/**
+ * One rebate owed to one player for one window of one plan — a snapshot of
+ * what they lost between two cutoffs and the share the plan pays on it. Paid
+ * as a free credit; the transfer/transaction ids point at that credit.
+ */
+export const rebatePayouts = pgTable(
+  "rebate_payouts",
+  {
+    payout_id: serial("payout_id").primaryKey(),
+    plan_id: integer("plan_id")
+      .notNull()
+      .references(() => bonusPlans.plan_id),
+    player_id: integer("player_id")
+      .notNull()
+      .references(() => players.player_id),
+    company_entity_id: integer("company_entity_id").references(() => entities.entity_id),
+    period: bonusPeriodEnum("period").notNull(),
+    // The window the loss was measured over: [window_start, window_end).
+    window_start: timestamp("window_start", { withTimezone: true, mode: "string" }).notNull(),
+    window_end: timestamp("window_end", { withTimezone: true, mode: "string" }).notNull(),
+    deposits_total: numeric("deposits_total", { precision: 12, scale: 2, mode: "number" })
+      .notNull()
+      .default(0),
+    withdrawals_total: numeric("withdrawals_total", { precision: 12, scale: 2, mode: "number" })
+      .notNull()
+      .default(0),
+    // deposits_total − withdrawals_total, frozen at generate time.
+    net_loss: numeric("net_loss", { precision: 12, scale: 2, mode: "number" }).notNull(),
+    percentage: numeric("percentage", { precision: 5, scale: 2, mode: "number" }).notNull(),
+    amount: numeric("amount", { precision: 12, scale: 2, mode: "number" }).notNull(),
+    status: rebatePayoutStatusEnum("status").notNull().default("pending"),
+    // Where the credit goes — suggested at generate time, confirmed at pay time.
+    game_name: varchar("game_name", { length: 60 }),
+    game_username: varchar("game_username", { length: 120 }),
+    // True when CS credited the game by hand; false = the agent was asked to.
+    skip_bot: boolean("skip_bot").notNull().default(false),
+    game_transfer_id: integer("game_transfer_id"),
+    // The free-credit ledger row (transactions.game_topup) written at pay time.
+    transaction_id: integer("transaction_id"),
+    generated_by_user_id: integer("generated_by_user_id").references(() => users.user_id),
+    generated_at: timestamp("generated_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+    paid_by_user_id: integer("paid_by_user_id").references(() => users.user_id),
+    paid_at: timestamp("paid_at", { withTimezone: true, mode: "string" }),
+    note: text("note"),
+  },
+  (t) => [
+    // One rebate per player per window per plan — the guard against a second
+    // "generate" paying anyone twice.
+    unique("rebate_payouts_plan_player_window_key").on(t.plan_id, t.player_id, t.window_start),
+  ],
+);
+
 // ---------- Game credits ----------
 
 export const gameCredits = pgTable(
@@ -722,6 +964,11 @@ export const gameCredits = pgTable(
       .notNull()
       .references(() => players.player_id),
     game_name: varchar("game_name", { length: 60 }).notNull(),
+    // Which of the player's logins under this game the balance belongs to. A
+    // player may hold several accounts on one game; each carries its own
+    // balance. "" is the legacy/only-login row (backfilled from the player's
+    // first linked account for the game).
+    game_username: varchar("game_username", { length: 120 }).notNull().default(""),
     current_balance: numeric("current_balance", {
       precision: 12,
       scale: 2,
@@ -736,7 +983,7 @@ export const gameCredits = pgTable(
       .notNull()
       .defaultNow(),
   },
-  (t) => [primaryKey({ columns: [t.player_id, t.game_name] })],
+  (t) => [primaryKey({ columns: [t.player_id, t.game_name, t.game_username] })],
 );
 
 export const gameTransfers = pgTable("game_transfers", {
@@ -746,6 +993,10 @@ export const gameTransfers = pgTable("game_transfers", {
     .references(() => players.player_id),
   from_game: varchar("from_game", { length: 60 }).notNull(),
   to_game: varchar("to_game", { length: 60 }).notNull(),
+  // Which specific logins the move is between. Null = the player's first
+  // account for each game (the pre-multi-account default).
+  from_game_username: varchar("from_game_username", { length: 120 }),
+  to_game_username: varchar("to_game_username", { length: 120 }),
   transfer_amount: numeric("transfer_amount", {
     precision: 12,
     scale: 2,
@@ -894,6 +1145,33 @@ export const expenses = pgTable("expenses", {
     .notNull()
     .references(() => users.user_id),
   notes: text("notes"),
+  created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .notNull()
+    .defaultNow(),
+});
+
+/**
+ * A settlement between two leaders — one leader moving funds to another.
+ *
+ * Distinct from `expenses` (operational costs leaving the business) and from
+ * `bankTransfers` (movement between bank accounts): this records an accounting
+ * transfer between two leader entities, so leader-to-leader flow can be
+ * reported without being tangled up in either.
+ */
+export const leaderTransfers = pgTable("leader_transfers", {
+  transfer_id: serial("transfer_id").primaryKey(),
+  from_leader_entity_id: integer("from_leader_entity_id")
+    .notNull()
+    .references(() => entities.entity_id),
+  to_leader_entity_id: integer("to_leader_entity_id")
+    .notNull()
+    .references(() => entities.entity_id),
+  amount: numeric("amount", { precision: 14, scale: 2, mode: "number" }).notNull(),
+  // What the settlement is for — free text, shown in the list and report.
+  note: text("note"),
+  created_by_user_id: integer("created_by_user_id")
+    .notNull()
+    .references(() => users.user_id),
   created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
     .notNull()
     .defaultNow(),
