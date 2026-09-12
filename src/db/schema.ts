@@ -31,6 +31,23 @@ export const userRoleEnum = pgEnum("user_role", [
 
 export const activeStatusEnum = pgEnum("active_status", ["active", "inactive"]);
 
+/**
+ * A browser that has signed in. "pending" is the default a new one lands on:
+ * it is recorded and usable while the device policy is off, and refused once
+ * an admin turns enforcement on — nothing is locked out by adding the table.
+ */
+export const deviceStatusEnum = pgEnum("device_status", [
+  "pending",
+  "approved",
+  "blocked",
+]);
+
+/** What a one-time code was issued for. */
+export const authChallengePurposeEnum = pgEnum("auth_challenge_purpose", [
+  "login",
+  "telegram_link",
+]);
+
 export const playerStatusEnum = pgEnum("player_status", ["active", "suspended"]);
 
 /** Who created a transaction: the agent (auto-detected) or a person (manual). */
@@ -224,10 +241,94 @@ export const users = pgTable("users", {
     .references(() => entities.entity_id),
   status: activeStatusEnum("status").notNull().default("active"),
   last_login_at: timestamp("last_login_at", { withTimezone: true, mode: "string" }),
+  /**
+   * Where the login code is sent. Set by enrolment — the user opens the bot
+   * from Settings and it reports the chat back — never typed by hand, because
+   * nobody knows their own chat id.
+   */
+  telegram_chat_id: varchar("telegram_chat_id", { length: 40 }),
+  telegram_username: varchar("telegram_username", { length: 80 }),
+  /**
+   * Ask for a Telegram code after the password. Can only be on once a chat is
+   * linked; unlinking Telegram turns it off, so a user can't lock themselves
+   * out of an account whose second factor has nowhere to arrive.
+   */
+  two_factor_enabled: boolean("two_factor_enabled").notNull().default(false),
+  /**
+   * IPs and CIDR ranges this user may sign in from. Empty = anywhere, which
+   * is the default, so the column changes nothing until someone fills it.
+   */
+  ip_allowlist: jsonb("ip_allowlist").$type<string[]>().notNull().default([]),
   created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
     .notNull()
     .defaultNow(),
   updated_at: timestamp("updated_at", { withTimezone: true, mode: "string" })
+    .notNull()
+    .defaultNow(),
+});
+
+/**
+ * A browser that has signed in to an account.
+ *
+ * The nearest thing the web gives us to "this machine": a random id minted on
+ * first sign-in and kept in a long-lived signed cookie. It is not a MAC
+ * address and can't be — a page cannot read one — so it identifies a browser
+ * profile, not hardware. Clearing cookies or a new browser is a new device,
+ * which is the point: it shows up for approval.
+ */
+export const userDevices = pgTable(
+  "user_devices",
+  {
+    device_id: serial("device_id").primaryKey(),
+    user_id: integer("user_id")
+      .notNull()
+      .references(() => users.user_id),
+    /** The opaque id carried in the device cookie. */
+    fingerprint: varchar("fingerprint", { length: 64 }).notNull(),
+    /** What the user calls it ("Front desk PC"); defaults to the browser/OS. */
+    label: varchar("label", { length: 80 }),
+    user_agent: varchar("user_agent", { length: 300 }),
+    last_ip: varchar("last_ip", { length: 60 }),
+    status: deviceStatusEnum("status").notNull().default("pending"),
+    approved_by_user_id: integer("approved_by_user_id").references(
+      () => users.user_id,
+    ),
+    approved_at: timestamp("approved_at", { withTimezone: true, mode: "string" }),
+    first_seen_at: timestamp("first_seen_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+    last_seen_at: timestamp("last_seen_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [unique("user_devices_user_fingerprint").on(t.user_id, t.fingerprint)],
+);
+
+/**
+ * A one-time code in flight — a login waiting on its Telegram code, or an
+ * enrolment waiting for the user to open the bot.
+ *
+ * Only the hash is stored, the same reasoning as a password: a leaked table
+ * shouldn't hand over live codes. A row is consumed on first correct use and
+ * dies either way at `expires_at`; `attempts` caps guessing.
+ */
+export const authChallenges = pgTable("auth_challenges", {
+  challenge_id: serial("challenge_id").primaryKey(),
+  user_id: integer("user_id")
+    .notNull()
+    .references(() => users.user_id),
+  purpose: authChallengePurposeEnum("purpose").notNull(),
+  /** sha256 of the code. Null for an enrolment, whose token is the id below. */
+  code_hash: varchar("code_hash", { length: 64 }),
+  /** The deep-link token for a telegram_link challenge. */
+  link_token: varchar("link_token", { length: 64 }),
+  attempts: integer("attempts").notNull().default(0),
+  /** Which browser asked, so the session lands on the device that logged in. */
+  device_fingerprint: varchar("device_fingerprint", { length: 64 }),
+  ip: varchar("ip", { length: 60 }),
+  expires_at: timestamp("expires_at", { withTimezone: true, mode: "string" }).notNull(),
+  consumed_at: timestamp("consumed_at", { withTimezone: true, mode: "string" }),
+  created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
     .notNull()
     .defaultNow(),
 });

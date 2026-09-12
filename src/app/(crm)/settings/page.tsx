@@ -36,6 +36,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { SecurityTab } from "@/components/security-settings";
 import type { ApiKeyRow, User } from "@/lib/types";
 
 const ROLE_LABELS: Record<string, string> = {
@@ -45,7 +46,7 @@ const ROLE_LABELS: Record<string, string> = {
   viewer: "Viewer",
 };
 
-type TabKey = "account" | "team" | "keys" | "system";
+type TabKey = "account" | "security" | "team" | "keys" | "system";
 
 export default function SettingsPage() {
   const me = useStore((s) => s.me);
@@ -53,6 +54,9 @@ export default function SettingsPage() {
 
   const tabs: { key: TabKey; label: string; show: boolean }[] = [
     { key: "account", label: "My Account", show: true },
+    // Two-factor and this browser's device entry are everyone's; the policy
+    // and IP controls inside are gated to the super admin.
+    { key: "security", label: "Security", show: true },
     { key: "team", label: "Team", show: me?.role === "super_admin" || me?.role === "company_leader" },
     { key: "keys", label: "API Keys", show: me?.role === "super_admin" },
     { key: "system", label: "System", show: me?.role === "super_admin" },
@@ -72,7 +76,7 @@ export default function SettingsPage() {
       <div>
         <h1 className="text-2xl font-semibold">Settings</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Manage your account, team, integration keys and system configuration.
+          Manage your account, sign-in security, team, integration keys and system configuration.
         </p>
       </div>
 
@@ -93,6 +97,7 @@ export default function SettingsPage() {
       </div>
 
       {tab === "account" && <AccountTab />}
+      {tab === "security" && <SecurityTab />}
       {tab === "team" && <TeamTab />}
       {tab === "keys" && <KeysTab />}
       {tab === "system" && <SystemTab />}

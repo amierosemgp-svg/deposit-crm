@@ -243,6 +243,9 @@ export async function GET(request: Request) {
           status: users.status,
           last_login_at: users.last_login_at,
           created_at: users.created_at,
+          two_factor_enabled: users.two_factor_enabled,
+          telegram_username: users.telegram_username,
+          ip_allowlist: users.ip_allowlist,
         })
         .from(users)
         .where(

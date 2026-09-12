@@ -432,6 +432,7 @@ type Store = {
     games?: string[];
     rebate_cutoffs?: ServerSettings["rebate_cutoffs"];
     banks?: string[];
+    device_policy?: ServerSettings["device_policy"];
   }) => Promise<MutationResult>;
 
   uploadFile: (file: File) => Promise<{ ok: boolean; url?: string; error?: string }>;

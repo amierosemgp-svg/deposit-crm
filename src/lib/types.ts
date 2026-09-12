@@ -23,6 +23,12 @@ export type User = {
   status: "active" | "inactive";
   last_login_at: string | null;
   created_at: string;
+  /** Sign-in asks for a Telegram code after the password. */
+  two_factor_enabled?: boolean;
+  /** The @handle codes are sent to, once enrolled. */
+  telegram_username?: string | null;
+  /** IPs / CIDR ranges this account may sign in from. Empty = anywhere. */
+  ip_allowlist?: string[];
 };
 
 export type Me = User & {
@@ -562,6 +568,11 @@ export type ServerSettings = {
     weekly: { weekday: number; time: string };
     monthly: { day: number; time: string };
   };
+  /**
+   * Whether an unapproved browser may sign in. Absent or "off" = devices are
+   * recorded but never refused; "enforce" = only approved ones get in.
+   */
+  device_policy?: "off" | "enforce";
   [key: string]: unknown;
 };
 

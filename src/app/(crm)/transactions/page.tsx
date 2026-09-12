@@ -916,18 +916,49 @@ export default function TransactionsPage() {
             touched = true;
           }
         }
-        // The holder cell is derived: whenever the bank or account changes —
-        // picked from the list or typed — it re-reads off the player's saved
-        // accounts, so it can never sit stale next to a different account.
+        /**
+         * Keep the payout cells telling one story.
+         *
+         * Holder is derived, never typed, so it re-reads off the player's
+         * saved accounts whenever the bank or the number changes — it can't
+         * sit stale beside a different account. And the two identifying cells
+         * follow each other: a number identifies an account outright, so the
+         * bank follows it; a bank with a single account on file brings its
+         * number along. The row must never name one bank and another bank's
+         * account — that is a payment to the wrong place.
+         */
         if (tab === "withdrawal") {
           const c = COL.withdrawal;
           const bankNow = out[c.bank]?.trim() ?? "";
           const acctNow = out[c.account]?.trim() ?? "";
           const bankBefore = prev[i]?.[c.bank]?.trim() ?? "";
           const acctBefore = prev[i]?.[c.account]?.trim() ?? "";
-          if (bankNow !== bankBefore || acctNow !== acctBefore) {
-            const match = payoutAccountOf(pl, bankNow, acctNow);
-            out[c.holder] = match?.account_holder ?? "";
+          const accounts = pl.bank_accounts ?? [];
+
+          if (acctNow !== acctBefore) {
+            const match = accounts.find((b) => b.account_number.trim() === acctNow);
+            if (match) {
+              out[c.bank] = match.bank_name;
+              out[c.holder] = match.account_holder;
+            } else {
+              // A number that isn't on file — a one-off payout. Nothing to
+              // vouch for the holder, so say nothing rather than guess.
+              out[c.holder] = "";
+            }
+            touched = true;
+          } else if (bankNow !== bankBefore) {
+            const atBank = accounts.filter(
+              (b) => b.bank_name.trim().toLowerCase() === bankNow.toLowerCase(),
+            );
+            if (atBank.length === 1) {
+              out[c.account] = atBank[0].account_number;
+              out[c.holder] = atBank[0].account_holder;
+            } else {
+              // Several accounts at that bank, or none on file: the number is
+              // CS's to pick, and it's left alone rather than guessed at.
+              out[c.holder] =
+                atBank.find((b) => b.account_number.trim() === acctNow)?.account_holder ?? "";
+            }
             touched = true;
           }
         }
@@ -968,7 +999,7 @@ export default function TransactionsPage() {
         return out;
       });
     },
-    [tab, playerByCode, payoutAccountOf],
+    [tab, playerByCode],
   );
 
   const onDraftsChange = useCallback(

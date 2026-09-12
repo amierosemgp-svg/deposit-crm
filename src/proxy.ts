@@ -2,7 +2,18 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { verifySessionToken } from "@/lib/session";
 
-const PUBLIC_API = ["/api/auth/login", "/api/bot/", "/api/cron/"];
+const PUBLIC_API = [
+  "/api/auth/login",
+  // The second half of a login: the password has been checked but no session
+  // exists yet, so these can't sit behind one. They authenticate on the
+  // challenge id, which only a correct password produces.
+  "/api/auth/verify-2fa",
+  "/api/auth/resend-2fa",
+  // Telegram calls this one; it authenticates on the webhook secret header.
+  "/api/telegram/webhook",
+  "/api/bot/",
+  "/api/cron/",
+];
 // Public, no-login pages (e.g. the agent API reference for the integration team)
 const PUBLIC_PAGES = ["/bot-api.html"];
 

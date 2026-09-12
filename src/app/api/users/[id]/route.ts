@@ -5,6 +5,7 @@ import { entities, users } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import { companyOfEntity, diffFields, logActivity } from "@/lib/activity-log";
+import { isValidIpEntry } from "@/lib/ip-allow";
 
 /** Load the target user and confirm the requester may manage them. */
 async function loadManageable(
@@ -43,9 +44,20 @@ async function loadManageable(
 const patchSchema = z.object({
   full_name: z.string().min(1).optional(),
   status: z.enum(["active", "inactive"]).optional(),
+  /**
+   * Addresses and CIDR ranges this user may sign in from. An empty list means
+   * anywhere, which is the default — sending [] lifts a restriction.
+   */
+  ip_allowlist: z
+    .array(z.string().min(1).max(60))
+    .max(50)
+    .optional()
+    .refine((list) => !list || list.every((e) => isValidIpEntry(e)), {
+      message: "Each entry must be an IP address or a CIDR range (e.g. 203.0.113.0/24)",
+    }),
 });
 
-/** PATCH /api/users/:id — rename or deactivate/reactivate a user. */
+/** PATCH /api/users/:id — rename, deactivate, or set an IP allowlist. */
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -55,11 +67,24 @@ export async function PATCH(
     const { id } = await params;
     const target = await loadManageable(requester, Number(id));
     const parsed = patchSchema.safeParse(await request.json().catch(() => null));
-    if (!parsed.success) return jsonError("Invalid payload");
+    if (!parsed.success) {
+      return jsonError(parsed.error.issues[0]?.message ?? "Invalid payload");
+    }
+    // Only the super admin draws the network boundary — a leader managing a
+    // CS agent shouldn't be able to widen where that account can sign in from.
+    if (parsed.data.ip_allowlist !== undefined && requester.role !== "super_admin") {
+      throw new AuthError(403, "Only the super admin sets an IP allowlist");
+    }
 
     const [updated] = await db
       .update(users)
-      .set({ ...parsed.data, updated_at: new Date().toISOString() })
+      .set({
+        ...parsed.data,
+        ...(parsed.data.ip_allowlist
+          ? { ip_allowlist: parsed.data.ip_allowlist.map((e) => e.trim()) }
+          : {}),
+        updated_at: new Date().toISOString(),
+      })
       .where(eq(users.user_id, Number(id)))
       .returning({
         user_id: users.user_id,
@@ -68,6 +93,7 @@ export async function PATCH(
         role: users.role,
         entity_id: users.entity_id,
         status: users.status,
+        ip_allowlist: users.ip_allowlist,
       });
 
     const changes = diffFields(target, parsed.data);
