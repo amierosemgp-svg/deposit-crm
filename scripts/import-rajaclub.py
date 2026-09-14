@@ -744,17 +744,33 @@ INSERT INTO provider_bo_accounts (company_entity_id, game_name, bo_username, bo_
   SELECT c.v, k.game_name, k.bo_username, k.bo_label, k.credit, 'active', k.notes
     FROM imp_kiosk k, ctx c WHERE c.k = 'company';""")
 
-    # ── 6. bonus plans the company runs ──────────────────────────────────────
+    # ── 6. one general bonus per percentage the operator gives ───────────────
+    #
+    # The operator has no rule attached to these — a percentage is just what CS
+    # gave that member on that deposit. bonus_plans cannot say that: the table's
+    # own CHECK (bonus_plans_period_ck) requires a period on anything that is
+    # not a welcome bonus, so the loosest expressible plan is recurring/daily.
+    #
+    # That cap is inert for everything imported here. periodStart("daily")
+    # measures from this morning, so an August deposit is never in the lookback
+    # and linking the history cannot make a plan look claimed. It bites only on
+    # deposits entered from now on, where CS keeps the escape they used all
+    # month anyway: the Bonus % cell takes a typed number, which posts
+    # bonus_percentage with no plan and skips eligibility entirely.
     pcts = sorted({(r["pct"] * 100).quantize(CENT) for r in d["deposits"] + d["referrals"]
                    if r["pct"] > 0})
-    plan_rows = [(f"RajaClub {p.normalize()}%", "recurring", "daily", p) for p in pcts]
+    plan_rows = [(f"{COMPANY} {p:.0f}%", p) for p in pcts]
     add("""
-CREATE TEMP TABLE imp_plan (name text, type text, period text, pct numeric) ON COMMIT DROP;""")
-    add(copy_block("imp_plan", ["name", "type", "period", "pct"], plan_rows))
+CREATE TEMP TABLE imp_plan (name text, pct numeric, plan_id int) ON COMMIT DROP;""")
+    add(copy_block("imp_plan", ["name", "pct"], plan_rows))
     add("""
-INSERT INTO bonus_plans (name, type, period, percentage, min_deposit, company_entity_id, notes)
-  SELECT p.name, p.type::bonus_plan_type, p.period::bonus_period, p.pct, 0, c.v,
-         'Imported from the operator''s bonus table.'
+UPDATE imp_plan SET plan_id = nextval('bonus_plans_plan_id_seq');
+INSERT INTO bonus_plans (plan_id, name, type, period, percentage, min_deposit,
+                         company_entity_id, notes)
+  SELECT p.plan_id, p.name, 'recurring', 'daily', p.pct, 0, c.v,
+         'General bonus imported from the RajaClub trading sheet. The operator '
+         'attaches no rule to it — the daily period is the loosest the table''s '
+         'CHECK constraint allows, not a limit they asked for.'
     FROM imp_plan p, ctx c WHERE c.k = 'company';""")
 
     # ── 7. people and members ────────────────────────────────────────────────
@@ -888,18 +904,19 @@ UPDATE imp_dep SET deposit_id = nextval('deposits_deposit_id_seq');
 INSERT INTO deposits (deposit_id, external_id, transaction_ref, deposit_date,
                       deposit_time_known, player_id, player_username, company_entity_id,
                       deposit_amount, bank_name, bank_description, received_into_account_id,
-                      bonus_percentage, bonus_amount, total_amount, selected_game,
-                      selected_game_username, status, source, skip_bot, matched_at,
-                      approved_at, handled_by_user_id, created_at, updated_at)
+                      bonus_plan_id, bonus_percentage, bonus_amount, total_amount,
+                      selected_game, selected_game_username, status, source, skip_bot,
+                      matched_at, approved_at, handled_by_user_id, created_at, updated_at)
   SELECT d.deposit_id, d.external_id, d.ref, d.at, d.timed, m.player_id, d.code, c.v,
          d.amount,
          coalesce(nullif(b.bank_name, ''), d.bank_label),
          d.description, b.account_id,
-         d.pct, d.bonus, d.total, d.game_name, d.game_username,
+         pl.plan_id, d.pct, d.bonus, d.total, d.game_name, d.game_username,
          'completed', 'manual', true, d.at, d.at, u.v, d.at, d.at
     FROM imp_dep d
     LEFT JOIN imp_member m ON m.code = d.code
-    LEFT JOIN imp_bank b ON b.code = d.bank_code,
+    LEFT JOIN imp_bank b ON b.code = d.bank_code
+    LEFT JOIN imp_plan pl ON pl.pct = d.pct AND d.pct > 0,
          ctx c, cs_user u
    WHERE c.k = 'company';""")
 
@@ -1203,6 +1220,9 @@ UNION ALL SELECT 'game accounts', count(*)::text FROM member_game_accounts WHERE
 UNION ALL SELECT 'member bank accounts', count(*)::text FROM member_bank_accounts WHERE member_id IN (SELECT player_id FROM pl)
 UNION ALL SELECT 'bank accounts', count(*)::text FROM bank_accounts WHERE entity_id IN (SELECT entity_id FROM co)
 UNION ALL SELECT 'kiosks', count(*)::text FROM provider_bo_accounts WHERE company_entity_id IN (SELECT entity_id FROM co)
+UNION ALL SELECT 'bonus plans', count(*)::text FROM bonus_plans WHERE company_entity_id IN (SELECT entity_id FROM co)
+UNION ALL SELECT 'deposits with a plan', count(*)::text FROM deposits WHERE company_entity_id IN (SELECT entity_id FROM co) AND bonus_plan_id IS NOT NULL
+UNION ALL SELECT 'planned bonus amount', coalesce(sum(bonus_amount),0)::text FROM deposits WHERE company_entity_id IN (SELECT entity_id FROM co) AND bonus_plan_id IS NOT NULL
 UNION ALL SELECT 'deposits', count(*)::text FROM deposits WHERE company_entity_id IN (SELECT entity_id FROM co)
 UNION ALL SELECT 'deposit amount', coalesce(sum(deposit_amount),0)::text FROM deposits WHERE company_entity_id IN (SELECT entity_id FROM co)
 UNION ALL SELECT 'deposit bonus', coalesce(sum(bonus_amount),0)::text FROM deposits WHERE company_entity_id IN (SELECT entity_id FROM co)
@@ -1252,6 +1272,10 @@ def verify(dsn, data):
                              | {r["bank"] for r in d["deposits"] + d["withdrawals"]
                                 + d["cash_outs"] if r["bank"]}),
         "kiosks": len(d["dashboard"]["kiosks"]),
+        "bonus plans": len({r["pct"] for r in d["deposits"] + d["referrals"] if r["pct"] > 0}),
+        "deposits with a plan": sum(1 for r in d["deposits"] + d["bonus_only"] if r["pct"] > 0),
+        "planned bonus amount": money(sum(r["bonus"] for r in d["deposits"] + d["bonus_only"]
+                                          if r["pct"] > 0)),
         # Two ledger rows per deposit that names a game (the intent and the
         # top-up that settled it), one otherwise; two per withdrawal; one each
         # for a referral, a transfer, a free credit and a cash-out.
@@ -1322,10 +1346,14 @@ def main():
     banks = json.loads(psql(dsn, "select value from settings where key='banks'",
                             quiet=True) or "[]")
     new_banks = sorted({BANK_NAMES.get(c, c) for c in data["dashboard"]["banks"]} - set(banks))
+    used_pcts = sorted({int(r["pct"] * 100) for r in data["deposits"] + data["referrals"]
+                        if r["pct"] > 0})
     if new_games:
         print(f"\ngames to add to the catalogue: {', '.join(new_games)}")
     if new_banks:
         print(f"banks to add to the catalogue: {', '.join(new_banks)}")
+    print(f"general bonuses to create: "
+          f"{', '.join(f'{COMPANY} {p}%' for p in used_pcts)}")
 
     if not args.apply:
         print("\nDRY RUN — nothing written. Re-run with --apply.")

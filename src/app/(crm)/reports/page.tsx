@@ -37,7 +37,7 @@ export default function ReportsPage() {
     // Both kinds of payout the report covers: a deposit's own bonus, and the
     // recommend bonus an upline earns. Cancelled ones were written off.
     bonus_payout:
-      deposits.filter((d) => d.bonus_amount > 0).length +
+      deposits.filter((d) => d.bonus_amount !== 0).length +
       referralBonuses.filter((b) => b.status !== "cancelled").length,
     bank_reconciliation: deposits.length,
   };

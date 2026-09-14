@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
@@ -63,22 +63,124 @@ function daysAgoStr(n: number) {
   d.setDate(d.getDate() - n);
   return d.toISOString().slice(0, 10);
 }
-function inRange(iso: string, from: string, to: string) {
-  const day = iso.slice(0, 10);
-  if (from && day < from) return false;
-  if (to && day > to) return false;
-  return true;
-}
 
 type Cell = { node: React.ReactNode; csv: string | number };
 
 /** One bonus payout, deposit or recommend, as plain data (no JSX). */
-type BonusPayout = {
+/**
+ * One response from a report endpoint under /api/reports/.
+ *
+ * Every report on this page is totalled server-side. They used to be computed
+ * in the browser over the Zustand store, which holds only the newest few
+ * hundred rows of each table — so any period bigger than that silently
+ * reported a fraction of itself (an imported month of 9,037 deposits showed
+ * RM 12,526 of a real RM 69,164 in bonuses). A report's headline is an
+ * aggregate over the whole period, so paging alone could never fix it: the
+ * sums have to happen where all the rows are.
+ *
+ * `summary` is always over the entire filtered period, never the page on
+ * screen, so a card can't disagree with the table beneath it. `rows` is one
+ * page for the transaction reports and the whole (small) result for the
+ * rollups — `total > rows.length` is what says a pager is needed.
+ */
+type ReportApi = {
+  summary: Record<string, number>;
+  rows: Record<string, unknown>[];
+  /** Bonus Payout level 1 only: the per-game rollup. */
+  games?: {
+    game: string;
+    payouts: number;
+    deposit_count: number;
+    recommend_count: number;
+    basis: number;
+    bonus: number;
+  }[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+/** Report id → its route segment under /api/reports/. */
+const REPORT_ENDPOINT: Record<string, string> = {
+  daily_deposits: "daily-deposits",
+  daily_withdrawals: "daily-withdrawals",
+  ggr_summary: "ggr-summary",
+  cs_performance: "cs-performance",
+  bonus_payout: "bonus-payout",
+  bank_reconciliation: "bank-reconciliation",
+};
+
+type DepositRow = {
+  deposit_id: number;
+  deposit_date: string;
+  approved_at: string | null;
+  transaction_ref: string;
+  player: string;
+  company: string;
+  game: string;
+  status: DepositStatus;
+  agent: string;
+  deposit_amount: number;
+  bonus_amount: number;
+  bonus_percentage: number;
+  total_amount: number;
+};
+
+type WithdrawalRow = {
+  withdrawal_id: number;
+  created_at: string;
+  player: string;
+  company: string;
+  game_name: string;
+  bank_name: string | null;
+  bank_account_number: string | null;
+  status: WithdrawalStatus;
+  agent: string;
+  requested_amount: number;
+  credit_pulled_amount: number;
+};
+
+type GgrRow = {
+  company_id: number;
+  company_name: string;
+  dep_count: number;
+  dep_volume: number;
+  bonus: number;
+  wd_count: number;
+  wd_volume: number;
+  ggr: number;
+};
+
+type AgentRow = {
+  user_id: number;
+  full_name: string;
+  username: string | null;
+  dep_count: number;
+  dep_volume: number;
+  wd_count: number;
+  wd_volume: number;
+  txn_count: number;
+  total_volume: number;
+};
+
+type ReconRow = {
+  deposit_id: number;
+  deposit_date: string;
+  transaction_ref: string;
+  bank_name: string;
+  bank_account_holder: string | null;
+  deposit_amount: number;
+  status: DepositStatus;
+  game_topup_reference: string | null;
+  flag: string;
+};
+
+type PayoutRow = {
   key: string;
-  date: string;
   kind: "Deposit" | "Recommend";
+  at: string;
   ref: string;
-  playerId: number | null;
+  player_id: number | null;
   player: string;
   company: string;
   game: string;
@@ -87,6 +189,9 @@ type BonusPayout = {
   basis: number;
   bonus: number;
 };
+
+const REPORT_PAGE_SIZE = 100;
+
 type Row = {
   key: React.Key;
   cells: Cell[];
@@ -108,16 +213,56 @@ type PreparedTable = {
 
 const norm = (s: string | null | undefined) => (s ?? "").toLowerCase();
 
+/**
+ * A fetched row as CSV cells, in the same order as the table's headers.
+ *
+ * The on-screen rows carry their own `csv` values, but an export covers pages
+ * that were never rendered, so the projection has to exist independently of
+ * the cells. Keep this in step with the headers in `table`.
+ */
+function csvCellsOf(
+  reportId: string,
+  row: Record<string, unknown>,
+): (string | number)[] {
+  const at = (iso: unknown) =>
+    typeof iso === "string" ? iso.slice(0, 16).replace("T", " ") : "";
+  const v = (k: string) => (row[k] ?? "") as string | number;
+  switch (reportId) {
+    case "daily_deposits":
+      return [
+        at(row.deposit_date), at(row.approved_at), v("transaction_ref"),
+        v("player"), v("company"), v("game"), v("status"), v("agent"),
+        v("deposit_amount"), v("bonus_amount"), v("total_amount"),
+      ];
+    case "daily_withdrawals":
+      return [
+        at(row.created_at), `WD-${v("withdrawal_id")}`, v("player"),
+        v("company"), v("game_name"),
+        [row.bank_name, row.bank_account_number].filter(Boolean).join(" "),
+        v("status"), v("agent"), v("requested_amount"), v("credit_pulled_amount"),
+      ];
+    case "bank_reconciliation":
+      return [
+        at(row.deposit_date), v("transaction_ref"), v("bank_name"),
+        v("bank_account_holder"), v("deposit_amount"), v("status"),
+        v("game_topup_reference"), v("flag"),
+      ];
+    case "bonus_payout":
+      return [
+        at(row.at), v("kind"), v("ref"), v("player"), v("company"),
+        v("status"), v("pct"), v("basis"), v("bonus"),
+      ];
+    default:
+      return Object.values(row) as (string | number)[];
+  }
+}
+
 export default function ReportDetailPage() {
   const { reportId } = useParams<{ reportId: string }>();
   const def = REPORT_DEFS.find((r) => r.id === reportId);
 
-  const deposits = useStore((s) => s.deposits);
-  const hydrated = useStore((s) => s.hydrated);
-  const withdrawals = useStore((s) => s.withdrawals);
-  const referralBonuses = useStore((s) => s.referralBonuses);
-  const players = useStore((s) => s.players);
-  const users = useStore((s) => s.users);
+  // The only thing this page still takes from the store is the company list
+  // for the filter. Every figure comes from /api/reports/* — see ReportApi.
   const companies = useStore((s) => s.companies)();
 
   const [dateFrom, setDateFrom] = useState(daysAgoStr(7));
@@ -136,238 +281,93 @@ export default function ReportDetailPage() {
     "all",
   );
 
-  const playerById = useMemo(
-    () => new Map(players.map((p) => [p.player_id, p])),
-    [players],
-  );
-  const userById = useMemo(
-    () => new Map(users.map((u) => [u.user_id, u])),
-    [users],
-  );
-  const companyNameOf = (id: number | null | undefined) =>
-    id == null
-      ? "—"
-      : (companies.find((c) => c.company_id === id)?.company_name ?? `#${id}`);
-  const agentNameOf = (id: number | null | undefined) =>
-    id == null ? "—" : (userById.get(id)?.username ?? `#${id}`);
-  const playerLabelOf = (
-    playerId: number | null,
-    fallbackUsername?: string | null,
-  ) => {
-    const p = playerId != null ? playerById.get(playerId) : undefined;
-    return p?.full_name ?? fallbackUsername ?? "—";
-  };
-
   const q = norm(query.trim());
 
-  const filteredDeposits = useMemo(
-    () =>
-      deposits.filter((d) => {
-        if (!inRange(d.deposit_date, dateFrom, dateTo)) return false;
-        if (companyId !== "all" && String(d.company_entity_id ?? "") !== companyId)
-          return false;
-        if (status !== "all" && d.status !== status) return false;
-        if (q) {
-          const p = d.player_id != null ? playerById.get(d.player_id) : undefined;
-          const hay = [
-            d.transaction_ref,
-            d.player_username,
-            p?.full_name,
-            p?.username,
-            d.bank_name,
-            d.bank_account_holder,
-            d.bank_description,
-            d.selected_game,
-            d.game_topup_reference,
-          ]
-            .map(norm)
-            .join(" ");
-          if (!hay.includes(q)) return false;
-        }
-        return true;
-      }),
-    [deposits, dateFrom, dateTo, companyId, status, q, playerById],
-  );
-
   /**
-   * Recommend bonuses in range, scoped and searched like the deposits are.
-   *
-   * Dated on `assigned_at` when there is one — that is when the credit was
-   * actually handed over — falling back to when it was earned for one still
-   * pending. Cancelled bonuses are written off and never paid, so they are out
-   * of a payout report entirely.
-   *
-   * The company is the *upline's*: they are the player being paid, even though
-   * it was the downline's deposit that triggered it.
+   * The report, fetched. See ReportApi for why none of this is derived from
+   * the store any more.
    */
-  const filteredReferralBonuses = useMemo(
-    () =>
-      referralBonuses
-        .filter((b) => b.status !== "cancelled")
-        .filter((b) => {
-          if (!inRange(b.assigned_at ?? b.created_at, dateFrom, dateTo)) {
-            return false;
-          }
-          const upline = playerById.get(b.upline_player_id);
-          if (
-            companyId !== "all" &&
-            String(upline?.company_entity_id ?? "") !== companyId
-          ) {
-            return false;
-          }
-          if (q) {
-            const hay = [
-              `REC-${b.bonus_id}`,
-              upline?.full_name,
-              upline?.username,
-              b.downline_full_name,
-              b.downline_username,
-              b.game_name,
-              b.note,
-            ]
-              .map(norm)
-              .join(" ");
-            if (!hay.includes(q)) return false;
-          }
-          return true;
-        }),
-    [referralBonuses, dateFrom, dateTo, companyId, q, playerById],
-  );
+  const [report, setReport] = useState<ReportApi | null>(null);
+  const [offset, setOffset] = useState(0);
+  const [exporting, setExporting] = useState(false);
 
-  const filteredWithdrawals = useMemo(
-    () =>
-      withdrawals.filter((w) => {
-        if (!inRange(w.created_at, dateFrom, dateTo)) return false;
-        const p = playerById.get(w.player_id);
-        if (
-          companyId !== "all" &&
-          String(p?.company_entity_id ?? "") !== companyId
-        )
-          return false;
-        if (status !== "all" && w.status !== status) return false;
-        if (q) {
-          const hay = [
-            p?.full_name,
-            p?.username,
-            w.game_name,
-            w.bank_name,
-            w.bank_account_number,
-          ]
-            .map(norm)
-            .join(" ");
-          if (!hay.includes(q)) return false;
-        }
-        return true;
-      }),
-    [withdrawals, dateFrom, dateTo, companyId, status, q, playerById],
-  );
+  const reportQuery = useMemo(() => {
+    const sp = new URLSearchParams();
+    if (dateFrom) sp.set("from", dateFrom);
+    if (dateTo) sp.set("to", dateTo);
+    if (companyId !== "all") sp.set("company", companyId);
+    if (status !== "all") sp.set("status", status);
+    if (payoutKind !== "all") sp.set("type", payoutKind);
+    if (q) sp.set("q", q);
+    return sp.toString();
+  }, [dateFrom, dateTo, companyId, status, payoutKind, q]);
 
-  /** A game with no name yet — a recommend bonus CS has not credited. */
-  const NO_GAME = "(no game yet)";
-
-  /**
-   * Every bonus payout in range, deposit and recommend alike, as plain data.
-   *
-   * Hoisted out of the table builder so the summary cards read the exact same
-   * list: they used to recompute it independently, which is how a card and the
-   * table under it can quietly disagree.
-   */
-  const bonusPayouts = useMemo(() => {
-    if (def?.id !== "bonus_payout") return [];
-
-    const withBonus =
-      payoutKind === "Recommend"
-        ? []
-        : filteredDeposits.filter((d) => d.bonus_amount > 0);
-    // Status holds *deposit* statuses; a recommend bonus can never satisfy one.
-    // In recommend-only view the status filter simply does not apply, or a
-    // leftover "completed" would empty the table and read as "no recommend
-    // bonuses" rather than "that filter doesn't apply here".
-    const showRecommend =
-      (status === "all" || payoutKind === "Recommend") &&
-      payoutKind !== "Deposit";
-    const recommend = showRecommend ? filteredReferralBonuses : [];
-
-    // One shape for two different payouts, so they sort and total together.
-    // "Player" is who receives the money — the depositor for a deposit bonus,
-    // the *upline* for a recommend bonus — which is the whole reason these
-    // cannot be folded into the deposit's own figure.
-    const rows: BonusPayout[] = [
-      ...withBonus.map((d) => ({
-        key: `dep-${d.deposit_id}`,
-        date: d.deposit_date,
-        kind: "Deposit" as const,
-        ref: d.transaction_ref,
-        playerId: d.player_id,
-        player: playerLabelOf(d.player_id, d.player_username),
-        company: companyNameOf(d.company_entity_id),
-        game: d.selected_game || NO_GAME,
-        status: d.status as BonusPayout["status"],
-        pct: d.bonus_percentage,
-        basis: d.deposit_amount,
-        bonus: d.bonus_amount,
-      })),
-      ...recommend.map((b) => {
-        const upline = playerById.get(b.upline_player_id);
-        return {
-          key: `rec-${b.bonus_id}`,
-          // When the credit was handed over, or when it was earned if it is
-          // still waiting for CS.
-          date: b.assigned_at ?? b.created_at,
-          kind: "Recommend" as const,
-          ref: `REC-${b.bonus_id}`,
-          // The upline is the one paid, so they are the "player" here.
-          playerId: b.upline_player_id,
-          player:
-            upline?.full_name ?? upline?.username ?? `#${b.upline_player_id}`,
-          company: companyNameOf(upline?.company_entity_id),
-          // No game until CS credits it; lumping those under a real game would
-          // misstate that game's spend.
-          game: b.game_name || NO_GAME,
-          status: b.status as BonusPayout["status"],
-          pct: b.bonus_percentage,
-          // The downline's qualifying deposit — the figure the percentage was
-          // taken from, so the arithmetic on the row still reads.
-          basis: b.deposit_amount,
-          bonus: b.bonus_amount,
-        };
-      }),
-    ];
-
-    return rows
-      .filter((p) => payoutKind === "all" || p.kind === payoutKind)
-      .sort((a, b) => b.date.localeCompare(a.date));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    def,
-    filteredDeposits,
-    filteredReferralBonuses,
-    status,
-    payoutKind,
-    playerById,
-  ]);
-
-  // Drop the drill when a filter moves: the game may no longer have any
-  // payouts, and an empty table with no explanation reads as a bug. Derived
-  // during render rather than in an effect, so it settles before paint.
-  const drillKey = JSON.stringify([dateFrom, dateTo, companyId, status, payoutKind, q]);
-  const [prevDrillKey, setPrevDrillKey] = useState(drillKey);
-  if (drillKey !== prevDrillKey) {
-    setPrevDrillKey(drillKey);
+  // Drop the drill and the page when a filter moves: the game may no longer
+  // have any payouts, and an empty table with no explanation reads as a bug.
+  // Derived during render rather than in an effect, so it settles before paint.
+  const [prevQuery, setPrevQuery] = useState(reportQuery);
+  if (reportQuery !== prevQuery) {
+    setPrevQuery(reportQuery);
     if (drillGame !== null) setDrillGame(null);
+    if (offset !== 0) setOffset(0);
   }
 
-  /** The payouts actually on screen: one game's worth, or all of them. */
-  const shownPayouts = useMemo(
-    () =>
-      drillGame === null
-        ? bonusPayouts
-        : bonusPayouts.filter((p) => p.game === drillGame),
-    [bonusPayouts, drillGame],
+  /** The URL for one view, so the fetch and the CSV can't diverge. */
+  const reportUrl = useCallback(
+    (game: string | null, at: number, limit: number) => {
+      const endpoint = def ? REPORT_ENDPOINT[def.id] : null;
+      if (!endpoint) return null;
+      const sp = new URLSearchParams(reportQuery);
+      if (game !== null) sp.set("game", game);
+      sp.set("limit", String(limit));
+      sp.set("offset", String(at));
+      return `/api/reports/${endpoint}?${sp}`;
+    },
+    [def, reportQuery],
   );
+
+  // The view being asked for, and the one already answered. Loading is the gap
+  // between them — a derived value rather than a flag an effect has to set,
+  // which keeps the fetch from triggering a render before it has any news.
+  const want = reportUrl(drillGame, offset, REPORT_PAGE_SIZE);
+  const [have, setHave] = useState<string | null>(null);
+  const loading = want !== null && want !== have;
+
+  // A stale response must never overwrite a fresh one: the filters move faster
+  // than the network, and the last request to *start* is not always the last to
+  // land. Each run claims a ticket and only the newest one may write.
+  const run = useRef(0);
+  useEffect(() => {
+    if (!want) return;
+    const ticket = ++run.current;
+    fetch(want)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((data: ReportApi) => {
+        if (ticket !== run.current) return;
+        setReport(data);
+        setHave(want);
+      })
+      .catch(() => {
+        if (ticket !== run.current) return;
+        setReport(null);
+        // Marked answered even though it failed, or the spinner never stops.
+        setHave(want);
+        toast.error("Could not load the report");
+      });
+  }, [want]);
 
   const table: PreparedTable | null = useMemo(() => {
     if (!def) return null;
+    if (!report) return { headers: [], rows: [] };
+
+    /** Footer label, so a page-limited table never claims to be the whole set. */
+    const allPagesLabel =
+      report.total > report.rows.length ? "Totals · all pages" : "Totals";
+    /** "101–200 of 9,037", or nothing when it all fits on one page. */
+    const pageSummary = () =>
+      report.total > report.rows.length
+        ? `${(report.offset + 1).toLocaleString()}–${Math.min(report.offset + report.rows.length, report.total).toLocaleString()} of ${report.total.toLocaleString()}.`
+        : "";
 
     const money = (n: number): Cell => ({ node: formatRM(n), csv: n });
     const text = (s: string): Cell => ({ node: s, csv: s });
@@ -398,17 +398,17 @@ export default function ReportDetailPage() {
 
     switch (def.id) {
       case "daily_deposits": {
-        const rows = filteredDeposits.map((d) => ({
+        const rows = (report.rows as DepositRow[]).map((d) => ({
           key: d.deposit_id,
           cells: [
             when(d.deposit_date),
             whenOrNever(d.approved_at),
             mono(d.transaction_ref),
-            text(playerLabelOf(d.player_id, d.player_username)),
-            text(companyNameOf(d.company_entity_id)),
-            text(d.selected_game ?? "—"),
+            text(d.player),
+            text(d.company),
+            text(d.game),
             badge(d.status),
-            text(agentNameOf(d.handled_by_user_id)),
+            text(d.agent),
             money(d.deposit_amount),
             {
               node: (
@@ -424,8 +424,6 @@ export default function ReportDetailPage() {
             money(d.total_amount),
           ],
         }));
-        const sum = (f: (d: (typeof filteredDeposits)[number]) => number) =>
-          filteredDeposits.reduce((acc, d) => acc + f(d), 0);
         return {
           headers: [
             { label: "Date" },
@@ -441,8 +439,10 @@ export default function ReportDetailPage() {
             { label: "Total", align: "right" },
           ],
           rows,
+          // The period, not the page: a footer summing the visible hundred
+          // would contradict the card above it.
           totals: [
-            "Totals",
+            allPagesLabel,
             null,
             null,
             null,
@@ -450,38 +450,34 @@ export default function ReportDetailPage() {
             null,
             null,
             null,
-            formatRM(sum((d) => d.deposit_amount)),
-            formatRM(sum((d) => d.bonus_amount)),
-            formatRM(sum((d) => d.total_amount)),
+            formatRM(report.summary.amount),
+            formatRM(report.summary.bonus),
+            formatRM(report.summary.total),
           ],
+          summary: pageSummary(),
         };
       }
 
       case "daily_withdrawals": {
-        const rows = filteredWithdrawals.map((w) => {
-          const p = playerById.get(w.player_id);
-          return {
-            key: w.withdrawal_id,
-            cells: [
-              when(w.created_at),
-              mono(`WD-${w.withdrawal_id}`),
-              text(p?.full_name ?? `#${w.player_id}`),
-              text(companyNameOf(p?.company_entity_id)),
-              text(w.game_name),
-              text(
-                w.bank_name
-                  ? `${w.bank_name}${w.bank_account_number ? ` ${w.bank_account_number}` : ""}`
-                  : "—",
-              ),
-              badge(w.status),
-              text(agentNameOf(w.handled_by_user_id)),
-              money(w.requested_amount),
-              money(w.credit_pulled_amount),
-            ],
-          };
-        });
-        const sum = (f: (w: (typeof filteredWithdrawals)[number]) => number) =>
-          filteredWithdrawals.reduce((acc, w) => acc + f(w), 0);
+        const rows = (report.rows as WithdrawalRow[]).map((w) => ({
+          key: w.withdrawal_id,
+          cells: [
+            when(w.created_at),
+            mono(`WD-${w.withdrawal_id}`),
+            text(w.player),
+            text(w.company),
+            text(w.game_name),
+            text(
+              w.bank_name
+                ? `${w.bank_name}${w.bank_account_number ? ` ${w.bank_account_number}` : ""}`
+                : (w.bank_account_number ?? "—"),
+            ),
+            badge(w.status),
+            text(w.agent),
+            money(w.requested_amount),
+            money(w.credit_pulled_amount),
+          ],
+        }));
         return {
           headers: [
             { label: "Date" },
@@ -497,7 +493,7 @@ export default function ReportDetailPage() {
           ],
           rows,
           totals: [
-            "Totals",
+            allPagesLabel,
             null,
             null,
             null,
@@ -505,66 +501,14 @@ export default function ReportDetailPage() {
             null,
             null,
             null,
-            formatRM(sum((w) => w.requested_amount)),
-            formatRM(sum((w) => w.credit_pulled_amount)),
+            formatRM(report.summary.requested),
+            formatRM(report.summary.pulled),
           ],
+          summary: pageSummary(),
         };
       }
 
       case "ggr_summary": {
-        type Agg = {
-          depCount: number;
-          depVolume: number;
-          bonus: number;
-          wdCount: number;
-          wdVolume: number;
-        };
-        const byCompany = new Map<number, Agg>();
-        const aggOf = (id: number) => {
-          let a = byCompany.get(id);
-          if (!a) {
-            a = { depCount: 0, depVolume: 0, bonus: 0, wdCount: 0, wdVolume: 0 };
-            byCompany.set(id, a);
-          }
-          return a;
-        };
-        // Realised money only, matching the Dashboard's profit tile.
-        //
-        // This counted every non-failed row at its requested figure, which
-        // booked unconfirmed deposits as revenue and, worse, booked a
-        // withdrawal at what the player ASKED for rather than what was paid —
-        // so a request of 100 settled at 30 overstated GGR's cost by 70, while
-        // a `withdraw_all` (requested_amount = 0 until the agent reports back)
-        // counted as nothing at all however much left the wallet.
-        for (const d of filteredDeposits) {
-          if (d.company_entity_id == null || d.status !== "completed") continue;
-          const a = aggOf(d.company_entity_id);
-          a.depCount += 1;
-          a.depVolume += d.deposit_amount;
-          a.bonus += d.bonus_amount;
-        }
-        for (const w of filteredWithdrawals) {
-          if (w.status !== "paid") continue;
-          const cid = playerById.get(w.player_id)?.company_entity_id;
-          if (cid == null) continue;
-          const a = aggOf(cid);
-          a.wdCount += 1;
-          a.wdVolume += w.credit_pulled_amount;
-        }
-        // Recommend bonuses are money out too, and are invisible here
-        // otherwise: they are paid to the upline and never touch a deposit row.
-        for (const b of filteredReferralBonuses) {
-          if (b.status !== "assigned") continue;
-          const cid = playerById.get(b.upline_player_id)?.company_entity_id;
-          if (cid == null) continue;
-          aggOf(cid).bonus += b.bonus_amount;
-        }
-        const entries = companies
-          .map((c) => ({ company: c, agg: byCompany.get(c.company_id) }))
-          .filter(
-            (e): e is { company: (typeof companies)[number]; agg: Agg } =>
-              e.agg !== undefined,
-          );
         const ggrCell = (n: number): Cell => ({
           node: (
             <span
@@ -578,31 +522,6 @@ export default function ReportDetailPage() {
           ),
           csv: n,
         });
-        const rows = entries.map(({ company, agg }) => {
-          const ggr = agg.depVolume - agg.wdVolume - agg.bonus;
-          return {
-            key: company.company_id,
-            cells: [
-              text(company.company_name),
-              { node: agg.depCount, csv: agg.depCount },
-              money(agg.depVolume),
-              money(agg.bonus),
-              { node: agg.wdCount, csv: agg.wdCount },
-              money(agg.wdVolume),
-              ggrCell(ggr),
-            ],
-          };
-        });
-        const t = entries.reduce(
-          (acc, { agg }) => ({
-            depCount: acc.depCount + agg.depCount,
-            depVolume: acc.depVolume + agg.depVolume,
-            bonus: acc.bonus + agg.bonus,
-            wdCount: acc.wdCount + agg.wdCount,
-            wdVolume: acc.wdVolume + agg.wdVolume,
-          }),
-          { depCount: 0, depVolume: 0, bonus: 0, wdCount: 0, wdVolume: 0 },
-        );
         return {
           headers: [
             { label: "Company" },
@@ -613,15 +532,26 @@ export default function ReportDetailPage() {
             { label: "Withdrawal Volume", align: "right" },
             { label: "GGR", align: "right" },
           ],
-          rows,
+          rows: (report.rows as GgrRow[]).map((r) => ({
+            key: r.company_id,
+            cells: [
+              text(r.company_name),
+              { node: r.dep_count, csv: r.dep_count },
+              money(r.dep_volume),
+              money(r.bonus),
+              { node: r.wd_count, csv: r.wd_count },
+              money(r.wd_volume),
+              ggrCell(r.ggr),
+            ],
+          })),
           totals: [
             "Totals",
-            t.depCount,
-            formatRM(t.depVolume),
-            formatRM(t.bonus),
-            t.wdCount,
-            formatRM(t.wdVolume),
-            formatRM(t.depVolume - t.wdVolume - t.bonus),
+            report.summary.dep_count,
+            formatRM(report.summary.dep_volume),
+            formatRM(report.summary.bonus),
+            report.summary.wd_count,
+            formatRM(report.summary.wd_volume),
+            formatRM(report.summary.ggr),
           ],
           summary:
             "Realised money only: completed deposits and paid withdrawals, at the amount actually paid. Bonuses include recommend bonuses credited to uplines.",
@@ -629,70 +559,6 @@ export default function ReportDetailPage() {
       }
 
       case "cs_performance": {
-        type Agg = {
-          depCount: number;
-          depVolume: number;
-          wdCount: number;
-          wdVolume: number;
-        };
-        const byUser = new Map<number, Agg>();
-        const aggOf = (id: number) => {
-          let a = byUser.get(id);
-          if (!a) {
-            a = { depCount: 0, depVolume: 0, wdCount: 0, wdVolume: 0 };
-            byUser.set(id, a);
-          }
-          return a;
-        };
-        for (const d of filteredDeposits) {
-          if (d.handled_by_user_id == null) continue;
-          const a = aggOf(d.handled_by_user_id);
-          a.depCount += 1;
-          a.depVolume += d.total_amount;
-        }
-        for (const w of filteredWithdrawals) {
-          if (w.handled_by_user_id == null) continue;
-          const a = aggOf(w.handled_by_user_id);
-          a.wdCount += 1;
-          a.wdVolume += w.requested_amount;
-        }
-        const rows = [...byUser.entries()]
-          .sort(
-            ([, a], [, b]) =>
-              b.depVolume + b.wdVolume - (a.depVolume + a.wdVolume),
-          )
-          .map(([userId, a]) => {
-            const u = userById.get(userId);
-            return {
-              key: userId,
-              cells: [
-                {
-                  node: (
-                    <span>
-                      <span className="font-medium">
-                        {u?.full_name ?? `#${userId}`}
-                      </span>
-                      {u && (
-                        <span className="ml-1.5 text-[11px] text-muted-foreground">
-                          @{u.username}
-                        </span>
-                      )}
-                    </span>
-                  ),
-                  csv: u?.username ?? `#${userId}`,
-                },
-                { node: a.depCount, csv: a.depCount },
-                money(a.depVolume),
-                { node: a.wdCount, csv: a.wdCount },
-                money(a.wdVolume),
-                {
-                  node: a.depCount + a.wdCount,
-                  csv: a.depCount + a.wdCount,
-                },
-                money(a.depVolume + a.wdVolume),
-              ],
-            };
-          });
         return {
           headers: [
             { label: "Agent" },
@@ -703,39 +569,49 @@ export default function ReportDetailPage() {
             { label: "Transactions", align: "right" },
             { label: "Total Volume", align: "right" },
           ],
-          rows,
-          summary:
-            "Only transactions with a handling CS agent are counted.",
+          rows: (report.rows as AgentRow[]).map((a) => ({
+            key: a.user_id,
+            cells: [
+              {
+                node: (
+                  <span>
+                    <span className="font-medium">{a.full_name}</span>
+                    {a.username && (
+                      <span className="ml-1.5 text-[11px] text-muted-foreground">
+                        @{a.username}
+                      </span>
+                    )}
+                  </span>
+                ),
+                csv: a.username ?? a.full_name,
+              },
+              { node: a.dep_count, csv: a.dep_count },
+              money(a.dep_volume),
+              { node: a.wd_count, csv: a.wd_count },
+              money(a.wd_volume),
+              { node: a.txn_count, csv: a.txn_count },
+              money(a.total_volume),
+            ],
+          })),
+          totals: [
+            "Totals",
+            report.summary.dep_count,
+            formatRM(report.summary.dep_volume),
+            report.summary.wd_count,
+            formatRM(report.summary.wd_volume),
+            report.summary.dep_count + report.summary.wd_count,
+            formatRM(report.summary.dep_volume + report.summary.wd_volume),
+          ],
+          summary: "Only transactions with a handling CS agent are counted.",
         };
       }
 
       case "bonus_payout": {
-        const sum = (list: BonusPayout[], f: (p: BonusPayout) => number) =>
-          list.reduce((acc, p) => acc + f(p), 0);
+        // Every figure here is the server's. Nothing is re-totalled in the
+        // browser, so the table cannot drift from the cards above it.
 
         // ---- Level 1: one row per game. Click a row to drill in. ----
         if (drillGame === null) {
-          const byGame = new Map<string, BonusPayout[]>();
-          for (const p of bonusPayouts) {
-            const list = byGame.get(p.game);
-            if (list) list.push(p);
-            else byGame.set(p.game, [p]);
-          }
-
-          // Biggest bonus spend first: the top row is the one worth opening.
-          // Games come from the payouts themselves, not the catalogue, so a
-          // game with no bonuses this period is absent rather than a zero row.
-          const groups = [...byGame.entries()]
-            .map(([game, list]) => ({
-              game,
-              list,
-              bonus: sum(list, (p) => p.bonus),
-              basis: sum(list, (p) => p.basis),
-              deposit: list.filter((p) => p.kind === "Deposit").length,
-              recommend: list.filter((p) => p.kind === "Recommend").length,
-            }))
-            .sort((a, b) => b.bonus - a.bonus);
-
           return {
             headers: [
               { label: "Game" },
@@ -745,7 +621,7 @@ export default function ReportDetailPage() {
               { label: "Deposit Volume", align: "right" },
               { label: "Bonus Paid", align: "right" },
             ],
-            rows: groups.map((g) => ({
+            rows: (report.games ?? []).map((g) => ({
               key: `game-${g.game}`,
               onClick: () => setDrillGame(g.game),
               cells: [
@@ -758,27 +634,31 @@ export default function ReportDetailPage() {
                   ),
                   csv: g.game,
                 },
-                { node: g.list.length, csv: g.list.length },
-                { node: g.deposit, csv: g.deposit },
-                { node: g.recommend, csv: g.recommend },
+                { node: g.payouts, csv: g.payouts },
+                { node: g.deposit_count, csv: g.deposit_count },
+                { node: g.recommend_count, csv: g.recommend_count },
                 { node: formatRM(g.basis), csv: g.basis },
                 { node: formatRM(g.bonus), csv: g.bonus },
               ],
             })),
             totals: [
               "Totals",
-              bonusPayouts.length,
-              bonusPayouts.filter((p) => p.kind === "Deposit").length,
-              bonusPayouts.filter((p) => p.kind === "Recommend").length,
-              formatRM(sum(bonusPayouts, (p) => p.basis)),
-              formatRM(sum(bonusPayouts, (p) => p.bonus)),
+              report.summary.deposit_count + report.summary.recommend_count,
+              report.summary.deposit_count,
+              report.summary.recommend_count,
+              formatRM(report.summary.basis),
+              formatRM(
+                report.summary.deposit_bonus + report.summary.recommend_bonus,
+              ),
             ],
             summary:
               "Click a game to see its payouts. Deposits with no bonus are excluded; cancelled recommend bonuses are written off and excluded.",
           };
         }
 
-        // ---- Level 2: one game's payouts. ----
+        // ---- Level 2: one game's payouts, one page at a time. ----
+        const shown = report.rows as PayoutRow[];
+        const last = Math.min(offset + shown.length, report.total);
         return {
           headers: [
             { label: "Date" },
@@ -791,10 +671,10 @@ export default function ReportDetailPage() {
             { label: "Deposit", align: "right" },
             { label: "Bonus Paid", align: "right" },
           ],
-          rows: shownPayouts.map((p) => ({
+          rows: shown.map((p) => ({
             key: p.key,
             cells: [
-              when(p.date),
+              when(p.at),
               {
                 node: (
                   <span
@@ -819,34 +699,31 @@ export default function ReportDetailPage() {
               money(p.bonus),
             ],
           })),
+          // The whole game, not this page: a footer that totalled the visible
+          // hundred rows would contradict the card above it.
           totals: [
-            "Totals",
+            "Totals · all pages",
             null,
             null,
             null,
             null,
             null,
             null,
-            formatRM(sum(shownPayouts, (p) => p.basis)),
-            formatRM(sum(shownPayouts, (p) => p.bonus)),
+            formatRM(report.summary.basis),
+            formatRM(
+              report.summary.deposit_bonus + report.summary.recommend_bonus,
+            ),
           ],
-          summary: `Bonus payouts for ${drillGame}.`,
+          summary:
+            report.total > shown.length
+              ? `Bonus payouts for ${drillGame} · ${(offset + 1).toLocaleString()}–${last.toLocaleString()} of ${report.total.toLocaleString()}.`
+              : `Bonus payouts for ${drillGame}.`,
         };
       }
 
       case "bank_reconciliation": {
-        const flagOf = (
-          d: (typeof filteredDeposits)[number],
-        ): { label: string; ok: boolean } => {
-          if (d.status === "failed") return { label: "Failed", ok: false };
-          if (d.status === "pending_match")
-            return { label: "Unmatched", ok: false };
-          if (d.status === "completed" && !d.game_topup_reference)
-            return { label: "No top-up ref", ok: false };
-          return { label: "OK", ok: true };
-        };
-        const rows = filteredDeposits.map((d) => {
-          const flag = flagOf(d);
+        const rows = (report.rows as ReconRow[]).map((d) => {
+          const ok = d.flag === "OK";
           return {
             key: d.deposit_id,
             cells: [
@@ -862,23 +739,25 @@ export default function ReportDetailPage() {
                   <span
                     className={cn(
                       "inline-flex items-center gap-1 text-[11px] font-medium",
-                      flag.ok ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400",
+                      ok ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400",
                     )}
                   >
-                    {flag.ok ? (
+                    {ok ? (
                       <CheckCircle2 className="h-3 w-3" />
                     ) : (
                       <AlertTriangle className="h-3 w-3" />
                     )}
-                    {flag.label}
+                    {d.flag}
                   </span>
                 ),
-                csv: flag.label,
+                csv: d.flag,
               },
             ],
           };
         });
-        const issues = filteredDeposits.filter((d) => !flagOf(d).ok).length;
+        // Counted over the period, not the page: "how many discrepancies this
+        // month" is the question, and a page of a hundred cannot answer it.
+        const issues = report.summary.issues;
         return {
           headers: [
             { label: "Date" },
@@ -891,30 +770,28 @@ export default function ReportDetailPage() {
             { label: "Flag" },
           ],
           rows,
+          totals: [
+            allPagesLabel,
+            null,
+            null,
+            null,
+            formatRM(report.summary.amount),
+            null,
+            null,
+            `${issues.toLocaleString()} flagged`,
+          ],
           summary:
-            issues === 0
+            (issues === 0
               ? "No discrepancies in this period."
-              : `${issues} discrepanc${issues === 1 ? "y" : "ies"} flagged.`,
+              : `${issues.toLocaleString()} discrepanc${issues === 1 ? "y" : "ies"} flagged.`) +
+            (pageSummary() ? ` ${pageSummary()}` : ""),
         };
       }
 
       default:
         return null;
     }
-    // playerLabelOf/companyNameOf/agentNameOf are stable derivations of the
-    // deps already listed, so they are intentionally omitted.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    def,
-    filteredDeposits,
-    filteredWithdrawals,
-    bonusPayouts,
-    shownPayouts,
-    drillGame,
-    companies,
-    playerById,
-    userById,
-  ]);
+  }, [def, report, offset, drillGame]);
 
   // Summary tiles shown above the table for the transaction-style reports.
   const summaryTiles: {
@@ -923,76 +800,78 @@ export default function ReportDetailPage() {
     sub?: string;
     icon: React.ComponentType<{ className?: string }>;
   }[] = useMemo(() => {
-    const uniquePlayers = (ids: (number | null)[]) =>
-      new Set(ids.filter((x): x is number => x != null)).size;
     if (!def) return [];
     switch (def.id) {
       case "daily_deposits": {
-        const total = filteredDeposits.reduce((s, d) => s + d.deposit_amount, 0);
+        if (!report) return [];
         return [
-          { title: "Total Deposit Amount", value: formatRM(total), icon: Wallet },
+          {
+            title: "Total Deposit Amount",
+            value: formatRM(report.summary.amount),
+            sub: `${formatRM(report.summary.bonus)} bonus · ${formatRM(report.summary.total)} credited`,
+            icon: Wallet,
+          },
           {
             title: "Unique Players",
-            value: String(uniquePlayers(filteredDeposits.map((d) => d.player_id))),
+            value: report.summary.unique_players.toLocaleString(),
             sub: "deposited in this period",
             icon: Users,
           },
           {
             title: "Transactions",
-            value: filteredDeposits.length.toLocaleString(),
+            value: report.summary.count.toLocaleString(),
             icon: Hash,
           },
         ];
       }
       case "daily_withdrawals": {
-        const total = filteredWithdrawals.reduce(
-          (s, w) => s + w.requested_amount,
-          0,
-        );
+        if (!report) return [];
         return [
-          { title: "Total Withdrawal Amount", value: formatRM(total), icon: Wallet },
+          {
+            title: "Total Withdrawal Amount",
+            value: formatRM(report.summary.requested),
+            sub: `${formatRM(report.summary.pulled)} actually pulled`,
+            icon: Wallet,
+          },
           {
             title: "Unique Players",
-            value: String(
-              uniquePlayers(filteredWithdrawals.map((w) => w.player_id)),
-            ),
+            value: report.summary.unique_players.toLocaleString(),
             sub: "withdrew in this period",
             icon: Users,
           },
           {
             title: "Transactions",
-            value: filteredWithdrawals.length.toLocaleString(),
+            value: report.summary.count.toLocaleString(),
             icon: Hash,
           },
         ];
       }
       case "bonus_payout": {
-        // Reads the same list the table does, scoped the same way — so drilling
-        // into a game moves the cards with it, and a card can never quietly
-        // disagree with the rows underneath it.
-        const shown = shownPayouts;
-        const dep = shown.filter((p) => p.kind === "Deposit");
-        const rec = shown.filter((p) => p.kind === "Recommend");
-        const depTotal = dep.reduce((a, p) => a + p.bonus, 0);
-        const recTotal = rec.reduce((a, p) => a + p.bonus, 0);
+        // The same summary object the table's footer uses, scoped by the same
+        // request — so a card can never quietly disagree with the rows beneath
+        // it, and neither is limited to the page on screen.
+        if (!report) return [];
+        const { summary } = report;
+        const total = summary.deposit_bonus + summary.recommend_bonus;
+        const count = summary.deposit_count + summary.recommend_count;
         const scope = drillGame ? ` · ${drillGame}` : "";
         return [
           {
             title: "Total Bonus Amount",
-            value: formatRM(depTotal + recTotal),
-            sub: `${formatRM(depTotal)} deposit · ${formatRM(recTotal)} recommend${scope}`,
+            value: formatRM(total),
+            sub: `${formatRM(summary.deposit_bonus)} deposit · ${formatRM(summary.recommend_bonus)} recommend${scope}`,
             icon: Gift,
           },
           {
             title: "Unique Players",
-            value: String(uniquePlayers(shown.map((p) => p.playerId))),
+            value: summary.unique_players.toLocaleString(),
             sub: "claimed a bonus",
             icon: Users,
           },
           {
             title: drillGame ? "Payouts" : "Bonus Transactions",
-            value: shown.length.toLocaleString(),
-            sub: `${dep.length} deposit · ${rec.length} recommend`,
+            value: count.toLocaleString(),
+            sub: `${summary.deposit_count.toLocaleString()} deposit · ${summary.recommend_count.toLocaleString()} recommend`,
             icon: Hash,
           },
         ];
@@ -1000,7 +879,7 @@ export default function ReportDetailPage() {
       default:
         return [];
     }
-  }, [def, filteredDeposits, filteredWithdrawals, shownPayouts, drillGame]);
+  }, [def, report, drillGame]);
 
   if (!def || !table) {
     return (
@@ -1036,17 +915,55 @@ export default function ReportDetailPage() {
     }
   }
 
-  function exportCsv() {
+  /**
+   * Every row the current filters match, not just the page on screen.
+   *
+   * The tables page at 100 because nobody reads 9,037 rows in a browser, but a
+   * CSV of the visible hundred silently answers a different question than the
+   * one asked. Pulled 500 at a time against the same URL builder the table
+   * used, so the export and the total on screen come from one filter.
+   */
+  async function fetchAllRows(): Promise<Record<string, unknown>[]> {
+    const out: Record<string, unknown>[] = [];
+    for (let at = 0; ; at += 500) {
+      const url = reportUrl(drillGame, at, 500);
+      if (!url) return out;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(String(res.status));
+      const page: ReportApi = await res.json();
+      out.push(...page.rows);
+      if (out.length >= page.total || page.rows.length === 0) return out;
+    }
+  }
+
+  async function exportCsv() {
     if (!table || !def) return;
     const esc = (v: string | number) => {
       const s = String(v);
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
+
+    let bodyRows = table.rows.map((r) => r.cells.map((c) => esc(c.csv)).join(","));
+    // Only worth re-fetching when the table is showing a slice of something
+    // bigger; a rollup already has every row on screen.
+    if (report && report.total > report.rows.length) {
+      setExporting(true);
+      try {
+        const all = await fetchAllRows();
+        bodyRows = all.map((row) =>
+          csvCellsOf(def.id, row).map(esc).join(","),
+        );
+      } catch {
+        toast.error("Could not export — try a narrower date range");
+        return;
+      } finally {
+        setExporting(false);
+      }
+    }
+
     const lines = [
       table.headers.map((h) => esc(h.label)).join(","),
-      // Exports exactly what is on screen — the game summary, or one game's
-      // payouts once drilled in.
-      ...table.rows.map((r) => r.cells.map((c) => esc(c.csv)).join(",")),
+      ...bodyRows,
     ];
     const blob = new Blob(["\ufeff" + lines.join("\n")], {
       type: "text/csv;charset=utf-8",
@@ -1057,7 +974,7 @@ export default function ReportDetailPage() {
     a.download = `${def.id}_${dateFrom || "all"}_to_${dateTo || "all"}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-    toast.success(`Exported ${table.rows.length} rows to CSV`);
+    toast.success(`Exported ${lines.length - 1} rows to CSV`);
   }
 
   return (
@@ -1103,9 +1020,13 @@ export default function ReportDetailPage() {
               )}
             </div>
           </div>
-          <Button onClick={exportCsv} className="shrink-0 cursor-pointer">
+          <Button
+            onClick={exportCsv}
+            disabled={exporting}
+            className="shrink-0 cursor-pointer"
+          >
             <Download className="h-3.5 w-3.5" />
-            Export CSV
+            {exporting ? "Exporting…" : "Export CSV"}
           </Button>
         </div>
       </div>
@@ -1353,7 +1274,7 @@ export default function ReportDetailPage() {
                     colSpan={table.headers.length}
                     className="px-3 py-12 text-center text-xs text-muted-foreground"
                   >
-                    {!hydrated ? (
+                    {loading ? (
                       <ListLoading className="py-0" label="Loading report…" />
                     ) : (
                       "No data matches the current filters."
@@ -1382,6 +1303,37 @@ export default function ReportDetailPage() {
             )}
           </table>
         </div>
+        {/* Paged reports only: a rollup has every row on screen already. */}
+        {report !== null && report.total > report.rows.length && (
+          <div className="flex items-center justify-between border-t px-4 py-2.5">
+            <span className="text-xs text-muted-foreground">
+              Page {Math.floor(offset / REPORT_PAGE_SIZE) + 1} of{" "}
+              {Math.ceil(report.total / REPORT_PAGE_SIZE).toLocaleString()}
+            </span>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="cursor-pointer"
+                disabled={offset === 0 || loading}
+                onClick={() =>
+                  setOffset((o) => Math.max(o - REPORT_PAGE_SIZE, 0))
+                }
+              >
+                Previous
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="cursor-pointer"
+                disabled={offset + REPORT_PAGE_SIZE >= report.total || loading}
+                onClick={() => setOffset((o) => o + REPORT_PAGE_SIZE)}
+              >
+                Next
+              </Button>
+            </div>
+          </div>
+        )}
       </Card>
     </div>
   );
