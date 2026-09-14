@@ -49,6 +49,11 @@ export function depositScopeFilter(user: AuthedUser): SQL | undefined {
 /** Entity IDs whose bank accounts / players / BO accounts the user can see. */
 export async function visibleEntityIds(user: AuthedUser): Promise<number[] | null> {
   if (user.companyIds === null) return null; // unrestricted
+  // super_admin / viewer: their whole organisation, main company and leaders
+  // included — an account can hang off any of those, not only a company.
+  if (user.role === "super_admin" || user.role === "viewer") {
+    return user.ownedEntityIds ?? user.companyIds;
+  }
   if (user.role === "company_leader") {
     return [user.entity_id, ...user.companyIds];
   }
@@ -61,7 +66,11 @@ export async function visibleEntityTree(user: AuthedUser) {
   if (user.companyIds === null) return all;
 
   const roots =
-    user.role === "company_leader" ? [user.entity_id] : [...user.companyIds];
+    user.role === "super_admin" || user.role === "viewer"
+      ? (user.ownedEntityIds ?? [...user.companyIds])
+      : user.role === "company_leader"
+        ? [user.entity_id]
+        : [...user.companyIds];
   const byId = new Map(all.map((e) => [e.entity_id, e]));
 
   // 1. The user's own subtree: roots + everything descending from them.

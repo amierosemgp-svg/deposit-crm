@@ -20,7 +20,8 @@ const VALID_PARENT: Record<string, string> = {
 
 /**
  * POST /api/entities — grow the hierarchy.
- * super_admin: leaders/companies/cs anywhere; company_leader: companies + cs under themselves.
+ * super_admin: leaders/companies/cs anywhere in their own organisation;
+ * company_leader: companies + cs under themselves.
  */
 export async function POST(request: Request) {
   try {
@@ -48,6 +49,14 @@ export async function POST(request: Request) {
       if (!allowedParents.includes(body.parent_entity_id)) {
         throw new AuthError(403, "Parent entity is outside your scope");
       }
+    } else if (
+      user.role === "super_admin" &&
+      user.ownedEntityIds !== null &&
+      !user.ownedEntityIds.includes(body.parent_entity_id)
+    ) {
+      // "Anywhere" is anywhere in their own organisation. Hanging a leader off
+      // somebody else's main company was previously unchecked.
+      throw new AuthError(403, "Parent entity belongs to another organisation");
     }
 
     const [created] = await db.insert(entities).values(body).returning();

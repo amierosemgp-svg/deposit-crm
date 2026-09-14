@@ -425,12 +425,20 @@ export default function HierarchyPage() {
     return map;
   }, [players]);
 
-  const main = entities.find((e) => e.entity_type === "main_company");
-  const leaders = main
-    ? (byParent.get(main.entity_id) ?? []).filter(
-        (e) => e.entity_type === "leader",
-      )
-    : [];
+  /**
+   * Every main company, not just the first one.
+   *
+   * This page took `entities.find(main_company)` and drew that one tree. With
+   * a single main company that was indistinguishable from correct; the moment
+   * a second one existed its leaders, companies, desks and players vanished
+   * from the page entirely while still being in the database — the company
+   * filter in the top bar listed them, and the org chart did not.
+   */
+  const mains = entities
+    .filter((e) => e.entity_type === "main_company")
+    .sort((a, b) => a.entity_id - b.entity_id);
+  const leadersOf = (mainId: number) =>
+    (byParent.get(mainId) ?? []).filter((e) => e.entity_type === "leader");
   const companyCount = entities.filter((e) => e.entity_type === "company").length;
 
   // --- permissions ---
@@ -496,7 +504,7 @@ export default function HierarchyPage() {
     );
   }
 
-  if (!main) {
+  if (!mains.length) {
     return (
       <div className="space-y-5">
         <div>
@@ -520,260 +528,271 @@ export default function HierarchyPage() {
       <div>
         <h1 className="text-2xl font-semibold">Organization Hierarchy</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          {main.name} → {leaders.length}{" "}
-          {leaders.length === 1 ? "Leader" : "Leaders"} → {companyCount}{" "}
+          {mains.length}{" "}
+          {mains.length === 1 ? "Main Company" : "Main Companies"} →{" "}
+          {mains.reduce((n, m) => n + leadersOf(m.entity_id).length, 0)}{" "}
+          Leaders → {companyCount}{" "}
           {companyCount === 1 ? "Company" : "Companies"} → {players.length}{" "}
           {players.length === 1 ? "Player" : "Players"}
         </p>
       </div>
 
-      {/* Main company */}
-      <Card className="border-primary/20">
-        <CardHeader className="flex flex-row items-center gap-3 space-y-0 pb-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-            <Building2 className="h-5 w-5" />
-          </div>
-          <div className="flex-1">
-            <CardTitle className="text-base">{main.name}</CardTitle>
-            <p className="text-xs text-muted-foreground">
-              Main Company · Super Admin access
-            </p>
-          </div>
-          <div className="flex items-center gap-1.5">
-            {canEditEntity(main) && <EditEntityLink entity={main} />}
-            {isSuper && (
-              <>
-                <NodeActionButton
-                  label="Leader"
-                  icon={Plus}
-                  onClick={() =>
-                    setEntityDialog({
-                      parentId: main.entity_id,
-                      parentName: main.name,
-                      entityType: "leader",
-                    })
-                  }
-                />
-                <NodeActionButton
-                  label="Add User"
-                  icon={UserPlus}
-                  onClick={() => openAddUser(main)}
-                />
-              </>
+      {/* One block per main company. Each is a separate organisation: its own
+          leaders, companies and desks, rendered as its own tree. */}
+      {mains.map((main) => {
+        const leaders = leadersOf(main.entity_id);
+        return (
+          <div key={main.entity_id} className="space-y-4">
+          {/* Main company */}
+          <Card className="border-primary/20">
+            <CardHeader className="flex flex-row items-center gap-3 space-y-0 pb-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+                <Building2 className="h-5 w-5" />
+              </div>
+              <div className="flex-1">
+                <CardTitle className="text-base">{main.name}</CardTitle>
+                <p className="text-xs text-muted-foreground">
+                  Main Company · Super Admin access
+                </p>
+              </div>
+              <div className="flex items-center gap-1.5">
+                {canEditEntity(main) && <EditEntityLink entity={main} />}
+                {isSuper && (
+                  <>
+                    <NodeActionButton
+                      label="Leader"
+                      icon={Plus}
+                      onClick={() =>
+                        setEntityDialog({
+                          parentId: main.entity_id,
+                          parentName: main.name,
+                          entityType: "leader",
+                        })
+                      }
+                    />
+                    <NodeActionButton
+                      label="Add User"
+                      icon={UserPlus}
+                      onClick={() => openAddUser(main)}
+                    />
+                  </>
+                )}
+              </div>
+            </CardHeader>
+            {(usersByEntity.get(main.entity_id) ?? []).length > 0 && (
+              <CardContent className="pt-0">
+                <EntityUserChips users={usersByEntity.get(main.entity_id) ?? []} />
+              </CardContent>
             )}
-          </div>
-        </CardHeader>
-        {(usersByEntity.get(main.entity_id) ?? []).length > 0 && (
-          <CardContent className="pt-0">
-            <EntityUserChips users={usersByEntity.get(main.entity_id) ?? []} />
-          </CardContent>
-        )}
-      </Card>
+          </Card>
 
-      {/* Leaders */}
-      {leaders.length === 0 ? (
-        <Card>
-          <CardContent className="py-10 text-center text-sm text-muted-foreground">
-            No leaders yet
-            {isSuper && " — use the “+ Leader” button above to create the first one"}
-            .
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="relative pl-6 space-y-4">
-          <div className="absolute left-0 top-0 bottom-4 w-px bg-border" />
+          {/* Leaders */}
+          {leaders.length === 0 ? (
+            <Card>
+              <CardContent className="py-10 text-center text-sm text-muted-foreground">
+                No leaders yet
+                {isSuper && " — use the “+ Leader” button above to create the first one"}
+                .
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="relative pl-6 space-y-4">
+              <div className="absolute left-0 top-0 bottom-4 w-px bg-border" />
 
-          {leaders.map((leader) => {
-            const leaderCompanies = (byParent.get(leader.entity_id) ?? []).filter(
-              (e) => e.entity_type === "company",
-            );
-            const leaderUsers = usersByEntity.get(leader.entity_id) ?? [];
+              {leaders.map((leader) => {
+                const leaderCompanies = (byParent.get(leader.entity_id) ?? []).filter(
+                  (e) => e.entity_type === "company",
+                );
+                const leaderUsers = usersByEntity.get(leader.entity_id) ?? [];
 
-            return (
-              <div key={leader.entity_id} className="relative">
-                <div className="absolute left-[-24px] top-6 h-px w-6 bg-border" />
-                <Card>
-                  <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-3">
-                    <div className="flex items-center gap-3">
-                      <div className="flex h-9 w-9 items-center justify-center rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400">
-                        <Crown className="h-4 w-4" />
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <CardTitle className="text-sm">{leader.name}</CardTitle>
-                          <InactiveTag entity={leader} />
+                return (
+                  <div key={leader.entity_id} className="relative">
+                    <div className="absolute left-[-24px] top-6 h-px w-6 bg-border" />
+                    <Card>
+                      <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-3">
+                        <div className="flex items-center gap-3">
+                          <div className="flex h-9 w-9 items-center justify-center rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                            <Crown className="h-4 w-4" />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <CardTitle className="text-sm">{leader.name}</CardTitle>
+                              <InactiveTag entity={leader} />
+                            </div>
+                            <p className="text-[11px] text-muted-foreground">
+                              Leader · {leaderCompanies.length}{" "}
+                              {leaderCompanies.length === 1 ? "company" : "companies"}
+                            </p>
+                          </div>
                         </div>
-                        <p className="text-[11px] text-muted-foreground">
-                          Leader · {leaderCompanies.length}{" "}
-                          {leaderCompanies.length === 1 ? "company" : "companies"}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      {canEditEntity(leader) && <EditEntityLink entity={leader} />}
-                      {canAddCompanyOn(leader.entity_id) && (
-                        <NodeActionButton
-                          label="Company"
-                          icon={Plus}
-                          onClick={() =>
-                            setEntityDialog({
-                              parentId: leader.entity_id,
-                              parentName: leader.name,
-                              entityType: "company",
-                            })
-                          }
-                        />
-                      )}
-                      {isSuper && (
-                        <NodeActionButton
-                          label="Add User"
-                          icon={UserPlus}
-                          onClick={() => openAddUser(leader)}
-                        />
-                      )}
-                    </div>
-                  </CardHeader>
-                  <CardContent className="pt-0 space-y-3">
-                    {leaderUsers.length > 0 && (
-                      <EntityUserChips users={leaderUsers} />
-                    )}
+                        <div className="flex items-center gap-1.5">
+                          {canEditEntity(leader) && <EditEntityLink entity={leader} />}
+                          {canAddCompanyOn(leader.entity_id) && (
+                            <NodeActionButton
+                              label="Company"
+                              icon={Plus}
+                              onClick={() =>
+                                setEntityDialog({
+                                  parentId: leader.entity_id,
+                                  parentName: leader.name,
+                                  entityType: "company",
+                                })
+                              }
+                            />
+                          )}
+                          {isSuper && (
+                            <NodeActionButton
+                              label="Add User"
+                              icon={UserPlus}
+                              onClick={() => openAddUser(leader)}
+                            />
+                          )}
+                        </div>
+                      </CardHeader>
+                      <CardContent className="pt-0 space-y-3">
+                        {leaderUsers.length > 0 && (
+                          <EntityUserChips users={leaderUsers} />
+                        )}
 
-                    {leaderCompanies.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">
-                        No companies under this leader yet.
-                      </p>
-                    ) : (
-                      <div className="relative pl-5 space-y-3">
-                        <div className="absolute left-0 top-0 bottom-3 w-px bg-border" />
-                        {leaderCompanies.map((company) => {
-                          const csDesks = (
-                            byParent.get(company.entity_id) ?? []
-                          ).filter((e) => e.entity_type === "cs");
-                          const companyUsers =
-                            usersByEntity.get(company.entity_id) ?? [];
-                          const playerCount =
-                            playerCountByCompany.get(company.entity_id) ?? 0;
+                        {leaderCompanies.length === 0 ? (
+                          <p className="text-xs text-muted-foreground">
+                            No companies under this leader yet.
+                          </p>
+                        ) : (
+                          <div className="relative pl-5 space-y-3">
+                            <div className="absolute left-0 top-0 bottom-3 w-px bg-border" />
+                            {leaderCompanies.map((company) => {
+                              const csDesks = (
+                                byParent.get(company.entity_id) ?? []
+                              ).filter((e) => e.entity_type === "cs");
+                              const companyUsers =
+                                usersByEntity.get(company.entity_id) ?? [];
+                              const playerCount =
+                                playerCountByCompany.get(company.entity_id) ?? 0;
 
-                          return (
-                            <div key={company.entity_id} className="relative">
-                              <div className="absolute left-[-20px] top-5 h-px w-5 bg-border" />
-                              <div className="rounded-lg border bg-card">
-                                <div className="flex items-start justify-between gap-2 px-3.5 py-3">
-                                  <div className="flex items-center gap-2.5">
-                                    <div className="flex h-8 w-8 items-center justify-center rounded-md bg-blue-500/10 text-blue-600 dark:text-blue-400">
-                                      <Landmark className="h-4 w-4" />
-                                    </div>
-                                    <div>
-                                      <div className="flex items-center gap-2">
-                                        <span className="text-sm font-medium">
-                                          {company.name}
-                                        </span>
-                                        <InactiveTag entity={company} />
+                              return (
+                                <div key={company.entity_id} className="relative">
+                                  <div className="absolute left-[-20px] top-5 h-px w-5 bg-border" />
+                                  <div className="rounded-lg border bg-card">
+                                    <div className="flex items-start justify-between gap-2 px-3.5 py-3">
+                                      <div className="flex items-center gap-2.5">
+                                        <div className="flex h-8 w-8 items-center justify-center rounded-md bg-blue-500/10 text-blue-600 dark:text-blue-400">
+                                          <Landmark className="h-4 w-4" />
+                                        </div>
+                                        <div>
+                                          <div className="flex items-center gap-2">
+                                            <span className="text-sm font-medium">
+                                              {company.name}
+                                            </span>
+                                            <InactiveTag entity={company} />
+                                          </div>
+                                          <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                                            <Users className="h-3 w-3" />
+                                            {playerCount}{" "}
+                                            {playerCount === 1 ? "player" : "players"}{" "}
+                                            · {csDesks.length}{" "}
+                                            {csDesks.length === 1
+                                              ? "CS desk"
+                                              : "CS desks"}
+                                          </div>
+                                        </div>
                                       </div>
-                                      <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                                        <Users className="h-3 w-3" />
-                                        {playerCount}{" "}
-                                        {playerCount === 1 ? "player" : "players"}{" "}
-                                        · {csDesks.length}{" "}
-                                        {csDesks.length === 1
-                                          ? "CS desk"
-                                          : "CS desks"}
+                                      <div className="flex items-center gap-1.5">
+                                        {canEditEntity(company) && (
+                                          <EditEntityLink entity={company} />
+                                        )}
+                                        {canAddCsOn(company) && (
+                                          <NodeActionButton
+                                            label="CS Desk"
+                                            icon={Plus}
+                                            onClick={() =>
+                                              setEntityDialog({
+                                                parentId: company.entity_id,
+                                                parentName: company.name,
+                                                entityType: "cs",
+                                              })
+                                            }
+                                          />
+                                        )}
+                                        {isSuper && (
+                                          <NodeActionButton
+                                            label="Add User"
+                                            icon={UserPlus}
+                                            onClick={() => openAddUser(company)}
+                                          />
+                                        )}
                                       </div>
                                     </div>
-                                  </div>
-                                  <div className="flex items-center gap-1.5">
-                                    {canEditEntity(company) && (
-                                      <EditEntityLink entity={company} />
-                                    )}
-                                    {canAddCsOn(company) && (
-                                      <NodeActionButton
-                                        label="CS Desk"
-                                        icon={Plus}
-                                        onClick={() =>
-                                          setEntityDialog({
-                                            parentId: company.entity_id,
-                                            parentName: company.name,
-                                            entityType: "cs",
-                                          })
-                                        }
-                                      />
-                                    )}
-                                    {isSuper && (
-                                      <NodeActionButton
-                                        label="Add User"
-                                        icon={UserPlus}
-                                        onClick={() => openAddUser(company)}
-                                      />
+
+                                    {(companyUsers.length > 0 ||
+                                      csDesks.length > 0) && (
+                                      <div className="space-y-2.5 border-t px-3.5 py-3">
+                                        {companyUsers.length > 0 && (
+                                          <EntityUserChips users={companyUsers} />
+                                        )}
+                                        {csDesks.map((cs) => {
+                                          const csUsers =
+                                            usersByEntity.get(cs.entity_id) ?? [];
+                                          return (
+                                            <div
+                                              key={cs.entity_id}
+                                              className="rounded-md border bg-muted/20"
+                                            >
+                                              <div className="flex items-center justify-between gap-2 px-2.5 py-2">
+                                                <div className="flex items-center gap-2">
+                                                  <div className="flex h-6 w-6 items-center justify-center rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                                                    <Headset className="h-3.5 w-3.5" />
+                                                  </div>
+                                                  <span className="text-xs font-medium">
+                                                    {cs.name}
+                                                  </span>
+                                                  <InactiveTag entity={cs} />
+                                                  <span className="text-[10px] text-muted-foreground">
+                                                    CS Desk · {csUsers.length}{" "}
+                                                    {csUsers.length === 1
+                                                      ? "agent"
+                                                      : "agents"}
+                                                  </span>
+                                                </div>
+                                                <div className="flex items-center gap-1.5">
+                                                  {canEditEntity(cs) && (
+                                                    <EditEntityLink entity={cs} />
+                                                  )}
+                                                  {canAddUserOn(cs) && (
+                                                    <NodeActionButton
+                                                      label="Add User"
+                                                      icon={UserPlus}
+                                                      onClick={() => openAddUser(cs)}
+                                                    />
+                                                  )}
+                                                </div>
+                                              </div>
+                                              {csUsers.length > 0 && (
+                                                <div className="border-t px-2.5 py-2">
+                                                  <EntityUserChips users={csUsers} />
+                                                </div>
+                                              )}
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
                                     )}
                                   </div>
                                 </div>
-
-                                {(companyUsers.length > 0 ||
-                                  csDesks.length > 0) && (
-                                  <div className="space-y-2.5 border-t px-3.5 py-3">
-                                    {companyUsers.length > 0 && (
-                                      <EntityUserChips users={companyUsers} />
-                                    )}
-                                    {csDesks.map((cs) => {
-                                      const csUsers =
-                                        usersByEntity.get(cs.entity_id) ?? [];
-                                      return (
-                                        <div
-                                          key={cs.entity_id}
-                                          className="rounded-md border bg-muted/20"
-                                        >
-                                          <div className="flex items-center justify-between gap-2 px-2.5 py-2">
-                                            <div className="flex items-center gap-2">
-                                              <div className="flex h-6 w-6 items-center justify-center rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-                                                <Headset className="h-3.5 w-3.5" />
-                                              </div>
-                                              <span className="text-xs font-medium">
-                                                {cs.name}
-                                              </span>
-                                              <InactiveTag entity={cs} />
-                                              <span className="text-[10px] text-muted-foreground">
-                                                CS Desk · {csUsers.length}{" "}
-                                                {csUsers.length === 1
-                                                  ? "agent"
-                                                  : "agents"}
-                                              </span>
-                                            </div>
-                                            <div className="flex items-center gap-1.5">
-                                              {canEditEntity(cs) && (
-                                                <EditEntityLink entity={cs} />
-                                              )}
-                                              {canAddUserOn(cs) && (
-                                                <NodeActionButton
-                                                  label="Add User"
-                                                  icon={UserPlus}
-                                                  onClick={() => openAddUser(cs)}
-                                                />
-                                              )}
-                                            </div>
-                                          </div>
-                                          {csUsers.length > 0 && (
-                                            <div className="border-t px-2.5 py-2">
-                                              <EntityUserChips users={csUsers} />
-                                            </div>
-                                          )}
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              </div>
-            );
-          })}
-        </div>
-      )}
+                              );
+                            })}
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          </div>
+        );
+      })}
 
       <AddEntityDialog
         state={entityDialog}

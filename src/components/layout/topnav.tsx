@@ -83,7 +83,24 @@ export function TopNav() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [entities],
   );
-  const mainEntity = entities.find((e) => e.entity_type === "main_company");
+  /**
+   * The main company of the tree the signed-in user actually sits in.
+   *
+   * This was `entities.find(main_company)` — the first row in the table, which
+   * was right only while there was exactly one. With two, everyone saw the
+   * older one's name in the corner regardless of which organisation they had
+   * signed in to. Walks up from the user's own entity instead, falling back to
+   * the first root for a user whose chain is missing.
+   */
+  const mainEntity = useMemo(() => {
+    const byId = new Map(entities.map((e) => [e.entity_id, e]));
+    let node = me ? byId.get(me.entity_id) : undefined;
+    for (let hops = 0; node && hops < 10; hops++) {
+      if (node.entity_type === "main_company") return node;
+      node = node.parent_entity_id ? byId.get(node.parent_entity_id) : undefined;
+    }
+    return entities.find((e) => e.entity_type === "main_company");
+  }, [entities, me]);
 
   // "View as leader" — only the main-company super admin sees this. It scopes
   // the whole CRM to a leader's companies and narrows the company dropdown.

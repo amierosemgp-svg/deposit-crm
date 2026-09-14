@@ -57,6 +57,14 @@ export async function POST(request: Request) {
       ) {
         throw new AuthError(403, "CS desk is outside your companies");
       }
+    } else if (
+      user.role === "super_admin" &&
+      user.ownedEntityIds !== null &&
+      !user.ownedEntityIds.includes(entity.entity_id)
+    ) {
+      // A super admin creating logins inside another organisation's tree is
+      // the same breach as editing it — one main company, one super admin.
+      throw new AuthError(403, "Entity belongs to another organisation");
     }
 
     const [created] = await db

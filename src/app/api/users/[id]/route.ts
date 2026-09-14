@@ -37,6 +37,14 @@ async function loadManageable(
     ) {
       throw new AuthError(403, "That CS agent is outside your companies");
     }
+  } else if (
+    requester.role === "super_admin" &&
+    requester.ownedEntityIds !== null &&
+    !requester.ownedEntityIds.includes(target.entity_id)
+  ) {
+    // Renaming, deactivating or deleting another organisation's accounts —
+    // including its own super admin — was previously unchecked.
+    throw new AuthError(403, "That account belongs to another organisation");
   }
   return target;
 }
