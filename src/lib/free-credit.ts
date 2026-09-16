@@ -122,6 +122,92 @@ export async function issueFreeCredit(
 /** Share of the month's deposits that may be given away as free credit. */
 export const DEFAULT_FREE_CREDIT_CAP_PCT = 3;
 
+/** What one company has left to give away this month. */
+export type FreeCreditAllowance = {
+  company_entity_id: number;
+  /** Start of the current month in business time, YYYY-MM-DD. */
+  month: string;
+  /** Deposits taken this month — the base the cap is a share of. */
+  deposits: number;
+  /** Free credit already issued this month, rebates and promos included. */
+  issued: number;
+  /** deposits × pct. */
+  allowance: number;
+  /** allowance − issued, floored at zero: what CS can still give out. */
+  left: number;
+};
+
+/** The configured cap, as a percentage. 0 means the cap is off. */
+export async function freeCreditCapPct(txn: Reader): Promise<number> {
+  const [row] = await txn
+    .select({ value: settings.value })
+    .from(settings)
+    .where(eq(settings.key, "free_credit_cap_pct"));
+  return typeof row?.value === "number" ? row.value : DEFAULT_FREE_CREDIT_CAP_PCT;
+}
+
+/** Anything that can read — the pool or a transaction. */
+type Reader = Pick<Tx, "select" | "execute">;
+
+/**
+ * How much free credit each company has left this month.
+ *
+ * The same arithmetic the cap enforces, so the figure the Free Credit sheet
+ * shows and the figure that rejects a row can never disagree — which is the
+ * whole point of showing it. Measured over the calendar month in business
+ * time, not over whatever range the sheet is filtered to: the allowance is a
+ * property of the month, and a desk reading August's rows still spends
+ * September's headroom.
+ */
+export async function freeCreditAllowance(
+  txn: Reader,
+  companyEntityIds: number[],
+  pct: number,
+): Promise<FreeCreditAllowance[]> {
+  if (!companyEntityIds.length) return [];
+
+  const ids = sql.join(
+    companyEntityIds.map((id) => sql`(${id}::int)`),
+    sql`, `,
+  );
+  const rows = (await txn.execute(sql`
+    SELECT c.id AS company_entity_id,
+           m.d::text AS month,
+           coalesce((SELECT sum(d.deposit_amount) FROM deposits d
+                      WHERE d.company_entity_id = c.id
+                        AND d.status <> 'failed'
+                        AND (d.deposit_date AT TIME ZONE 'Asia/Kuala_Lumpur')::date >= m.d), 0)::float8
+             AS deposits,
+           coalesce((SELECT sum(t.amount) FROM transactions t
+                      WHERE t.entity_id = c.id
+                        AND t.type = 'game_topup'
+                        AND t.details->>'action' = 'free_credit'
+                        AND (t.created_at AT TIME ZONE 'Asia/Kuala_Lumpur')::date >= m.d), 0)::float8
+             AS issued
+      FROM (VALUES ${ids}) AS c(id)
+      CROSS JOIN (SELECT date_trunc('month', (now() AT TIME ZONE 'Asia/Kuala_Lumpur'))::date AS d) m
+  `)).rows as unknown as {
+    company_entity_id: number;
+    month: string;
+    deposits: number;
+    issued: number;
+  }[];
+
+  return rows.map((r) => {
+    // pct <= 0 disables the cap: report it as unlimited rather than as zero
+    // allowance, which would read as "nothing left".
+    const allowance = pct > 0 ? +((r.deposits * pct) / 100).toFixed(2) : Infinity;
+    return {
+      company_entity_id: r.company_entity_id,
+      month: r.month,
+      deposits: r.deposits,
+      issued: r.issued,
+      allowance,
+      left: pct > 0 ? Math.max(+(allowance - r.issued).toFixed(2), 0) : Infinity,
+    };
+  });
+}
+
 /**
  * Free credit is capped at a share of what the company took in that month.
  *
@@ -142,40 +228,18 @@ async function assertWithinMonthlyCap(
 ): Promise<void> {
   if (companyEntityId === null) return;
 
-  const [row] = await txn
-    .select({ value: settings.value })
-    .from(settings)
-    .where(eq(settings.key, "free_credit_cap_pct"));
-  const pct =
-    typeof row?.value === "number" ? row.value : DEFAULT_FREE_CREDIT_CAP_PCT;
+  const pct = await freeCreditCapPct(txn);
   if (pct <= 0) return;
 
-  const month = sql`date_trunc('month', (now() AT TIME ZONE 'Asia/Kuala_Lumpur'))::date`;
-  const [totals] = (await txn.execute(sql`
-    SELECT
-      coalesce((SELECT sum(d.deposit_amount) FROM deposits d
-                 WHERE d.company_entity_id = ${companyEntityId}
-                   AND d.status <> 'failed'
-                   AND (d.deposit_date AT TIME ZONE 'Asia/Kuala_Lumpur')::date >= ${month}), 0)::float8
-        AS deposits,
-      coalesce((SELECT sum(t.amount) FROM transactions t
-                 WHERE t.entity_id = ${companyEntityId}
-                   AND t.type = 'game_topup'
-                   AND t.details->>'action' = 'free_credit'
-                   AND (t.created_at AT TIME ZONE 'Asia/Kuala_Lumpur')::date >= ${month}), 0)::float8
-        AS issued
-  `)).rows as unknown as { deposits: number; issued: number }[];
+  const [row] = await freeCreditAllowance(txn, [companyEntityId], pct);
+  if (!row) return;
 
-  const allowance = +(((totals?.deposits ?? 0) * pct) / 100).toFixed(2);
-  const used = totals?.issued ?? 0;
-  const left = +(allowance - used).toFixed(2);
-
-  if (amount > left) {
+  if (amount > row.left) {
     throw new AuthError(
       422,
       `Free credit for this month is capped at ${pct}% of deposits — ` +
-        `RM ${allowance.toFixed(2)} allowed, RM ${used.toFixed(2)} already issued, ` +
-        `RM ${Math.max(left, 0).toFixed(2)} left`,
+        `RM ${row.allowance.toFixed(2)} allowed, RM ${row.issued.toFixed(2)} already issued, ` +
+        `RM ${row.left.toFixed(2)} left`,
     );
   }
 }

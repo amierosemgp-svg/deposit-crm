@@ -197,6 +197,16 @@ function parseSheetTime(raw: string): [number, number] | null {
   return [h, mi];
 }
 
+/** What one company may still give away this month; null = uncapped. */
+type FreeCreditAllowance = {
+  company_entity_id: number;
+  month: string;
+  deposits: number;
+  issued: number;
+  allowance: number | null;
+  left: number | null;
+};
+
 /** One Free Credit ledger row, as GET /api/free-credits returns it. */
 type FreeCredit = {
   transaction_id: number;
@@ -538,6 +548,22 @@ export default function TransactionsPage() {
       // Poll/refresh will retry; the tab just shows what it last had.
     }
   }, []);
+  // Headroom left under the monthly free-credit cap, per company. Same
+  // arithmetic the save enforces, so the sheet can't promise room that the
+  // save then refuses.
+  const [fcAllowance, setFcAllowance] = useState<FreeCreditAllowance[]>([]);
+  const loadAllowance = useCallback(async () => {
+    try {
+      const res = await fetch("/api/free-credits/allowance");
+      if (!res.ok) return;
+      const data = (await res.json()) as { allowances?: FreeCreditAllowance[]; pct?: number };
+      setFcAllowance(data.allowances ?? []);
+      setFcCapPct(data.pct ?? 0);
+    } catch {
+      // transient — the pill just keeps its last figure
+    }
+  }, []);
+  const [fcCapPct, setFcCapPct] = useState(0);
   // Leader cash-outs, rebate payouts and leader settlements live outside
   // /api/state too — same treatment.
   const [cashOuts, setCashOuts] = useState<BankCashOut[]>([]);
@@ -575,8 +601,15 @@ export default function TransactionsPage() {
     }
   }, [isAdmin]);
   const loadLedgers = useCallback(
-    () => Promise.all([loadFreeCredits(), loadCashOuts(), loadRebatePayouts(), loadLeaderTransfers()]),
-    [loadFreeCredits, loadCashOuts, loadRebatePayouts, loadLeaderTransfers],
+    () =>
+      Promise.all([
+        loadFreeCredits(),
+        loadAllowance(),
+        loadCashOuts(),
+        loadRebatePayouts(),
+        loadLeaderTransfers(),
+      ]),
+    [loadFreeCredits, loadAllowance, loadCashOuts, loadRebatePayouts, loadLeaderTransfers],
   );
   useEffect(() => {
     // Fetch-on-mount; the setState happens after the await, not synchronously.
@@ -3005,6 +3038,34 @@ export default function TransactionsPage() {
     toast.success("Bank crawl requested — the agent picks it up within ~30s");
   }, [requestBankCrawl, selectedCompanyId]);
 
+  /**
+   * The free-credit headroom for whatever the header has scoped to, ready to
+   * show above the sheet. The cap is enforced per company, so several
+   * companies in scope means several separate allowances — totalled for the
+   * figure, listed in the tooltip, because a company can be out of room while
+   * the total still looks healthy.
+   */
+  const fcHeadroom = useMemo(() => {
+    if (fcCapPct <= 0) return null;
+    const rows = fcAllowance.filter(
+      (a) => a.left !== null && companyInScope(a.company_entity_id),
+    );
+    if (!rows.length) return null;
+    const left = rows.reduce((a, r) => a + (r.left ?? 0), 0);
+    const allowance = rows.reduce((a, r) => a + (r.allowance ?? 0), 0);
+    const month = new Date(`${rows[0].month}T00:00:00`).toLocaleString("en-MY", {
+      month: "short",
+    });
+    return {
+      left,
+      allowance,
+      month,
+      // Any single company out of room matters even when the total does not.
+      someExhausted: rows.some((r) => (r.left ?? 0) <= 0),
+      rows,
+    };
+  }, [fcAllowance, fcCapPct, companyInScope]);
+
   const tabs: { key: TabKey; label: string }[] = [
     { key: "deposit", label: "Deposit" },
     { key: "withdrawal", label: "Withdrawal" },
@@ -3109,6 +3170,39 @@ export default function TransactionsPage() {
         <span className="text-xs text-muted-foreground">
           {rows.length} row{rows.length === 1 ? "" : "s"}
         </span>
+
+        {/* How much free credit is still giveable this month. The cap has
+            always been enforced on save; shown here it stops CS typing rows
+            that will bounce. */}
+        {tab === "freecredit" && fcHeadroom && (
+          <span
+            title={
+              `Free credit is capped at ${fcCapPct}% of the month's deposits.\n` +
+              `Counts the calendar month, not the date range above.\n\n` +
+              fcHeadroom.rows
+                .map(
+                  (r) =>
+                    `${entityName(r.company_entity_id)}: ${formatRM(r.left ?? 0)} left ` +
+                    `(${formatRM(r.allowance ?? 0)} allowed, ${formatRM(r.issued)} issued)`,
+                )
+                .join("\n")
+            }
+            className={cn(
+              "rounded-full border px-2.5 py-0.5 text-[11px] font-medium tabular-nums",
+              fcHeadroom.left <= 0
+                ? "border-red-600/40 bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300"
+                : fcHeadroom.someExhausted || fcHeadroom.left < fcHeadroom.allowance * 0.2
+                  ? "border-amber-600/40 bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
+                  : "border-emerald-600/40 bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300",
+            )}
+          >
+            {formatRM(fcHeadroom.left)} left of {formatRM(fcHeadroom.allowance)}
+            <span className="ml-1 font-normal opacity-70">
+              · {fcCapPct}% of {fcHeadroom.month} deposits
+              {fcHeadroom.rows.length > 1 ? ` · ${fcHeadroom.rows.length} companies` : ""}
+            </span>
+          </span>
+        )}
 
         <div className="ml-auto flex items-center gap-2">
           {tab === "deposit" && !isViewer && (
