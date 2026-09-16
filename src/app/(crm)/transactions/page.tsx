@@ -125,7 +125,7 @@ const COLUMN_KEYS = {
     "withdrawals", "loss", "pct", "amount", "status", "paidby", "paidat",
   ],
   // Settlements between leaders (super-admin only).
-  leadertransfer: ["assign", "date", "time", "from", "to", "amount", "note"],
+  leadertransfer: ["assign", "date", "time", "from", "fromaccount", "to", "toaccount", "amount", "note"],
 } as const satisfies Record<TabKey, readonly string[]>;
 
 type ColKey<T extends TabKey> = (typeof COLUMN_KEYS)[T][number];
@@ -168,6 +168,11 @@ type LeaderTransferRow = {
   from_leader_entity_id: number;
   to_leader_entity_id: number;
   amount: number;
+  /** Where the money came from / went: an account, cash, or unrecorded. */
+  from_account_id: number | null;
+  to_account_id: number | null;
+  from_cash: boolean;
+  to_cash: boolean;
   note: string | null;
   created_by_user_id: number;
   created_at: string;
@@ -463,8 +468,12 @@ const ENTRY_HINT: Record<TabKey, string> = {
   leaderwithdrawal:
     "Entry: Date · Time · Bank Account · Amount · Taken By · Notes — cash a leader took out at the bank; the account is debited on save",
   rebate: "Generated on the Rebates page — select rows here to pay, skip or unskip them",
-  leadertransfer: "Entry: From Leader · To Leader · Amount · Note — a settlement between leaders",
+  leadertransfer:
+    "Entry: From Leader · To Leader · Amount — name the bank account each end used, or Cash",
 };
+
+/** Either end of a leader settlement when no bank account was involved. */
+const CASH = "Cash";
 
 /** Stable empty map, so the alias memo below doesn't re-run every render. */
 const EMPTY_ALIASES: Record<string, string> = {};
@@ -663,6 +672,19 @@ export default function TransactionsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [bankAccounts, entityName, selectedCompanyId, selectedLeaderId],
   );
+  /** Either end of a leader settlement: one of our accounts, or cash. */
+  const END_SUGGESTIONS = useMemo<SheetSuggestion[]>(
+    () => [
+      { value: CASH, hint: "changed hands as cash — no account involved" },
+      ...bankAccounts
+        .filter((a) => a.status === "active")
+        .map((a) => ({
+          value: a.label ?? `${a.bank_name} ${a.account_number}`,
+          hint: `${entityName(a.entity_id)} · ${fmtAmount(a.current_balance)}`,
+        })),
+    ],
+    [bankAccounts, entityName],
+  );
   const LEADER_SUGGESTIONS = useMemo<SheetSuggestion[]>(
     () =>
       entities
@@ -795,7 +817,9 @@ export default function TransactionsPage() {
         date,
         time,
         from: { label: "From Leader", width: 160, entry: true, required: true, options: LEADER_SUGGESTIONS, placeholder: "from leader" },
+        fromaccount: { label: "From Account", width: 190, entry: true, options: END_SUGGESTIONS, placeholder: "bank account / Cash" },
         to: { label: "To Leader", width: 160, entry: true, required: true, options: LEADER_SUGGESTIONS, placeholder: "to leader" },
+        toaccount: { label: "To Account", width: 190, entry: true, options: END_SUGGESTIONS, placeholder: "bank account / Cash" },
         amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "1000" },
         note: { label: "Note", width: 260, entry: true, placeholder: "what it settles (optional)" },
       }),
@@ -809,7 +833,7 @@ export default function TransactionsPage() {
         notes: { label: "Notes", width: 240, entry: true, placeholder: "notes (optional)" },
       }),
     };
-  }, [games, banks, companies, memberSuggestions, MODE_SUGGESTIONS, ASSIGN_SUGGESTIONS, ACCOUNT_SUGGESTIONS, LEADER_SUGGESTIONS]);
+  }, [games, banks, companies, memberSuggestions, MODE_SUGGESTIONS, ASSIGN_SUGGESTIONS, ACCOUNT_SUGGESTIONS, LEADER_SUGGESTIONS, END_SUGGESTIONS]);
 
   const columns = columnsByTab[tab];
 
@@ -1312,6 +1336,17 @@ export default function TransactionsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rebatePayouts, range, statusFilters, rebatePlanFilter, rebateWindowFilter, matchesSearch, userName, selectedCompanyId, selectedLeaderId]);
 
+  /** How an end reads back: the account's label, "Cash", or an em dash. */
+  const transferEndLabel = useCallback(
+    (accountId: number | null | undefined, cash: boolean | undefined) => {
+      if (cash) return CASH;
+      if (accountId == null) return "—";
+      const a = bankAccounts.find((x) => x.account_id === accountId);
+      return a ? (a.label ?? `${a.bank_name} ${a.account_number}`) : `#${accountId}`;
+    },
+    [bankAccounts],
+  );
+
   const leaderTransferRows = useMemo<SheetRow[]>(() => {
     return leaderTransfers
       .filter((t) => inRange(t.created_at, range))
@@ -1324,13 +1359,15 @@ export default function TransactionsPage() {
           date: sheetDate(t.created_at),
           time: formatClock(t.created_at),
           from: entityName(t.from_leader_entity_id),
+          fromaccount: transferEndLabel(t.from_account_id, t.from_cash),
           to: entityName(t.to_leader_entity_id),
+          toaccount: transferEndLabel(t.to_account_id, t.to_cash),
           amount: fmtAmount(t.amount),
           note: t.note ?? "",
         }),
       }))
       .filter((r) => matchesSearch(r.cells));
-  }, [leaderTransfers, range, matchesSearch, assignCell, entityName]);
+  }, [leaderTransfers, range, matchesSearch, assignCell, entityName, transferEndLabel]);
 
   const rowsByTab: Record<TabKey, SheetRow[]> = {
     deposit: depositRows,
@@ -1777,6 +1814,26 @@ export default function TransactionsPage() {
     [accountByLabel, leaderByName, companyInScope],
   );
 
+  /**
+   * A typed end: the word "cash", one of our accounts by label, or blank for
+   * an end nobody recorded. Matched on label first, then on "bank number", so
+   * either spelling from the dropdown resolves.
+   */
+  const resolveTransferEnd = useCallback(
+    (raw: string): { ok: true; account_id?: number; cash?: boolean } | { ok: false } => {
+      const v = raw.trim();
+      if (!v) return { ok: true };
+      if (v.toLowerCase() === CASH.toLowerCase()) return { ok: true, cash: true };
+      const hit = bankAccounts.find(
+        (a) =>
+          (a.label ?? "").trim().toLowerCase() === v.toLowerCase() ||
+          `${a.bank_name} ${a.account_number}`.toLowerCase() === v.toLowerCase(),
+      );
+      return hit ? { ok: true, account_id: hit.account_id } : { ok: false };
+    },
+    [bankAccounts],
+  );
+
   const parseLeaderTransferDraft = useCallback(
     (d: string[]): Parsed => {
       const c = COL.leadertransfer;
@@ -1792,17 +1849,29 @@ export default function TransactionsPage() {
       const amt = parseAmount(d[c.amount] ?? "");
       if (amt === null || amt <= 0) return { ok: false, error: `Bad amount "${d[c.amount]}"` };
       const note = (d[c.note] ?? "").trim();
+      const fromEndCell = (d[c.fromaccount] ?? "").trim();
+      const toEndCell = (d[c.toaccount] ?? "").trim();
+      const fromEnd = resolveTransferEnd(fromEndCell);
+      if (!fromEnd.ok)
+        return { ok: false, error: `Unknown account "${fromEndCell}" — pick one from the list, or Cash` };
+      const toEnd = resolveTransferEnd(toEndCell);
+      if (!toEnd.ok)
+        return { ok: false, error: `Unknown account "${toEndCell}" — pick one from the list, or Cash` };
       return {
         ok: true,
         payload: {
           from_leader_entity_id: fromId,
           to_leader_entity_id: toId,
           amount: amt,
+          ...(fromEnd.account_id ? { from_account_id: fromEnd.account_id } : {}),
+          ...(fromEnd.cash ? { from_cash: true } : {}),
+          ...(toEnd.account_id ? { to_account_id: toEnd.account_id } : {}),
+          ...(toEnd.cash ? { to_cash: true } : {}),
           ...(note ? { note } : {}),
         },
       };
     },
-    [leaderByName],
+    [leaderByName, resolveTransferEnd],
   );
 
   // Rebates aren't typed in — they're generated on the Rebates page.

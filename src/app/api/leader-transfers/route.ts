@@ -1,17 +1,32 @@
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { entities, leaderTransfers, transactions } from "@/db/schema";
+import { bankAccounts, entities, leaderTransfers, transactions } from "@/db/schema";
 import { AuthError, authErrorResponse, requireUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import { logActivity } from "@/lib/activity-log";
 
-const createSchema = z.object({
-  from_leader_entity_id: z.number().int().positive(),
-  to_leader_entity_id: z.number().int().positive(),
-  amount: z.number().positive(),
-  note: z.string().max(300).optional(),
-});
+const createSchema = z
+  .object({
+    from_leader_entity_id: z.number().int().positive(),
+    to_leader_entity_id: z.number().int().positive(),
+    amount: z.number().positive(),
+    note: z.string().max(300).optional(),
+    // Where the money came from and went. Omit both ends of a side to leave it
+    // unrecorded, as every row written before these columns existed.
+    from_account_id: z.number().int().positive().nullable().optional(),
+    to_account_id: z.number().int().positive().nullable().optional(),
+    from_cash: z.boolean().optional(),
+    to_cash: z.boolean().optional(),
+  })
+  .refine((v) => !(v.from_cash && v.from_account_id), {
+    message: "The sending end is a bank account or cash, not both",
+    path: ["from_account_id"],
+  })
+  .refine((v) => !(v.to_cash && v.to_account_id), {
+    message: "The receiving end is a bank account or cash, not both",
+    path: ["to_account_id"],
+  });
 
 /**
  * GET /api/leader-transfers — the settlement ledger between leaders.
@@ -50,13 +65,54 @@ export async function POST(request: Request) {
 
     // Both ends must be actual leader entities.
     const ends = await db
-      .select({ id: entities.entity_id, type: entities.entity_type, name: entities.name })
+      .select({
+        id: entities.entity_id,
+        type: entities.entity_type,
+        name: entities.name,
+        parent: entities.parent_entity_id,
+      })
       .from(entities);
     const byId = new Map(ends.map((e) => [e.id, e]));
     const from = byId.get(body.from_leader_entity_id);
     const to = byId.get(body.to_leader_entity_id);
     if (!from || from.type !== "leader") return jsonError("From is not a leader");
     if (!to || to.type !== "leader") return jsonError("To is not a leader");
+
+    /**
+     * A named account has to belong to the leader on that side of the transfer.
+     *
+     * Accounts hang off a leader or off one of its companies, so the check is
+     * "the account's entity is the leader, or its parent is" — without it the
+     * sheet would happily record one leader paying out of another's Maybank.
+     */
+    const ownedBy = (leaderId: number, entityId: number) =>
+      entityId === leaderId ||
+      ends.some((e) => e.id === entityId && e.parent === leaderId);
+
+    const accountIds = [body.from_account_id, body.to_account_id].filter(
+      (id): id is number => typeof id === "number",
+    );
+    const accounts = accountIds.length
+      ? await db
+          .select({ id: bankAccounts.account_id, entity_id: bankAccounts.entity_id, label: bankAccounts.label })
+          .from(bankAccounts)
+          .where(inArray(bankAccounts.account_id, accountIds))
+      : [];
+    const accountById = new Map(accounts.map((a) => [a.id, a]));
+
+    for (const [side, accountId, leaderId] of [
+      ["Sending", body.from_account_id, body.from_leader_entity_id],
+      ["Receiving", body.to_account_id, body.to_leader_entity_id],
+    ] as const) {
+      if (typeof accountId !== "number") continue;
+      const account = accountById.get(accountId);
+      if (!account) return jsonError(`${side} bank account not found`, 404);
+      if (!ownedBy(leaderId, account.entity_id)) {
+        return jsonError(
+          `${side} bank account does not belong to ${side === "Sending" ? from.name : to.name}`,
+        );
+      }
+    }
 
     const created = await db.transaction(async (txn) => {
       const [row] = await txn
@@ -65,6 +121,10 @@ export async function POST(request: Request) {
           from_leader_entity_id: body.from_leader_entity_id,
           to_leader_entity_id: body.to_leader_entity_id,
           amount: body.amount,
+          from_account_id: body.from_account_id ?? null,
+          to_account_id: body.to_account_id ?? null,
+          from_cash: body.from_cash ?? false,
+          to_cash: body.to_cash ?? false,
           note: body.note ?? null,
           created_by_user_id: user.user_id,
         })
@@ -83,6 +143,12 @@ export async function POST(request: Request) {
           from_leader: from.name,
           to_leader_entity_id: body.to_leader_entity_id,
           to_leader: to.name,
+          from: body.from_cash
+            ? "cash"
+            : (accountById.get(body.from_account_id ?? -1)?.label ?? null),
+          to: body.to_cash
+            ? "cash"
+            : (accountById.get(body.to_account_id ?? -1)?.label ?? null),
           note: body.note ?? null,
         },
       });

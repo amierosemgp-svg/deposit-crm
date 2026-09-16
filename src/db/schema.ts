@@ -1269,6 +1269,21 @@ export const leaderTransfers = pgTable("leader_transfers", {
     .notNull()
     .references(() => entities.entity_id),
   amount: numeric("amount", { precision: 14, scale: 2, mode: "number" }).notNull(),
+  /**
+   * Where the money physically came from, and where it landed. Each end is
+   * one of three states, kept distinguishable on purpose:
+   *   account set → that bank account
+   *   cash true   → physical cash, no account involved
+   *   neither     → not recorded (every row written before the columns existed)
+   *
+   * Recording these moves no balance. A settlement out of a bank account that
+   * should also show against that account is entered as a bank cash-out —
+   * booking it here as well would debit the same money twice.
+   */
+  from_account_id: integer("from_account_id").references(() => bankAccounts.account_id),
+  to_account_id: integer("to_account_id").references(() => bankAccounts.account_id),
+  from_cash: boolean("from_cash").notNull().default(false),
+  to_cash: boolean("to_cash").notNull().default(false),
   // What the settlement is for — free text, shown in the list and report.
   note: text("note"),
   created_by_user_id: integer("created_by_user_id")
