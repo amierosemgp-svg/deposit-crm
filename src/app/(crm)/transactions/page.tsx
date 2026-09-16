@@ -552,6 +552,7 @@ export default function TransactionsPage() {
   // arithmetic the save enforces, so the sheet can't promise room that the
   // save then refuses.
   const [fcAllowance, setFcAllowance] = useState<FreeCreditAllowance[]>([]);
+  const [fcCapPct, setFcCapPct] = useState(0);
   const loadAllowance = useCallback(async () => {
     try {
       const res = await fetch("/api/free-credits/allowance");
@@ -563,7 +564,6 @@ export default function TransactionsPage() {
       // transient — the pill just keeps its last figure
     }
   }, []);
-  const [fcCapPct, setFcCapPct] = useState(0);
   // Leader cash-outs, rebate payouts and leader settlements live outside
   // /api/state too — same treatment.
   const [cashOuts, setCashOuts] = useState<BankCashOut[]>([]);
@@ -997,17 +997,39 @@ export default function TransactionsPage() {
         const pl = member ? playerByCode.get(member) : undefined;
         if (!pl) return row;
         const out = [...row];
-        // A game cell that just changed pulls in the player's login for that
-        // game, if its login cell is still blank — the same fill-only-empty
-        // rule as the member auto-fill below, so a typed login always wins.
+        /**
+         * The login cell follows the game cell.
+         *
+         * Filling only an empty login was not enough: switching Mega888 to
+         * 918Kiss left the Mega login sitting beside the new game, which reads
+         * as an account the player does not have and books the transaction
+         * against the wrong one. A login the sheet itself filled for the game
+         * that was just replaced is stale, not typed, so it gets replaced too
+         * — and cleared outright when the player holds no account on the new
+         * game, since a wrong login is worse than an empty one. Anything CS
+         * actually typed still wins.
+         */
         let touched = false;
         for (const pair of LOGIN_PAIRS[tab]) {
           const game = out[pair.gameCol]?.trim().toLowerCase() ?? "";
           const prevGame = prev[i]?.[pair.gameCol]?.trim().toLowerCase() ?? "";
-          if (!game || game === prevGame || out[pair.userCol]?.trim()) continue;
-          const acct = (pl.game_accounts ?? []).find((a) => a.game_name.toLowerCase() === game);
-          if (acct) {
-            out[pair.userCol] = acct.game_username;
+          if (game === prevGame) continue; // the game cell didn't move
+          const accounts = pl.game_accounts ?? [];
+          const login = out[pair.userCol]?.trim() ?? "";
+          const isOf = (g: string) =>
+            !!g &&
+            accounts.some(
+              (a) =>
+                a.game_name.toLowerCase() === g &&
+                a.game_username.toLowerCase() === login.toLowerCase(),
+            );
+          // Keep a login the player really holds on the new game, and keep
+          // anything typed that the record doesn't recognise at all.
+          if (login && (isOf(game) || !isOf(prevGame))) continue;
+          const acct = accounts.find((a) => a.game_name.toLowerCase() === game);
+          const next = acct?.game_username ?? "";
+          if (next !== (out[pair.userCol] ?? "")) {
+            out[pair.userCol] = next;
             touched = true;
           }
         }
@@ -1058,6 +1080,36 @@ export default function TransactionsPage() {
           }
         }
         if (member === prevMember) return touched ? out : row;
+        /**
+         * Same rule when the member cell changes: a game and login the sheet
+         * filled in for the member who was there a moment ago belong to that
+         * member, and left standing they would book this row against another
+         * player's account. Cleared here so the fill below re-reads them off
+         * the member who is actually in the cell now; a pair the new member
+         * also holds, or one CS typed that no record knows, is left alone.
+         */
+        const prevPl = prevMember ? playerByCode.get(prevMember) : undefined;
+        if (prevPl && prevPl.player_id !== pl.player_id) {
+          const held = (
+            who: typeof pl,
+            game: string,
+            login: string,
+          ) =>
+            (who.game_accounts ?? []).some(
+              (a) =>
+                a.game_name.toLowerCase() === game.toLowerCase() &&
+                a.game_username.toLowerCase() === login.toLowerCase(),
+            );
+          for (const pair of LOGIN_PAIRS[tab]) {
+            const game = out[pair.gameCol]?.trim() ?? "";
+            const login = out[pair.userCol]?.trim() ?? "";
+            if (!game && !login) continue;
+            if (held(pl, game, login)) continue; // the new member holds it too
+            if (!held(prevPl, game, login)) continue; // typed, not filled
+            out[pair.gameCol] = "";
+            out[pair.userCol] = "";
+          }
+        }
         const fill = (idx: number, val: string | undefined | null) => {
           if (val && !out[idx]?.trim()) out[idx] = val;
         };
@@ -1549,6 +1601,32 @@ export default function TransactionsPage() {
         row && memberCol !== undefined
           ? playerByCode.get(row[memberCol]?.trim().toLowerCase() ?? "")
           : undefined;
+      /**
+       * Game cells: the games this player actually holds an account on, so CS
+       * picks from the four the member has rather than scrolling every kiosk
+       * the house runs and choosing one the transaction can't land in.
+       *
+       * Falls back to the column's full list when the row has no player yet,
+       * or the player has nothing linked — an empty dropdown would be a dead
+       * end, and the list is a suggestion, not a restriction: a typed game
+       * still goes through.
+       */
+      const gameCols = new Set(LOGIN_PAIRS[tab].map((pair) => pair.gameCol));
+      if (gameCols.has(colIndex)) {
+        const pl = memberOf(d);
+        const accounts = pl?.game_accounts ?? [];
+        if (!accounts.length) return undefined;
+        const byGame = new Map<string, string[]>();
+        for (const a of accounts) {
+          const list = byGame.get(a.game_name) ?? [];
+          list.push(a.game_username);
+          byGame.set(a.game_name, list);
+        }
+        return [...byGame].map(([game, logins]) => ({
+          value: game,
+          hint: logins.length > 1 ? `${logins.length} logins` : logins[0],
+        }));
+      }
       if (loginCfg) {
         const pl = memberOf(d);
         const gameCell = d?.[loginCfg.gameCol]?.trim().toLowerCase() ?? "";
