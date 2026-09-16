@@ -1243,6 +1243,23 @@ export const expenses = pgTable("expenses", {
   company_entity_id: integer("company_entity_id").references(
     () => entities.entity_id,
   ),
+  /**
+   * What the money came out of: one of our bank accounts, or a leader's own
+   * cash. Exactly one, or neither for a row nobody recorded it on.
+   *
+   * Cash names the leader because an expense has no leader column of its own,
+   * and "paid in cash" without saying whose cannot be settled later.
+   *
+   * Recording this moves no balance. An expense that should also show against
+   * a bank account is entered as a bank cash-out; booking it here as well
+   * would debit the same money twice.
+   */
+  paid_from_account_id: integer("paid_from_account_id").references(
+    () => bankAccounts.account_id,
+  ),
+  paid_from_cash_entity_id: integer("paid_from_cash_entity_id").references(
+    () => entities.entity_id,
+  ),
   recorded_by_user_id: integer("recorded_by_user_id")
     .notNull()
     .references(() => users.user_id),

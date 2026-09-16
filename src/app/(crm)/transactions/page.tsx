@@ -116,7 +116,7 @@ const COLUMN_KEYS = {
     "assign", "member", "from", "username", "to", "to_username", "amount",
     "status", "date", "time", "note",
   ],
-  expense: ["assign", "date", "category", "description", "amount", "company", "notes"],
+  expense: ["assign", "date", "category", "description", "amount", "company", "paidfrom", "notes"],
   // Cash a leader took out of a company bank account (see Bank Accounts).
   leaderwithdrawal: ["assign", "date", "time", "account", "amount", "takenby", "notes", "status"],
   // Generated rebate payouts, every plan together — read-only, paid from here.
@@ -475,6 +475,9 @@ const ENTRY_HINT: Record<TabKey, string> = {
 /** Either end of a leader settlement when no bank account was involved. */
 const CASH = "Cash";
 
+/** How a leader's own cash is written in the Expense sheet: "Leader One cash". */
+const CASH_SUFFIX = "cash";
+
 /** Stable empty map, so the alias memo below doesn't re-run every render. */
 const EMPTY_ALIASES: Record<string, string> = {};
 
@@ -672,6 +675,22 @@ export default function TransactionsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [bankAccounts, entityName, selectedCompanyId, selectedLeaderId],
   );
+  /** What an expense came out of: one of our accounts, or a leader's cash. */
+  const PAID_FROM_SUGGESTIONS = useMemo<SheetSuggestion[]>(
+    () => [
+      ...bankAccounts
+        .filter((a) => a.status === "active")
+        .map((a) => ({
+          value: a.label ?? `${a.bank_name} ${a.account_number}`,
+          hint: `${entityName(a.entity_id)} · ${fmtAmount(a.current_balance)}`,
+        })),
+      ...entities
+        .filter((e) => e.entity_type === "leader" && e.status === "active")
+        .map((e) => ({ value: `${e.name} ${CASH_SUFFIX}`, hint: "the leader's own cash" })),
+    ],
+    [bankAccounts, entities, entityName],
+  );
+
   /** Either end of a leader settlement: one of our accounts, or cash. */
   const END_SUGGESTIONS = useMemo<SheetSuggestion[]>(
     () => [
@@ -830,10 +849,11 @@ export default function TransactionsPage() {
         description: { label: "Description", width: 260, entry: true, required: true, placeholder: "what it's for" },
         amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "100" },
         company: { label: "Company", width: 150, entry: true, options: companies.map((c) => c.company_name), placeholder: "company" },
+        paidfrom: { label: "Paid From", width: 190, entry: true, options: PAID_FROM_SUGGESTIONS, placeholder: "bank account / leader cash" },
         notes: { label: "Notes", width: 240, entry: true, placeholder: "notes (optional)" },
       }),
     };
-  }, [games, banks, companies, memberSuggestions, MODE_SUGGESTIONS, ASSIGN_SUGGESTIONS, ACCOUNT_SUGGESTIONS, LEADER_SUGGESTIONS, END_SUGGESTIONS]);
+  }, [games, banks, companies, memberSuggestions, MODE_SUGGESTIONS, ASSIGN_SUGGESTIONS, ACCOUNT_SUGGESTIONS, LEADER_SUGGESTIONS, END_SUGGESTIONS, PAID_FROM_SUGGESTIONS]);
 
   const columns = columnsByTab[tab];
 
@@ -1237,6 +1257,17 @@ export default function TransactionsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gameTransfers, playerById, range, statusFilters, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId]);
 
+  /** How an end reads back: the account's label, "Cash", or an em dash. */
+  const transferEndLabel = useCallback(
+    (accountId: number | null | undefined, cash: boolean | undefined) => {
+      if (cash) return CASH;
+      if (accountId == null) return "—";
+      const a = bankAccounts.find((x) => x.account_id === accountId);
+      return a ? (a.label ?? `${a.bank_name} ${a.account_number}`) : `#${accountId}`;
+    },
+    [bankAccounts],
+  );
+
   const expenseRows = useMemo<SheetRow[]>(() => {
     return expenses
       .filter((e) => e.company_entity_id === null || companyInScope(e.company_entity_id))
@@ -1252,12 +1283,18 @@ export default function TransactionsPage() {
           description: e.description,
           amount: fmtAmount(e.amount),
           company: e.company_entity_id ? (companyNameById.get(e.company_entity_id) ?? "") : "",
+          paidfrom:
+            e.paid_from_account_id != null
+              ? transferEndLabel(e.paid_from_account_id, false)
+              : e.paid_from_cash_entity_id != null
+                ? `${entityName(e.paid_from_cash_entity_id)} ${CASH_SUFFIX}`
+                : "",
           notes: e.notes ?? "",
         }),
       }))
       .filter((r) => matchesSearch(r.cells));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expenses, companyNameById, range, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId]);
+  }, [expenses, companyNameById, range, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId, transferEndLabel, entityName]);
 
   const accountById = useMemo(
     () => new Map(bankAccounts.map((a) => [a.account_id, a])),
@@ -1335,17 +1372,6 @@ export default function TransactionsPage() {
       .filter((r) => matchesSearch(r.cells));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rebatePayouts, range, statusFilters, rebatePlanFilter, rebateWindowFilter, matchesSearch, userName, selectedCompanyId, selectedLeaderId]);
-
-  /** How an end reads back: the account's label, "Cash", or an em dash. */
-  const transferEndLabel = useCallback(
-    (accountId: number | null | undefined, cash: boolean | undefined) => {
-      if (cash) return CASH;
-      if (accountId == null) return "—";
-      const a = bankAccounts.find((x) => x.account_id === accountId);
-      return a ? (a.label ?? `${a.bank_name} ${a.account_number}`) : `#${accountId}`;
-    },
-    [bankAccounts],
-  );
 
   const leaderTransferRows = useMemo<SheetRow[]>(() => {
     return leaderTransfers
@@ -1726,6 +1752,37 @@ export default function TransactionsPage() {
     [playerByCode, gameByName],
   );
 
+  /**
+   * A typed "Paid From": one of our accounts by label, or "<leader> cash".
+   * Blank leaves it unrecorded, as every expense entered before the column.
+   */
+  const resolvePaidFrom = useCallback(
+    (
+      raw: string,
+    ):
+      | { ok: true; account_id?: number; cash_entity_id?: number }
+      | { ok: false } => {
+      const v = raw.trim();
+      if (!v) return { ok: true };
+      const account = bankAccounts.find(
+        (a) =>
+          (a.label ?? "").trim().toLowerCase() === v.toLowerCase() ||
+          `${a.bank_name} ${a.account_number}`.toLowerCase() === v.toLowerCase(),
+      );
+      if (account) return { ok: true, account_id: account.account_id };
+      // "<leader> cash" — the suffix is what marks it as cash rather than an
+      // account, so a leader named after a bank can't be mistaken for one.
+      const lower = v.toLowerCase();
+      if (lower.endsWith(` ${CASH_SUFFIX}`)) {
+        const name = v.slice(0, -(CASH_SUFFIX.length + 1)).trim().toLowerCase();
+        const id = leaderByName.get(name);
+        if (id) return { ok: true, cash_entity_id: id };
+      }
+      return { ok: false };
+    },
+    [bankAccounts, leaderByName],
+  );
+
   const parseExpenseDraft = useCallback(
     (d: string[]): Parsed => {
       const c = COL.expense;
@@ -1753,6 +1810,13 @@ export default function TransactionsPage() {
         if (!id) return { ok: false, error: `Unknown company "${company.trim()}"` };
         company_entity_id = id;
       }
+      const paidCell = (d[c.paidfrom] ?? "").trim();
+      const paid = resolvePaidFrom(paidCell);
+      if (!paid.ok)
+        return {
+          ok: false,
+          error: `Unknown source "${paidCell}" — pick an account, or "<leader> cash"`,
+        };
       return {
         ok: true,
         payload: {
@@ -1761,11 +1825,15 @@ export default function TransactionsPage() {
           description: description.trim(),
           amount: amt,
           company_entity_id,
+          ...(paid.account_id ? { paid_from_account_id: paid.account_id } : {}),
+          ...(paid.cash_entity_id
+            ? { paid_from_cash_entity_id: paid.cash_entity_id }
+            : {}),
           ...(notes.trim() ? { notes: notes.trim() } : {}),
         },
       };
     },
-    [companyByName],
+    [companyByName, resolvePaidFrom],
   );
 
   const parseLeaderWithdrawalDraft = useCallback(

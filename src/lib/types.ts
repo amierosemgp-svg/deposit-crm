@@ -548,6 +548,9 @@ export type Expense = {
   description: string;
   amount: number;
   company_entity_id: number | null;
+  /** Paid out of a bank account, or out of a leader's cash. Never both. */
+  paid_from_account_id: number | null;
+  paid_from_cash_entity_id: number | null;
   recorded_by_user_id: number;
   notes?: string | null;
   created_at: string;

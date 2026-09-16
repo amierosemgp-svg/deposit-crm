@@ -370,6 +370,9 @@ type Store = {
     amount: number;
     company_entity_id?: number | null;
     notes?: string;
+    /** Paid out of a bank account, or out of a leader's cash. Never both. */
+    paid_from_account_id?: number | null;
+    paid_from_cash_entity_id?: number | null;
   }) => Promise<MutationResult>;
   deleteExpense: (expenseId: number) => Promise<MutationResult>;
   addEntity: (input: {
