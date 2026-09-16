@@ -71,10 +71,32 @@ export async function POST(request: Request) {
     });
     if (!bonus.ok) return jsonError(bonus.reason, bonus.status);
 
-    // A skip-agent deposit has no agent bank-match step, so it always starts at
-    // "pending" (ready for manual approval), never "pending_match".
+    // A skip-agent deposit has no agent bank-match step, so it never starts at
+    // "pending_match".
     const skipBot = body.skip_bot ?? true;
-    const status = skipBot ? "pending" : body.status;
+
+    /**
+     * A manual deposit is approved the moment it is written.
+     *
+     * The approve step exists to dispatch a deposit to the agent; with no
+     * agent in the loop it was one click that said nothing a human hadn't
+     * already said by typing the row. Recording the row IS the approval, so it
+     * lands in "processing" with approved_at set.
+     *
+     * No money moves here — total_deposits, the player's game credit and the
+     * company BO pool are all still booked at completion, once CS has really
+     * topped up the kiosk. That keeps a top-up that never happened clean:
+     * nothing to reverse.
+     *
+     * A deposit with no game chosen cannot be dispatched to anywhere, so it
+     * waits at "pending" exactly as POST /:id/approve would refuse it.
+     */
+    const autoApprove = skipBot && !!body.selected_game;
+    const status = autoApprove
+      ? ("processing" as const)
+      : skipBot
+        ? ("pending" as const)
+        : body.status;
     const nowIso = new Date().toISOString();
     const [created] = await db
       .insert(deposits)
@@ -94,6 +116,7 @@ export async function POST(request: Request) {
         skip_bot: skipBot,
         receipt_url: body.receipt_url,
         handled_by_user_id: user.user_id,
+        ...(autoApprove ? { approved_at: nowIso } : {}),
         ...(body.assign_to_me
           ? { assigned_to_user_id: user.user_id, assigned_at: nowIso }
           : {}),
@@ -128,6 +151,26 @@ export async function POST(request: Request) {
           : {}),
       },
     });
+
+    // The approval, as its own ledger line — the same row POST /:id/approve
+    // writes, so the history of an auto-approved deposit reads like any other.
+    if (autoApprove) {
+      await db.insert(transactions).values({
+        player_id: player.player_id,
+        entity_id: player.company_entity_id,
+        type: "deposit",
+        amount: created.total_amount,
+        game_name: created.selected_game,
+        reference_id: created.deposit_id,
+        user_id: user.user_id,
+        details: {
+          action: "approved_dispatched",
+          source: "manual",
+          auto: true,
+          bonus_percentage: created.bonus_percentage,
+        },
+      });
+    }
 
     return Response.json({ deposit: created }, { status: 201 });
   } catch (e) {

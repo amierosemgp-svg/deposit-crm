@@ -638,8 +638,8 @@ export default function TransactionsPage() {
 
   const MODE_SUGGESTIONS = useMemo(
     () => [
+      { value: "manual", hint: "CS already credited it in the back-office (default)" },
       { value: "bot", hint: "agent tops up the game" },
-      { value: "manual", hint: "CS already credited it in the back-office" },
     ],
     [],
   );
@@ -745,7 +745,7 @@ export default function TransactionsPage() {
         product: { label: "Product", width: 110, entry: true, required: true, options: games, placeholder: "game" },
         username,
         amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "50" },
-        mode: { label: "Mode", width: 90, entry: true, options: MODE_SUGGESTIONS, placeholder: "bot / manual" },
+        mode: { label: "Mode", width: 90, entry: true, options: MODE_SUGGESTIONS, placeholder: "manual" },
         remark: { label: "Remark", width: 220, entry: true, placeholder: "reason (optional)" },
         status,
         date,
@@ -1628,10 +1628,12 @@ export default function TransactionsPage() {
         return { ok: false, error: `${player.username} has no ${g} account linked` };
       const amt = parseAmount(amount);
       if (amt === null || amt <= 0) return { ok: false, error: `Bad amount "${amount}"` };
+      // Blank means manual, matching the server: the house runs everything by
+      // hand until the workflow is settled. Type "bot" to hand one to the agent.
       const m = mode.trim().toLowerCase();
       let skip_bot: boolean;
-      if (!m || ["bot", "agent", "auto"].includes(m)) skip_bot = false;
-      else if (["manual", "cs", "hand"].includes(m)) skip_bot = true;
+      if (!m || ["manual", "cs", "hand"].includes(m)) skip_bot = true;
+      else if (["bot", "agent", "auto"].includes(m)) skip_bot = false;
       else return { ok: false, error: `Mode must be "bot" or "manual", not "${mode.trim()}"` };
       return {
         ok: true,

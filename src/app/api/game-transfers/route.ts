@@ -5,7 +5,12 @@ import { gameCredits, gameTransfers, players, transactions } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import { canonicalise } from "@/lib/game-name";
-import { creditWhere, resolveGameLogin } from "@/lib/game-credits";
+import {
+  creditWhere,
+  InsufficientCreditError,
+  moveGameCredit,
+  resolveGameLogin,
+} from "@/lib/game-credits";
 
 const createSchema = z.object({
   player_id: z.number().int().positive(),
@@ -22,6 +27,13 @@ const createSchema = z.object({
   // me" cell) — the same ownership marker POST /api/assignments sets.
   assign_to_me: z.boolean().optional(),
   to_game_username: z.string().max(120).optional(),
+  /**
+   * CS moved the credit in the provider back-office themselves. The transfer
+   * is booked here and now instead of being queued — the same rail free
+   * credits and referral payouts already ride. Defaults on: the house runs
+   * everything by hand until the workflow is settled.
+   */
+  skip_bot: z.boolean().optional(),
 });
 
 /**
@@ -89,6 +101,31 @@ export async function POST(request: Request) {
         );
       }
 
+      const skipBot = body.skip_bot ?? true;
+      const nowIso = new Date().toISOString();
+
+      // Manual: the move already happened in the back-office, so book it now.
+      // Shared with the agent's completion handler so both debit and credit
+      // the same rows the same way.
+      let moved = amount;
+      if (skipBot) {
+        try {
+          moved = await moveGameCredit(txn, {
+            playerId: body.player_id,
+            fromGame,
+            fromLogin,
+            toGame,
+            toLogin,
+            amount,
+            all: transferAll,
+            nowIso,
+          });
+        } catch (e) {
+          if (e instanceof InsufficientCreditError) throw new AuthError(422, e.message);
+          throw e;
+        }
+      }
+
       const [transfer] = await txn
         .insert(gameTransfers)
         .values({
@@ -97,20 +134,22 @@ export async function POST(request: Request) {
           to_game: toGame,
           from_game_username: fromLogin,
           to_game_username: toLogin,
-          // 0 under transfer_all — a placeholder the agent replaces with the
-          // figure it actually moved.
-          transfer_amount: amount,
-          transfer_all: transferAll,
+          // 0 under transfer_all when queued — a placeholder the agent replaces
+          // with the figure it actually moved. A manual move knows it already.
+          transfer_amount: moved,
+          transfer_all: skipBot ? false : transferAll,
           from_game_balance_before: fromBalance,
-          // "pending" = Initializing: queued, waiting for the agent to claim it.
-          // The agent moves it to "processing" when it actually starts the
-          // provider-side move, so a transfer nobody picked up is
-          // distinguishable from one that's genuinely in progress.
-          status: "pending",
-          started_at: new Date().toISOString(),
+          // Manual is finished the moment it is recorded. Queued starts at
+          // "pending" (Initializing) — the agent moves it to "processing" when
+          // it actually starts, so a transfer nobody picked up is
+          // distinguishable from one genuinely in progress.
+          status: skipBot ? "completed" : "pending",
+          started_at: nowIso,
+          ...(skipBot ? { completed_at: nowIso } : {}),
           handled_by_user_id: user.user_id,
+          ...(skipBot ? { note: "Moved by CS in the back-office" } : {}),
           ...(body.assign_to_me
-            ? { assigned_to_user_id: user.user_id, assigned_at: new Date().toISOString() }
+            ? { assigned_to_user_id: user.user_id, assigned_at: nowIso }
             : {}),
         })
         .returning();
@@ -119,12 +158,13 @@ export async function POST(request: Request) {
         player_id: body.player_id,
         entity_id: player.company_entity_id,
         type: "game_transfer",
-        amount,
+        amount: moved,
         game_name: `${fromGame} → ${toGame}`,
         reference_id: transfer.transfer_id,
         user_id: user.user_id,
         details: {
-          action: "initiated",
+          action: skipBot ? "completed_manually" : "initiated",
+          source: skipBot ? "manual" : "bot",
           from: fromGame,
           to: toGame,
           transfer_all: transferAll,

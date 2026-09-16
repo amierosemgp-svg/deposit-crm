@@ -39,7 +39,10 @@ export async function POST(request: Request) {
     const user = await requireWriteUser();
     const parsed = createSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return jsonError("Invalid payload");
-    const { player_id, game_name, game_username, amount, reason, skip_bot = false } = parsed.data;
+    // Manual by default, as on deposits and withdrawals: the house is running
+    // everything by hand until the workflow is settled, and only then handing
+    // work to the agent. Pass skip_bot: false to queue one for the agent.
+    const { player_id, game_name, game_username, amount, reason, skip_bot = true } = parsed.data;
 
     const result = await db.transaction(async (txn) => {
       const [player] = await txn
