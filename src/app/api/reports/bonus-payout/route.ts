@@ -45,13 +45,16 @@ export async function GET(request: Request) {
     const type = new URL(request.url).searchParams.get("type") ?? "all";
     const game = new URL(request.url).searchParams.get("game");
 
-    // Which halves of the union to build. Mirrors the client exactly: a chosen
-    // deposit status can never be satisfied by a recommend bonus, so picking
-    // one hides them — unless the view is recommend-only, where the status
-    // filter simply does not apply rather than emptying the table.
-    const wantDeposits = type !== "Recommend";
+    // Which parts of the union to build. Mirrors the client exactly: a chosen
+    // deposit status can never be satisfied by a recommend bonus or a free
+    // credit, so picking one hides them — unless the view is already narrowed
+    // to that kind, where the status filter simply does not apply rather than
+    // emptying the table.
+    const wantDeposits = type === "all" || type === "Deposit";
     const wantRecommend =
-      type !== "Deposit" && (status === "all" || type === "Recommend");
+      (type === "all" && status === "all") || type === "Recommend";
+    const wantFreeCredit =
+      (type === "all" && status === "all") || type === "Free Credit";
 
     const branches: SQL[] = [];
 
@@ -138,7 +141,63 @@ export async function GET(request: Request) {
          WHERE ${all(w)}`);
     }
 
-    // Neither half wanted is a legitimate, empty answer — not an error.
+    if (wantFreeCredit) {
+      /**
+       * Credit given with no deposit behind it — a rebate, a goodwill credit,
+       * a promo. Money out of the house exactly as a bonus is, and left out of
+       * this report it simply went unreported: RM 16,559 of it in RajaClub's
+       * first imported month alone.
+       *
+       * It has no table of its own. A free credit IS the game_topup ledger row
+       * issueFreeCredit writes, which is why this branch reads transactions.
+       */
+      const w: SQL[] = [
+        sql`t.details->>'kind' = 'free_credit'`,
+        ...(user.ownedEntityIds === null
+          ? []
+          : [
+              sql`t.entity_id IN (${sql.join(
+                user.ownedEntityIds.map((id) => sql`${id}`),
+                sql`, `,
+              )})`,
+            ]),
+      ];
+      if (from) w.push(sql`${businessDay(sql`t.created_at`)} >= ${from}::date`);
+      if (to) w.push(sql`${businessDay(sql`t.created_at`)} <= ${to}::date`);
+      if (companyId !== null) w.push(sql`t.entity_id = ${companyId}`);
+      if (q) {
+        w.push(
+          searchAcross(
+            sql`concat_ws(' ', 'fc-' || t.transaction_id, fp.full_name, fp.username,
+                t.game_name, t.details->>'remark')`,
+            q,
+          ),
+        );
+      }
+      if (game !== null) {
+        w.push(sql`coalesce(nullif(t.game_name, ''), ${NO_GAME}) = ${game}`);
+      }
+      branches.push(sql`
+        SELECT 'Free Credit'::text                                 AS kind,
+               'fc-' || t.transaction_id                           AS key,
+               t.created_at                                        AS at,
+               'FC-' || t.transaction_id                           AS ref,
+               t.player_id                                         AS player_id,
+               coalesce(fp.full_name, fp.username, '—')            AS player,
+               t.entity_id                                         AS company_id,
+               coalesce(nullif(t.game_name, ''), ${NO_GAME})       AS game,
+               -- Issued the moment it is recorded; there is no pending state
+               -- to show, and no percentage or basis behind it.
+               'completed'::text                                   AS status,
+               0::numeric                                          AS pct,
+               0::numeric                                          AS basis,
+               t.amount                                            AS bonus
+          FROM transactions t
+          LEFT JOIN players fp ON fp.player_id = t.player_id
+         WHERE ${all(w)}`);
+    }
+
+    // Nothing wanted is a legitimate, empty answer — not an error.
     if (!branches.length) {
       return Response.json({
         summary: EMPTY_SUMMARY,
@@ -157,9 +216,11 @@ export async function GET(request: Request) {
       SELECT
         coalesce(sum(bonus) FILTER (WHERE kind = 'Deposit'), 0)::float8   AS deposit_bonus,
         coalesce(sum(bonus) FILTER (WHERE kind = 'Recommend'), 0)::float8 AS recommend_bonus,
+        coalesce(sum(bonus) FILTER (WHERE kind = 'Free Credit'), 0)::float8 AS free_credit,
         coalesce(sum(basis), 0)::float8                                   AS basis,
         count(*) FILTER (WHERE kind = 'Deposit')::int                     AS deposit_count,
         count(*) FILTER (WHERE kind = 'Recommend')::int                   AS recommend_count,
+        count(*) FILTER (WHERE kind = 'Free Credit')::int                  AS free_credit_count,
         count(DISTINCT player_id)::int                                    AS unique_players
       FROM payout`);
 
@@ -172,6 +233,7 @@ export async function GET(request: Request) {
                  count(*)::int                                         AS payouts,
                  count(*) FILTER (WHERE kind = 'Deposit')::int         AS deposit_count,
                  count(*) FILTER (WHERE kind = 'Recommend')::int       AS recommend_count,
+                 count(*) FILTER (WHERE kind = 'Free Credit')::int     AS free_credit_count,
                  coalesce(sum(basis), 0)::float8                       AS basis,
                  coalesce(sum(bonus), 0)::float8                       AS bonus
             FROM payout
@@ -201,6 +263,8 @@ export async function GET(request: Request) {
     const summary = {
       deposit_bonus: s.deposit_bonus ?? 0,
       recommend_bonus: s.recommend_bonus ?? 0,
+      free_credit: s.free_credit ?? 0,
+      free_credit_count: s.free_credit_count ?? 0,
       basis: s.basis ?? 0,
       deposit_count: s.deposit_count ?? 0,
       recommend_count: s.recommend_count ?? 0,
@@ -212,7 +276,10 @@ export async function GET(request: Request) {
       games: gamesRes.rows,
       rows: rowsRes.rows,
       // What the drill holds in total, so the pager knows where it ends.
-      total: summary.deposit_count + summary.recommend_count,
+      total:
+        summary.deposit_count +
+        summary.recommend_count +
+        summary.free_credit_count,
       limit,
       offset,
     });
@@ -227,6 +294,8 @@ export async function GET(request: Request) {
 const EMPTY_SUMMARY = {
   deposit_bonus: 0,
   recommend_bonus: 0,
+  free_credit: 0,
+  free_credit_count: 0,
   basis: 0,
   deposit_count: 0,
   recommend_count: 0,

@@ -92,6 +92,7 @@ type ReportApi = {
     payouts: number;
     deposit_count: number;
     recommend_count: number;
+    free_credit_count: number;
     basis: number;
     bonus: number;
   }[];
@@ -104,7 +105,9 @@ type ReportApi = {
 const REPORT_ENDPOINT: Record<string, string> = {
   daily_deposits: "daily-deposits",
   daily_withdrawals: "daily-withdrawals",
-  ggr_summary: "ggr-summary",
+  daily_report: "daily-report",
+  sales_report: "sales-report",
+  win_loss: "win-loss",
   cs_performance: "cs-performance",
   bonus_payout: "bonus-payout",
   bank_reconciliation: "bank-reconciliation",
@@ -140,15 +143,47 @@ type WithdrawalRow = {
   credit_pulled_amount: number;
 };
 
-type GgrRow = {
+type DailyRow = {
+  day: string;
+  deposits: number;
+  ap: number;
+  np: number;
+  bonus: number;
+  withdrawals: number;
+  free_credit: number;
+  recommend: number;
+  sales: number;
+  sales_cumulative: number;
+  bank_balance: number;
+};
+
+type SalesRow = {
   company_id: number;
   company_name: string;
-  dep_count: number;
-  dep_volume: number;
+  deposits: number;
+  deposit_count: number;
+  ap: number;
+  np: number;
   bonus: number;
-  wd_count: number;
-  wd_volume: number;
-  ggr: number;
+  free_credit: number;
+  withdrawals: number;
+  withdrawal_count: number;
+  recommend: number;
+  sales: number;
+};
+
+type WinLossRow = {
+  game: string;
+  money_in: number;
+  deposit_count: number;
+  players: number;
+  bonus: number;
+  free_credit: number;
+  money_out: number;
+  withdrawal_count: number;
+  recommend: number;
+  net: number;
+  margin: number | null;
 };
 
 type AgentRow = {
@@ -177,7 +212,7 @@ type ReconRow = {
 
 type PayoutRow = {
   key: string;
-  kind: "Deposit" | "Recommend";
+  kind: "Deposit" | "Recommend" | "Free Credit";
   at: string;
   ref: string;
   player_id: number | null;
@@ -210,6 +245,14 @@ type PreparedTable = {
   totals?: (React.ReactNode | null)[];
   summary?: string;
 };
+
+/** "1 Aug" from a date the server hands back as YYYY-MM-DD. */
+function dayLabel(day: string): string {
+  const d = new Date(`${String(day).slice(0, 10)}T00:00:00`);
+  return Number.isNaN(d.getTime())
+    ? String(day).slice(0, 10)
+    : d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+}
 
 const norm = (s: string | null | undefined) => (s ?? "").toLowerCase();
 
@@ -277,7 +320,9 @@ export default function ReportDetailPage() {
    */
   const [drillGame, setDrillGame] = useState<string | null>(null);
   /** Bonus Payout only: deposit bonuses, recommend bonuses, or both. */
-  const [payoutKind, setPayoutKind] = useState<"all" | "Deposit" | "Recommend">(
+  const [payoutKind, setPayoutKind] = useState<
+    "all" | "Deposit" | "Recommend" | "Free Credit"
+  >(
     "all",
   );
 
@@ -508,13 +553,15 @@ export default function ReportDetailPage() {
         };
       }
 
-      case "ggr_summary": {
-        const ggrCell = (n: number): Cell => ({
+      case "daily_report": {
+        const signed = (n: number): Cell => ({
           node: (
             <span
               className={cn(
                 "font-medium",
-                n >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400",
+                n >= 0
+                  ? "text-emerald-600 dark:text-emerald-400"
+                  : "text-red-600 dark:text-red-400",
               )}
             >
               {formatRM(n)}
@@ -522,39 +569,179 @@ export default function ReportDetailPage() {
           ),
           csv: n,
         });
+        const rows = report.rows as DailyRow[];
         return {
           headers: [
-            { label: "Company" },
-            { label: "Deposits", align: "right" },
-            { label: "Deposit Volume", align: "right" },
-            { label: "Bonuses", align: "right" },
+            { label: "Date" },
+            { label: "Total Deposit", align: "right" },
+            { label: "AP", align: "right" },
+            { label: "NP", align: "right" },
+            { label: "Bonus", align: "right" },
             { label: "Withdrawals", align: "right" },
-            { label: "Withdrawal Volume", align: "right" },
-            { label: "GGR", align: "right" },
+            { label: "Sales", align: "right" },
+            { label: "Cumulative", align: "right" },
+            { label: "Bank Balance", align: "right" },
           ],
-          rows: (report.rows as GgrRow[]).map((r) => ({
-            key: r.company_id,
+          rows: rows.map((r) => ({
+            key: r.day,
             cells: [
-              text(r.company_name),
-              { node: r.dep_count, csv: r.dep_count },
-              money(r.dep_volume),
+              { node: dayLabel(r.day), csv: String(r.day).slice(0, 10) },
+              money(r.deposits),
+              { node: r.ap.toLocaleString(), csv: r.ap },
+              { node: r.np.toLocaleString(), csv: r.np },
               money(r.bonus),
-              { node: r.wd_count, csv: r.wd_count },
-              money(r.wd_volume),
-              ggrCell(r.ggr),
+              money(r.withdrawals),
+              signed(r.sales),
+              signed(r.sales_cumulative),
+              money(r.bank_balance),
             ],
           })),
           totals: [
             "Totals",
-            report.summary.dep_count,
-            formatRM(report.summary.dep_volume),
+            formatRM(report.summary.deposits),
+            `avg ${Math.round(report.summary.avg_ap).toLocaleString()}`,
+            report.summary.np.toLocaleString(),
             formatRM(report.summary.bonus),
-            report.summary.wd_count,
-            formatRM(report.summary.wd_volume),
-            formatRM(report.summary.ggr),
+            formatRM(report.summary.withdrawals),
+            formatRM(report.summary.sales),
+            null,
+            null,
           ],
           summary:
-            "Realised money only: completed deposits and paid withdrawals, at the amount actually paid. Bonuses include recommend bonuses credited to uplines.",
+            `${report.summary.days} days · avg ${formatRM(report.summary.avg_deposits)} deposits a day · ` +
+            `free credit ${formatRM(report.summary.free_credit)} · recommend ${formatRM(report.summary.recommend)}. ` +
+            "Sales = deposits − withdrawals − bonus − recommend − free credit. AP is averaged, not summed: the same member active on ten days is one player.",
+        };
+      }
+
+      case "sales_report": {
+        const signed = (n: number): Cell => ({
+          node: (
+            <span
+              className={cn(
+                "font-medium",
+                n >= 0
+                  ? "text-emerald-600 dark:text-emerald-400"
+                  : "text-red-600 dark:text-red-400",
+              )}
+            >
+              {formatRM(n)}
+            </span>
+          ),
+          csv: n,
+        });
+        const rows = report.rows as SalesRow[];
+        return {
+          headers: [
+            { label: "Company" },
+            { label: "Deposits", align: "right" },
+            { label: "AP", align: "right" },
+            { label: "NP", align: "right" },
+            { label: "Bonus", align: "right" },
+            { label: "Free Credit", align: "right" },
+            { label: "Recommend", align: "right" },
+            { label: "Withdrawals", align: "right" },
+            { label: "Sales", align: "right" },
+          ],
+          rows: rows.map((r) => ({
+            key: r.company_id,
+            cells: [
+              text(r.company_name),
+              money(r.deposits),
+              { node: r.ap.toLocaleString(), csv: r.ap },
+              { node: r.np.toLocaleString(), csv: r.np },
+              money(r.bonus),
+              money(r.free_credit),
+              money(r.recommend),
+              money(r.withdrawals),
+              signed(r.sales),
+            ],
+          })),
+          totals: [
+            "Totals",
+            formatRM(report.summary.deposits),
+            report.summary.ap.toLocaleString(),
+            report.summary.np.toLocaleString(),
+            formatRM(report.summary.bonus),
+            formatRM(report.summary.free_credit),
+            formatRM(report.summary.recommend),
+            formatRM(report.summary.withdrawals),
+            formatRM(report.summary.sales),
+          ],
+          summary:
+            report.summary.days > 0
+              ? `${formatRM(report.summary.sales_per_day)} a day over ${report.summary.days} days.`
+              : "Same arithmetic as the Daily Report, by company instead of by day.",
+        };
+      }
+
+      case "win_loss": {
+        const signed = (n: number): Cell => ({
+          node: (
+            <span
+              className={cn(
+                "font-medium",
+                n >= 0
+                  ? "text-emerald-600 dark:text-emerald-400"
+                  : "text-red-600 dark:text-red-400",
+              )}
+            >
+              {formatRM(n)}
+            </span>
+          ),
+          csv: n,
+        });
+        const rows = report.rows as WinLossRow[];
+        return {
+          headers: [
+            { label: "Game" },
+            { label: "Money In", align: "right" },
+            { label: "Players", align: "right" },
+            { label: "Bonus", align: "right" },
+            { label: "Free Credit", align: "right" },
+            { label: "Recommend", align: "right" },
+            { label: "Paid Out", align: "right" },
+            { label: "Net", align: "right" },
+            { label: "Margin", align: "right" },
+          ],
+          rows: rows.map((r) => ({
+            key: r.game,
+            cells: [
+              text(r.game),
+              money(r.money_in),
+              { node: r.players.toLocaleString(), csv: r.players },
+              money(r.bonus),
+              money(r.free_credit),
+              money(r.recommend),
+              money(r.money_out),
+              signed(r.net),
+              {
+                // Margin on nothing is undefined, not 0% — a dash says so.
+                node:
+                  r.margin === null ? (
+                    <span className="text-muted-foreground">—</span>
+                  ) : (
+                    `${r.margin}%`
+                  ),
+                csv: r.margin ?? "",
+              },
+            ],
+          })),
+          totals: [
+            "Totals",
+            formatRM(report.summary.money_in),
+            null,
+            formatRM(report.summary.bonus),
+            formatRM(report.summary.free_credit),
+            formatRM(report.summary.recommend),
+            formatRM(report.summary.money_out),
+            formatRM(report.summary.net),
+            `${report.summary.margin.toFixed(1)}%`,
+          ],
+          summary:
+            `${report.summary.winning} ${report.summary.winning === 1 ? "game is" : "games are"} up, ` +
+            `${report.summary.losing} down. Net = money in − bonus − recommend − free credit − paid out, ` +
+            "so these rows add up to the Daily and Sales reports.",
         };
       }
 
@@ -618,6 +805,7 @@ export default function ReportDetailPage() {
               { label: "Payouts", align: "right" },
               { label: "Deposit bonuses", align: "right" },
               { label: "Recommend bonuses", align: "right" },
+              { label: "Free credits", align: "right" },
               { label: "Deposit Volume", align: "right" },
               { label: "Bonus Paid", align: "right" },
             ],
@@ -637,21 +825,28 @@ export default function ReportDetailPage() {
                 { node: g.payouts, csv: g.payouts },
                 { node: g.deposit_count, csv: g.deposit_count },
                 { node: g.recommend_count, csv: g.recommend_count },
+                { node: g.free_credit_count, csv: g.free_credit_count },
                 { node: formatRM(g.basis), csv: g.basis },
                 { node: formatRM(g.bonus), csv: g.bonus },
               ],
             })),
             totals: [
               "Totals",
-              report.summary.deposit_count + report.summary.recommend_count,
+              report.summary.deposit_count +
+                report.summary.recommend_count +
+                report.summary.free_credit_count,
               report.summary.deposit_count,
               report.summary.recommend_count,
+              report.summary.free_credit_count,
               formatRM(report.summary.basis),
               formatRM(
-                report.summary.deposit_bonus + report.summary.recommend_bonus,
+                report.summary.deposit_bonus +
+                  report.summary.recommend_bonus +
+                  report.summary.free_credit,
               ),
             ],
             summary:
+              "Everything the house gave away: bonus on a deposit, recommend bonus paid to an upline, and free credit issued with no deposit behind it. " +
               "Click a game to see its payouts. Deposits with no bonus are excluded; cancelled recommend bonuses are written off and excluded.",
           };
         }
@@ -682,7 +877,9 @@ export default function ReportDetailPage() {
                       "inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium",
                       p.kind === "Recommend"
                         ? "bg-purple-500/10 text-purple-700 dark:text-purple-300"
-                        : "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+                        : p.kind === "Free Credit"
+                          ? "bg-sky-500/10 text-sky-700 dark:text-sky-300"
+                          : "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
                     )}
                   >
                     {p.kind}
@@ -711,7 +908,9 @@ export default function ReportDetailPage() {
             null,
             formatRM(report.summary.basis),
             formatRM(
-              report.summary.deposit_bonus + report.summary.recommend_bonus,
+              report.summary.deposit_bonus +
+                report.summary.recommend_bonus +
+                report.summary.free_credit,
             ),
           ],
           summary:
@@ -852,26 +1051,30 @@ export default function ReportDetailPage() {
         // it, and neither is limited to the page on screen.
         if (!report) return [];
         const { summary } = report;
-        const total = summary.deposit_bonus + summary.recommend_bonus;
-        const count = summary.deposit_count + summary.recommend_count;
+        const total =
+          summary.deposit_bonus + summary.recommend_bonus + summary.free_credit;
+        const count =
+          summary.deposit_count +
+          summary.recommend_count +
+          summary.free_credit_count;
         const scope = drillGame ? ` · ${drillGame}` : "";
         return [
           {
             title: "Total Bonus Amount",
             value: formatRM(total),
-            sub: `${formatRM(summary.deposit_bonus)} deposit · ${formatRM(summary.recommend_bonus)} recommend${scope}`,
+            sub: `${formatRM(summary.deposit_bonus)} deposit · ${formatRM(summary.recommend_bonus)} recommend · ${formatRM(summary.free_credit)} free credit${scope}`,
             icon: Gift,
           },
           {
             title: "Unique Players",
             value: summary.unique_players.toLocaleString(),
-            sub: "claimed a bonus",
+            sub: "received something",
             icon: Users,
           },
           {
             title: drillGame ? "Payouts" : "Bonus Transactions",
             value: count.toLocaleString(),
-            sub: `${summary.deposit_count.toLocaleString()} deposit · ${summary.recommend_count.toLocaleString()} recommend`,
+            sub: `${summary.deposit_count.toLocaleString()} deposit · ${summary.recommend_count.toLocaleString()} recommend · ${summary.free_credit_count.toLocaleString()} free credit`,
             icon: Hash,
           },
         ];
@@ -1129,6 +1332,7 @@ export default function ReportDetailPage() {
                   { value: "all", label: "All Types" },
                   { value: "Deposit", label: "Deposit bonus" },
                   { value: "Recommend", label: "Recommend bonus" },
+                  { value: "Free Credit", label: "Free credit" },
                 ]}
               >
                 <SelectTrigger className="h-8 w-[170px] cursor-pointer">
@@ -1141,6 +1345,9 @@ export default function ReportDetailPage() {
                   <SelectItem value="Deposit" className="cursor-pointer">
                     Deposit bonus
                   </SelectItem>
+                  <SelectItem value="Free Credit" className="cursor-pointer">
+                    Free credit
+                  </SelectItem>
                   <SelectItem value="Recommend" className="cursor-pointer">
                     Recommend bonus
                   </SelectItem>
@@ -1151,7 +1358,9 @@ export default function ReportDetailPage() {
 
           {/* Hidden in recommend-only view: these are deposit statuses, and a
               recommend bonus has its own (pending/assigned/cancelled). */}
-          {statusOptions && payoutKind !== "Recommend" && (
+          {statusOptions &&
+            payoutKind !== "Recommend" &&
+            payoutKind !== "Free Credit" && (
             <div className="space-y-1">
               <span className="block text-[11px] font-medium text-muted-foreground">
                 Status

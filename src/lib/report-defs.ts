@@ -2,7 +2,9 @@ import type { LucideIcon } from "lucide-react";
 import {
   Banknote,
   Building2,
+  CalendarDays,
   Gift,
+  Scale,
   ScrollText,
   UserCog,
   Wallet,
@@ -55,13 +57,31 @@ export const REPORT_DEFS: ReportDef[] = [
     tone: "blue",
   },
   {
-    id: "ggr_summary",
-    shortTitle: "GGR Summary",
-    title: "GGR Summary",
+    id: "daily_report",
+    shortTitle: "Daily Report",
+    title: "Daily Report",
     description:
-      "Per-company gross gaming revenue: deposits − withdrawals − bonuses.",
+      "The day-by-day operating sheet: deposits, active and new players, sales, and the bank balance at each day's close.",
+    icon: CalendarDays,
+    tone: "emerald",
+  },
+  {
+    id: "sales_report",
+    shortTitle: "Sales Report",
+    title: "Sales Report",
+    description:
+      "The same figures by company for the whole period — which companies are carrying the month and which are not.",
     icon: Building2,
     tone: "purple",
+  },
+  {
+    id: "win_loss",
+    shortTitle: "Win / Loss",
+    title: "Win / Loss by Game",
+    description:
+      "Where the result came from: money in, what was given away, what was paid out, and the margin on each game.",
+    icon: Scale,
+    tone: "blue",
   },
   {
     id: "cs_performance",

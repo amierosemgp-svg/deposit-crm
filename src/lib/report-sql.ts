@@ -174,3 +174,43 @@ export function scopeByPlayer(user: AuthedUser, alias = "pl"): SQL[] {
   if (!user.companyIds.length) return [sql`false`];
   return [inList(col, user.companyIds)];
 }
+
+/**
+ * The operating figures the house actually runs on, as their own worksheet
+ * defines them (Daily Report All Company).
+ *
+ *   total deposit  money taken in that day
+ *   AP             active players — distinct members who deposited
+ *   NP             new players — members whose FIRST deposit was that day
+ *   sales          what the house kept: deposits − withdrawals − everything
+ *                  given away. Their sheet carries it cumulatively through the
+ *                  month with the daily delta beside it; both are derived from
+ *                  this one figure.
+ *
+ * Defined once here because three reports read them and a house that cannot
+ * reconcile its own daily report against its sales report has two numbers and
+ * no answer.
+ */
+
+/**
+ * Deposits that count as money in.
+ *
+ * Every status except failed. A deposit sitting in "processing" has already
+ * been paid into the bank — that is what makes it a deposit — and excluding it
+ * would under-report the day CS entered it and over-report the day they got
+ * round to completing it.
+ */
+export const DEPOSIT_COUNTS = sql`d.status <> 'failed'`;
+
+/** Withdrawals that count as money out: only what was actually paid. */
+export const WITHDRAWAL_COUNTS = sql`wd.status = 'paid'`;
+
+/** The MYT calendar day a row belongs to, as a date. */
+export const dayOf = (column: SQL) => businessDay(column);
+
+/**
+ * When a recommend bonus counts: when it was handed over, falling back to when
+ * it was earned for one still waiting on CS. Shared so every report files it
+ * on the same day.
+ */
+export const RB_AT = sql`coalesce(rb.assigned_at, rb.created_at)`;
