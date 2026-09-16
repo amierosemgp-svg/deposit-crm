@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { maskPhone } from "@/lib/format";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -202,7 +203,7 @@ export default function LeadListDetailPage() {
                     <td className="whitespace-nowrap px-4 py-2 font-mono text-[13px]">{lead.lead_code}</td>
                     <td className="px-4 py-2">{lead.full_name}</td>
                     <td className="whitespace-nowrap px-4 py-2 text-muted-foreground">
-                      {lead.contact_number ?? "—"}
+                      {maskPhone(lead.contact_number)}
                     </td>
                     <td className="px-4 py-2">
                       {lead.conversions.length === 0 ? (

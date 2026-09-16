@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useStore } from "@/lib/store";
-import { formatRM, formatShortDateTime, formatRelative, initialsOf } from "@/lib/format";
+import { formatRM, formatShortDateTime, formatRelative, initialsOf, maskPhone } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import {
   Dialog,
@@ -339,7 +339,7 @@ export function PlayerProfileModal({
                                   {player.contact_number && (
                                     <span className="inline-flex items-center gap-1.5">
                                       <Phone className="h-3 w-3" />
-                                      {player.contact_number}
+                                      {maskPhone(player.contact_number)}
                                     </span>
                                   )}
                                   <span className="inline-flex items-center gap-1.5">

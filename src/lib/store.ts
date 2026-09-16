@@ -397,8 +397,9 @@ type Store = {
   ) => Promise<MutationResult>;
   addUser: (input: {
     username: string;
-    email: string;
-    full_name: string;
+    /** Both omitted for a main-company account; the server derives them. */
+    email?: string;
+    full_name?: string;
     password: string;
     role: "company_leader" | "cs_agent" | "viewer";
     entity_id: number;

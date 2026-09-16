@@ -11,6 +11,7 @@ import {
   moveGameCredit,
   resolveGameLogin,
 } from "@/lib/game-credits";
+import { InsufficientKioskCreditError, moveKioskCredit } from "@/lib/kiosk-credit";
 
 const createSchema = z.object({
   player_id: z.number().int().positive(),
@@ -122,6 +123,33 @@ export async function POST(request: Request) {
           });
         } catch (e) {
           if (e instanceof InsufficientCreditError) throw new AuthError(422, e.message);
+          throw e;
+        }
+      }
+
+
+      /**
+       * The float follows the credit between kiosks.
+       *
+       * Taking a player's credit out of one game returns it to that game's
+       * float; putting it into another spends that one's. Skipped when both
+       * ends are the same game — that shape is a credit-in, not a move, and
+       * the two legs would cancel a debit that should stand.
+       */
+      if (fromGame.toLowerCase() !== toGame.toLowerCase()) {
+        try {
+          await moveKioskCredit(txn, {
+            companyEntityId: player.company_entity_id,
+            gameName: fromGame,
+            delta: moved,
+          });
+          await moveKioskCredit(txn, {
+            companyEntityId: player.company_entity_id,
+            gameName: toGame,
+            delta: -moved,
+          });
+        } catch (e) {
+          if (e instanceof InsufficientKioskCreditError) throw new AuthError(422, e.message);
           throw e;
         }
       }

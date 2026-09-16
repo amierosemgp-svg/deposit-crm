@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { authErrorResponse, requireUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import {
+  IS_FREE_CREDIT,
   all,
   businessDay,
   RB_AT,
@@ -38,7 +39,7 @@ export async function GET(request: Request) {
     if (p.to) ww.push(sql`${businessDay(sql`wd.created_at`)} <= ${p.to}::date`);
     if (p.companyId !== null) ww.push(sql`pl.company_entity_id = ${p.companyId}`);
 
-    const fw: SQL[] = [sql`t.details->>'kind' = 'free_credit'`, sql`t.entity_id IS NOT NULL`];
+    const fw: SQL[] = [IS_FREE_CREDIT, sql`t.entity_id IS NOT NULL`];
     if (p.from) fw.push(sql`${businessDay(sql`t.created_at`)} >= ${p.from}::date`);
     if (p.to) fw.push(sql`${businessDay(sql`t.created_at`)} <= ${p.to}::date`);
     if (p.companyId !== null) fw.push(sql`t.entity_id = ${p.companyId}`);

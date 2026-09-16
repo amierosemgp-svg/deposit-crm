@@ -1,5 +1,6 @@
 import { db } from "@/db";
-import { gameTransfers, players, transactions } from "@/db/schema";
+import { eq, sql } from "drizzle-orm";
+import { gameTransfers, players, settings, transactions } from "@/db/schema";
 import { AuthError, type AuthedUser } from "@/lib/auth";
 import { creditRecommendBonus, InsufficientBoCreditError } from "@/lib/referral";
 import { resolveGameLogin } from "@/lib/game-credits";
@@ -47,6 +48,8 @@ export async function issueFreeCredit(
   if (!hasGame) {
     throw new AuthError(422, `${player.username} has no ${gameName} account linked`);
   }
+
+  await assertWithinMonthlyCap(txn, player.company_entity_id, amount);
 
   const login = resolveGameLogin(player.game_accounts, gameName, input.gameUsername);
   const nowIso = new Date().toISOString();
@@ -113,4 +116,66 @@ export async function issueFreeCredit(
     .returning();
 
   return { transactionId: audit.transaction_id, gameTransferId, gameUsername: login };
+}
+
+
+/** Share of the month's deposits that may be given away as free credit. */
+export const DEFAULT_FREE_CREDIT_CAP_PCT = 3;
+
+/**
+ * Free credit is capped at a share of what the company took in that month.
+ *
+ * Without a ceiling it is the one payout with no natural limit: a bonus is a
+ * percentage of a deposit and a rebate is a share of a measured loss, but a
+ * free credit is whatever someone types. The cap ties it back to the month's
+ * own takings, so a quiet month cannot be given away.
+ *
+ * Measured over the calendar month in business time, against every free credit
+ * already issued in it — rebates and promos included, since they all spend the
+ * same allowance. The percentage lives in settings (`free_credit_cap_pct`) so
+ * it can be changed without a deploy; 0 disables the check.
+ */
+async function assertWithinMonthlyCap(
+  txn: Tx,
+  companyEntityId: number | null,
+  amount: number,
+): Promise<void> {
+  if (companyEntityId === null) return;
+
+  const [row] = await txn
+    .select({ value: settings.value })
+    .from(settings)
+    .where(eq(settings.key, "free_credit_cap_pct"));
+  const pct =
+    typeof row?.value === "number" ? row.value : DEFAULT_FREE_CREDIT_CAP_PCT;
+  if (pct <= 0) return;
+
+  const month = sql`date_trunc('month', (now() AT TIME ZONE 'Asia/Kuala_Lumpur'))::date`;
+  const [totals] = (await txn.execute(sql`
+    SELECT
+      coalesce((SELECT sum(d.deposit_amount) FROM deposits d
+                 WHERE d.company_entity_id = ${companyEntityId}
+                   AND d.status <> 'failed'
+                   AND (d.deposit_date AT TIME ZONE 'Asia/Kuala_Lumpur')::date >= ${month}), 0)::float8
+        AS deposits,
+      coalesce((SELECT sum(t.amount) FROM transactions t
+                 WHERE t.entity_id = ${companyEntityId}
+                   AND t.type = 'game_topup'
+                   AND t.details->>'action' = 'free_credit'
+                   AND (t.created_at AT TIME ZONE 'Asia/Kuala_Lumpur')::date >= ${month}), 0)::float8
+        AS issued
+  `)).rows as unknown as { deposits: number; issued: number }[];
+
+  const allowance = +(((totals?.deposits ?? 0) * pct) / 100).toFixed(2);
+  const used = totals?.issued ?? 0;
+  const left = +(allowance - used).toFixed(2);
+
+  if (amount > left) {
+    throw new AuthError(
+      422,
+      `Free credit for this month is capped at ${pct}% of deposits — ` +
+        `RM ${allowance.toFixed(2)} allowed, RM ${used.toFixed(2)} already issued, ` +
+        `RM ${Math.max(left, 0).toFixed(2)} left`,
+    );
+  }
 }

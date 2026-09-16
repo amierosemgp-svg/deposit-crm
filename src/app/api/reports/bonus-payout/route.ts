@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { authErrorResponse, requireUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import {
+  IS_FREE_CREDIT,
   all,
   businessDay,
   parseReportParams,
@@ -152,7 +153,7 @@ export async function GET(request: Request) {
        * issueFreeCredit writes, which is why this branch reads transactions.
        */
       const w: SQL[] = [
-        sql`t.details->>'kind' = 'free_credit'`,
+        IS_FREE_CREDIT,
         ...(user.ownedEntityIds === null
           ? []
           : [

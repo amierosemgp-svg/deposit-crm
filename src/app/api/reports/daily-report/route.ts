@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { authErrorResponse, requireUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import {
+  IS_FREE_CREDIT,
   all,
   businessDay,
   RB_AT,
@@ -47,7 +48,7 @@ export async function GET(request: Request) {
 
     // Free credit has no table: it is a game_topup ledger row with no deposit
     // behind it. Money given away all the same, so it belongs in sales.
-    const fw: SQL[] = [sql`t.details->>'kind' = 'free_credit'`];
+    const fw: SQL[] = [IS_FREE_CREDIT];
     if (p.from) fw.push(sql`${businessDay(sql`t.created_at`)} >= ${p.from}::date`);
     if (p.to) fw.push(sql`${businessDay(sql`t.created_at`)} <= ${p.to}::date`);
     if (p.companyId !== null) fw.push(sql`t.entity_id = ${p.companyId}`);

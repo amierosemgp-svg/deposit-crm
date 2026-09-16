@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
   AlertTriangle,
@@ -1087,12 +1086,6 @@ export default function ReportDetailPage() {
   if (!def || !table) {
     return (
       <div className="space-y-4">
-        <Link
-          href="/reports"
-          className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" /> Back to reports
-        </Link>
         <Card className="p-10 text-center text-sm text-muted-foreground">
           Unknown report “{reportId}”.
         </Card>
@@ -1183,13 +1176,7 @@ export default function ReportDetailPage() {
   return (
     <div className="space-y-4">
       <div>
-        <Link
-          href="/reports"
-          className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" /> Back to reports
-        </Link>
-        <div className="mt-3 flex items-start justify-between gap-3">
+        <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-3">
             <div
               className={cn(

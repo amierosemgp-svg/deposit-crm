@@ -91,6 +91,12 @@ type UserDialogState = {
   entityId: number;
   entityName: string;
   role: "company_leader" | "cs_agent" | "viewer";
+  /**
+   * Main-company accounts are the operator's own logins — username and
+   * password and nothing else. Asking for an email produced invented ones,
+   * which in a unique column is a collision waiting to happen.
+   */
+  isMain: boolean;
 } | null;
 
 const ENTITY_TYPE_LABEL: Record<"leader" | "company" | "cs", string> = {
@@ -212,8 +218,7 @@ function AddUserDialog({
 
   const isValid =
     form.username.trim() &&
-    form.email.trim() &&
-    form.full_name.trim() &&
+    (state?.isMain || (form.email.trim() && form.full_name.trim())) &&
     form.password.length >= 6;
 
   function update<K extends keyof typeof EMPTY_USER_FORM>(
@@ -234,8 +239,11 @@ function AddUserDialog({
     setBusy(true);
     const res = await addUser({
       username: form.username.trim(),
-      email: form.email.trim(),
-      full_name: form.full_name.trim(),
+      // Omitted, not blanked: the server derives both from the username for a
+      // main-company account, and rejects an empty string for anyone else.
+      ...(state.isMain
+        ? {}
+        : { email: form.email.trim(), full_name: form.full_name.trim() }),
       password: form.password,
       role: state.role,
       entity_id: state.entityId,
@@ -274,30 +282,34 @@ function AddUserDialog({
                 autoFocus
               />
             </div>
+            {!state?.isMain && (
+              <div className="space-y-1.5">
+                <Label htmlFor="user-fullname">
+                  Full name <span className="text-rose-600 dark:text-rose-400">*</span>
+                </Label>
+                <Input
+                  id="user-fullname"
+                  value={form.full_name}
+                  onChange={(e) => update("full_name", e.target.value)}
+                  placeholder="John Doe"
+                />
+              </div>
+            )}
+          </div>
+          {!state?.isMain && (
             <div className="space-y-1.5">
-              <Label htmlFor="user-fullname">
-                Full name <span className="text-rose-600 dark:text-rose-400">*</span>
+              <Label htmlFor="user-email">
+                Email <span className="text-rose-600 dark:text-rose-400">*</span>
               </Label>
               <Input
-                id="user-fullname"
-                value={form.full_name}
-                onChange={(e) => update("full_name", e.target.value)}
-                placeholder="John Doe"
+                id="user-email"
+                type="email"
+                value={form.email}
+                onChange={(e) => update("email", e.target.value)}
+                placeholder="john@example.com"
               />
             </div>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="user-email">
-              Email <span className="text-rose-600 dark:text-rose-400">*</span>
-            </Label>
-            <Input
-              id="user-email"
-              type="email"
-              value={form.email}
-              onChange={(e) => update("email", e.target.value)}
-              placeholder="john@example.com"
-            />
-          </div>
+          )}
           <div className="space-y-1.5">
             <Label htmlFor="user-password">
               Password <span className="text-rose-600 dark:text-rose-400">*</span>
@@ -528,6 +540,7 @@ export default function HierarchyPage() {
       entityId: entity.entity_id,
       entityName: entity.name,
       role: derivedRole(entity),
+      isMain: entity.entity_type === "main_company",
     });
 
   if (!hydrated) {

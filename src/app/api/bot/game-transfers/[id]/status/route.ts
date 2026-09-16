@@ -9,6 +9,7 @@ import {
   transactions,
 } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
+import { InsufficientKioskCreditError, moveKioskCredit } from "@/lib/kiosk-credit";
 import {
   creditRecommendBonus,
   InsufficientBoCreditError,
@@ -181,7 +182,10 @@ export async function PATCH(
           // Which logins the move is between — the transfer's own, else the
           // player's first account for each game.
           const [mover] = await txn
-            .select({ game_accounts: players.game_accounts })
+            .select({
+              game_accounts: players.game_accounts,
+              company_entity_id: players.company_entity_id,
+            })
             .from(players)
             .where(eq(players.player_id, row.player_id));
           const fromLogin = resolveGameLogin(
@@ -271,6 +275,32 @@ export async function PATCH(
                 last_updated_at: nowIso,
               },
             });
+
+          /**
+           * The float follows the credit between kiosks: the source game gets
+           * its own back, the destination spends its own.
+           *
+           * Only on this branch. The credit-in above (from_game === to_game)
+           * already debits through creditRecommendBonus, and applying both
+           * legs there would cancel a debit that should stand.
+           */
+          try {
+            await moveKioskCredit(txn, {
+              companyEntityId: mover?.company_entity_id ?? null,
+              gameName: row.from_game,
+              delta: moved,
+            });
+            await moveKioskCredit(txn, {
+              companyEntityId: mover?.company_entity_id ?? null,
+              gameName: row.to_game,
+              delta: -moved,
+            });
+          } catch (e: unknown) {
+            if (e instanceof InsufficientKioskCreditError) {
+              throw new BotError(422, e.message);
+            }
+            throw e;
+          }
         }
       }
 

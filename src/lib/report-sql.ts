@@ -214,3 +214,16 @@ export const dayOf = (column: SQL) => businessDay(column);
  * on the same day.
  */
 export const RB_AT = sql`coalesce(rb.assigned_at, rb.created_at)`;
+
+/**
+ * A free-credit ledger row.
+ *
+ * `action` rather than `kind`: issueFreeCredit has always written `action`,
+ * and only the RajaClub import added a `kind` alongside it. Filtering on the
+ * latter silently counted the imported month and none of the credits CS has
+ * issued since — the reports agreed with each other and with nothing else.
+ *
+ * Paired with the row type, since `action` is a free-text marker and only
+ * `game_topup` rows carry this one.
+ */
+export const IS_FREE_CREDIT = sql`t.type = 'game_topup' AND t.details->>'action' = 'free_credit'`;

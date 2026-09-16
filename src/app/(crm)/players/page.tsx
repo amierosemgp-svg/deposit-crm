@@ -19,7 +19,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
 import { usePlayerProfile } from "@/components/player-name-link";
-import { formatRM } from "@/lib/format";
+import { formatRM, maskPhone } from "@/lib/format";
+import type { Player } from "@/lib/types";
 import {
   SheetGrid,
   type SheetColumn,
@@ -55,7 +56,19 @@ import {
   X,
 } from "lucide-react";
 
-type TabKey = "players" | "leads";
+type TabKey = "players" | "leads" | "winloss";
+
+/** One member's standing against the house, from /api/players/win-loss. */
+type WinLossRow = {
+  player_id: number;
+  money_in: number;
+  bonus: number;
+  free_credit: number;
+  recommend: number;
+  money_out: number;
+  net: number;
+  last_deposit_at: string | null;
+};
 
 /** One lead list a phone belongs to, from /api/leads/lookup (Players entry). */
 type LeadHit = {
@@ -118,17 +131,52 @@ const fmtSeq = (prefix: string, seq: number) => `${prefix}${String(seq).padStart
 /** The letters a member/lead code starts with — its list prefix. */
 const prefixOfCode = (code: string) => code.match(/^[^0-9]+/)?.[0] ?? "";
 
-// Players tab: 0 Phone · 1 Name · 2 Lead List · 3 Prefix · 4 Code · 5 Status · 6 Dep · 7 Wd
+/**
+ * How long a member has been quiet: "today", "3d", "2mo", or a dash when they
+ * have never deposited. Days, not a date, because the question the column
+ * answers is "who has gone cold" and a date makes the reader do the sum.
+ */
+function sinceLabel(iso: string | undefined): string {
+  if (!iso) return "—";
+  const then = new Date(iso);
+  if (Number.isNaN(then.getTime())) return "—";
+  const days = Math.floor((Date.now() - then.getTime()) / 86_400_000);
+  if (days <= 0) return "today";
+  if (days === 1) return "1d";
+  if (days < 60) return `${days}d`;
+  return `${Math.floor(days / 30)}mo`;
+}
+
+// Players tab: 0 Name · 1 Code · 2 Status · 3 Dep · 4 Wd · 5 Last dep · 6 Games
+//
+// No phone column. A member's number identifies them to whoever holds the
+// list, which is the one piece of member data worth stealing, so it is not on
+// screen at all — not even masked. It is still stored, still searchable, and
+// still enterable on the Walk-in form where CS has been given it directly.
 const PLAYER_COLUMNS: SheetColumn[] = [
-  { key: "phone", label: "Phone", width: 150, entry: true, required: true, placeholder: "0191234567" },
-  { key: "name", label: "Name", width: 190, entry: true, required: true, placeholder: "Full name" },
-  { key: "list", label: "Lead List", width: 190, entry: true, required: true, placeholder: "pick lead list" },
-  { key: "prefix", label: "Prefix", width: 90, entry: true, placeholder: "auto" },
-  { key: "code", label: "Member Code", width: 130 },
-  { key: "status", label: "Status", width: 100 },
-  { key: "deposits", label: "Deposits", width: 120, align: "right", numeric: true },
-  { key: "withdrawals", label: "Withdrawals", width: 120, align: "right", numeric: true },
+  { key: "name", label: "Name", width: 210, entry: true, required: true, placeholder: "Full name" },
+  { key: "code", label: "Member Code", width: 130, entry: true, required: true, placeholder: "S1234" },
+  { key: "status", label: "Status", width: 90 },
+  { key: "deposits", label: "Deposits", width: 110, align: "right", numeric: true },
+  { key: "withdrawals", label: "Withdrawals", width: 110, align: "right", numeric: true },
+  { key: "lastdep", label: "Last Deposit", width: 110, align: "right" },
+  { key: "games", label: "Game Accounts", width: 320 },
 ];
+/**
+ * Win/Loss tab. The sign is the house's, as in every report: positive means
+ * the house is up on that member. Read-only — nothing here is typed in.
+ */
+const WINLOSS_COLUMNS: SheetColumn[] = [
+  { key: "name", label: "Name", width: 210 },
+  { key: "code", label: "Member Code", width: 120 },
+  { key: "deposits", label: "Deposits", width: 115, align: "right", numeric: true },
+  { key: "bonus", label: "Bonus", width: 105, align: "right", numeric: true },
+  { key: "free", label: "Free Credit", width: 110, align: "right", numeric: true },
+  { key: "withdrawn", label: "Withdrawn", width: 115, align: "right", numeric: true },
+  { key: "net", label: "Net (house)", width: 125, align: "right", numeric: true },
+  { key: "lastdep", label: "Last Deposit", width: 110, align: "right" },
+];
+
 // Leads tab: 0 Phone · 1 Name · 2 Lead List · 3 Lead Code · 4 Status
 const LEAD_COLUMNS: SheetColumn[] = [
   { key: "phone", label: "Phone", width: 160, entry: true, required: true },
@@ -140,6 +188,7 @@ const LEAD_COLUMNS: SheetColumn[] = [
 
 export default function PlayersPage() {
   const players = useStore((s) => s.players);
+  const gameCredits = useStore((s) => s.gameCredits);
   const hydrated = useStore((s) => s.hydrated);
   const me = useStore((s) => s.me);
   const refresh = useStore((s) => s.refresh);
@@ -167,6 +216,90 @@ export default function PlayersPage() {
   const [search, setSearch] = useState("");
   // Filter by member-code prefix (Players) / lead list (Leads). "all" = off.
   const [prefixFilter, setPrefixFilter] = useState("all");
+  /**
+   * How long since a member last deposited. The buckets are the questions CS
+   * actually asks — who is active, who is going cold, who has never paid at
+   * all — rather than a free date range nobody wants to type.
+   */
+  /**
+   * Typed, not picked from a list of guesses.
+   *
+   * The presets that were here — 7, 30, 90 — were never the numbers anyone
+   * wanted; the whole point of the column is that a house knows its own idea
+   * of cold. A direction and a number say all of it: "over 45 days" and
+   * "within 3" are both one edit apart.
+   */
+  const [lastDepDir, setLastDepDir] = useState<"any" | "within" | "over" | "never">("any");
+  const [lastDepDays, setLastDepDays] = useState("30");
+
+  /**
+   * When each member last deposited. Fetched rather than read from the store:
+   * /api/state's roster is cached against players.updated_at, which a deposit
+   * does not touch until completion, so this would otherwise show a frozen
+   * figure for as long as nothing else edited the member.
+   */
+  const [lastDepositAt, setLastDepositAt] = useState<Map<number, string>>(new Map());
+  useEffect(() => {
+    let live = true;
+    fetch("/api/players/activity")
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((d: { activity?: { player_id: number; last_deposit_at: string }[] }) => {
+        if (!live) return;
+        setLastDepositAt(
+          new Map((d.activity ?? []).map((a) => [a.player_id, a.last_deposit_at])),
+        );
+      })
+      .catch(() => {
+        // A missing activity map costs the column a dash, nothing more — not
+        // worth a toast on a page whose main job is the roster.
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  const matchesLastDep = useCallback(
+    (iso: string | undefined) => {
+      if (lastDepDir === "any") return true;
+      if (lastDepDir === "never") return !iso;
+      // A half-typed number filters nothing, rather than emptying the table
+      // between keystrokes.
+      const n = Number(lastDepDays);
+      if (!Number.isFinite(n) || lastDepDays.trim() === "") return true;
+      // Never deposited is not "a long time ago" — it is a different answer,
+      // and lumping it into "over N" would hide it behind a number.
+      if (!iso) return false;
+      const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
+      return lastDepDir === "within" ? days <= n : days > n;
+    },
+    [lastDepDir, lastDepDays],
+  );
+
+  /**
+   * Every kiosk login a member holds, with what is sitting in it.
+   *
+   * Two accounts on one game is normal here, so the game name alone does not
+   * identify the wallet — the balance is shown against the login it belongs to.
+   */
+  const gameAccountsLabel = useCallback(
+    (p: Player) => {
+      const accounts = p.game_accounts ?? [];
+      if (!accounts.length) return "—";
+      return accounts
+        .map((a) => {
+          const credit = gameCredits.find(
+            (c) =>
+              c.player_id === p.player_id &&
+              c.game_name.toLowerCase() === a.game_name.toLowerCase() &&
+              (c.game_username ?? "").toLowerCase() ===
+                (a.game_username ?? "").toLowerCase(),
+          );
+          return `${a.game_name} ${formatRM(credit?.current_balance ?? 0)}`;
+        })
+        .join(" · ");
+    },
+    [gameCredits],
+  );
   const [listFilter, setListFilter] = useState("all");
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -179,9 +312,16 @@ export default function PlayersPage() {
   const [draftsByTab, setDraftsByTab] = useState<Record<TabKey, string[][]>>(() => ({
     players: padDrafts([], PLAYER_COLUMNS.length),
     leads: padDrafts([], LEAD_COLUMNS.length),
+    // Win/Loss is a read-only view: no entry row, so no drafts to hold.
+    winloss: [],
   }));
 
-  const columns = tab === "players" ? PLAYER_COLUMNS : LEAD_COLUMNS;
+  const columns =
+    tab === "players"
+      ? PLAYER_COLUMNS
+      : tab === "winloss"
+        ? WINLOSS_COLUMNS
+        : LEAD_COLUMNS;
   const drafts = draftsByTab[tab];
   const draftKey = useCallback((d: string[]) => d.join(""), []);
 
@@ -248,6 +388,7 @@ export default function PlayersPage() {
   );
 
   // ---- per-tab enrich (fill derived cells as CS types) ----
+  // Left for the Leads sheet, which still fills a name from a picked phone.
   const enrichPlayers = useCallback(
     (prev: string[][], next: string[][]): string[][] =>
       next.map((row, i) => {
@@ -314,24 +455,24 @@ export default function PlayersPage() {
     return players
       .filter((p) => companyInScope(p.company_entity_id))
       .filter((p) => prefixFilter === "all" || prefixOfCode(p.username) === prefixFilter)
+      .filter((p) => matchesLastDep(lastDepositAt.get(p.player_id)))
       .sort((a, b) => a.registration_date.localeCompare(b.registration_date))
       .map<SheetRow>((p) => ({
         id: p.player_id,
         tone: p.status === "suspended" ? "muted" : "default",
         cells: [
-          p.contact_number ?? "",
           p.full_name,
-          "—",
-          prefixOfCode(p.username),
           p.username,
           p.status === "suspended" ? "Suspended" : "Active",
           formatRM(p.total_deposits),
           formatRM(p.total_withdrawals),
+          sinceLabel(lastDepositAt.get(p.player_id)),
+          gameAccountsLabel(p),
         ],
       }))
       .filter((r) => matches(r.cells));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [players, selectedCompanyId, selectedLeaderId, companyInScope, matches, prefixFilter]);
+  }, [players, selectedCompanyId, selectedLeaderId, companyInScope, matches, prefixFilter, lastDepositAt, gameAccountsLabel, matchesLastDep]);
 
   const leadRows = useMemo<SheetRow[]>(
     () =>
@@ -341,7 +482,7 @@ export default function PlayersPage() {
           id: l.lead_id,
           tone: l.is_member ? "success" : "default",
           cells: [
-            l.phone ?? "",
+            maskPhone(l.phone),
             l.name,
             l.list_name,
             l.lead_code,
@@ -352,14 +493,89 @@ export default function PlayersPage() {
     [leadsData, matches, listFilter],
   );
 
-  const rows = tab === "players" ? memberRows : leadRows;
+  /**
+   * Per-member win/loss, fetched when the tab is first opened.
+   *
+   * Not part of the roster for the same reason last-deposit is not: it changes
+   * with every deposit and withdrawal, and /api/state's player payload is
+   * cached against players.updated_at.
+   */
+  const [winLoss, setWinLoss] = useState<WinLossRow[]>([]);
+  // Blank is all time. Not defaulted to this month: a company whose data was
+  // imported for an earlier period would open the tab on an empty table.
+  const [wlFrom, setWlFrom] = useState("");
+  const [wlTo, setWlTo] = useState("");
+
+  const wlUrl = useMemo(() => {
+    const sp = new URLSearchParams();
+    if (wlFrom) sp.set("from", wlFrom);
+    if (wlTo) sp.set("to", wlTo);
+    const qs = sp.toString();
+    return `/api/players/win-loss${qs ? `?${qs}` : ""}`;
+  }, [wlFrom, wlTo]);
+
+  // "The range I have" vs "the range I want" — a derived gap, so changing a
+  // date refetches without an effect having to set a loading flag first.
+  const [wlLoaded, setWlLoaded] = useState<string | null>(null);
+  useEffect(() => {
+    if (tab !== "winloss" || wlLoaded === wlUrl) return;
+    let live = true;
+    fetch(wlUrl)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((d: { win_loss?: WinLossRow[] }) => {
+        if (!live) return;
+        setWinLoss(d.win_loss ?? []);
+        setWlLoaded(wlUrl);
+      })
+      .catch(() => {
+        if (!live) return;
+        setWlLoaded(wlUrl); // marked answered, or it retries forever
+        toast.error("Could not load win/loss");
+      });
+    return () => {
+      live = false;
+    };
+  }, [tab, wlUrl, wlLoaded]);
+
+  const winLossRows = useMemo<SheetRow[]>(() => {
+    const byId = new Map(players.map((p) => [p.player_id, p]));
+    return winLoss
+      .map((w) => ({ w, p: byId.get(w.player_id) }))
+      .filter((x): x is { w: WinLossRow; p: Player } => !!x.p)
+      .filter((x) => companyInScope(x.p.company_entity_id))
+      // The row's own last deposit, which is the one inside the chosen range —
+      // not the roster's all-time figure the Players tab uses.
+      .filter((x) => matchesLastDep(x.w.last_deposit_at ?? undefined))
+      // Biggest house win first, so the members worth knowing about are at the
+      // top and the ones bleeding the house are at the bottom.
+      .sort((a, b) => b.w.net - a.w.net)
+      .map<SheetRow>(({ w, p }) => ({
+        id: p.player_id,
+        tone: w.net < 0 ? "muted" : "default",
+        cells: [
+          p.full_name,
+          p.username,
+          formatRM(w.money_in),
+          formatRM(w.bonus + w.recommend),
+          formatRM(w.free_credit),
+          formatRM(w.money_out),
+          formatRM(w.net),
+          sinceLabel(w.last_deposit_at ?? undefined),
+        ],
+      }))
+      .filter((r) => matches(r.cells));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [winLoss, players, companyInScope, matches, matchesLastDep, selectedCompanyId, selectedLeaderId]);
+
+  const rows =
+    tab === "players" ? memberRows : tab === "winloss" ? winLossRows : leadRows;
 
   // ---- entry-row typeahead ----
   const draftSuggestions = useCallback(
     (draftIndex: number, colIndex: number): SheetSuggestion[] | undefined => {
-      // Players tab: autocomplete the Phone cell from the leads, so CS picks a
-      // lead by phone instead of retyping it.
-      if (tab === "players" && colIndex === 0) {
+      // Leads only: the Phone cell there is the lead's identity, so it still
+      // autocompletes. The Players sheet has no phone cell to fill.
+      if (tab === "leads" && colIndex === 0) {
         if (!leadsData.length) return undefined; // no leads loaded — type freely
         const typed = (drafts[draftIndex]?.[0] ?? "").trim().toLowerCase();
         const matched = leadsData
@@ -497,31 +713,35 @@ export default function PlayersPage() {
     const failures = new Map<string, string>(commitErrors);
 
     for (const { d, i } of jobs) {
-      const [phone, name, list, prefix] = d;
+      // The two sheets no longer share a column order: Players is
+      // Name · Code, Leads is still Phone · Name · List.
+
       let ok = false;
       let error = "Save failed";
       try {
         if (tab === "players") {
-          const hit = hitFor(phone, list);
-          if (!hit) {
-            failures.set(draftKey(d), "Lead list no longer matches this phone");
-            continue;
-          }
-          const res = await fetch("/api/players/from-lead", {
+          /**
+           * Typed straight in, with the member code the operator already uses.
+           *
+           * This used to go through /api/players/from-lead, which needed a lead
+           * list to take the code from. Companies that do not buy lists — the
+           * imported ones type their own codes — had no way to add a member
+           * here at all. Lists are still how leads convert; that path lives on
+           * the Lead Lists page, where the list is the subject.
+           */
+          const res = await fetch("/api/players", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               company_entity_id: entryCompanyId,
-              contact_number: phone.trim(),
-              full_name: name.trim(),
-              lead_list_id: hit.list_id,
-              ...(hit.dist_id == null ? { prefix: prefix.trim() } : {}),
+              username: (d[1] ?? "").trim(),
+              full_name: (d[0] ?? "").trim(),
             }),
           });
           ok = res.ok;
           if (!ok) error = (await res.json().catch(() => null))?.error ?? `HTTP ${res.status}`;
         } else {
-          const listRow = listByName.get(list.trim().toLowerCase());
+          const listRow = listByName.get((d[2] ?? "").trim().toLowerCase());
           if (!listRow) {
             failures.set(draftKey(d), "Lead list not found");
             continue;
@@ -529,7 +749,10 @@ export default function PlayersPage() {
           const res = await fetch(`/api/lead-lists/${listRow.list_id}/leads`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ contact_number: phone.trim(), full_name: name.trim() }),
+            body: JSON.stringify({
+              contact_number: (d[0] ?? "").trim(),
+              full_name: (d[1] ?? "").trim(),
+            }),
           });
           ok = res.ok;
           if (!ok) error = (await res.json().catch(() => null))?.error ?? `HTTP ${res.status}`;
@@ -564,12 +787,18 @@ export default function PlayersPage() {
     }
   }, [
     saving, tab, canEnterPlayers, entryCompanyId, drafts, draftStatus,
-    commitErrors, hitFor, draftKey, listByName, columns.length, refresh, loadLeadData,
+    commitErrors, draftKey, listByName, columns.length, refresh, loadLeadData,
   ]);
 
   // ---- selection → player modal ----
   const selectedPlayerId = useMemo(
-    () => (tab === "players" && selectedIds.length === 1 ? Number(selectedIds[0]) : null),
+    () =>
+      // Win/Loss rows are keyed by player too, so ⌘↵ opens the profile from
+      // there as well — the tab exists to find a member worth looking at, and
+      // stopping at the number would leave the reader nowhere to go.
+      (tab === "players" || tab === "winloss") && selectedIds.length === 1
+        ? Number(selectedIds[0])
+        : null,
     [tab, selectedIds],
   );
   const handleViewPlayer = useCallback(() => {
@@ -620,7 +849,9 @@ export default function PlayersPage() {
   // Shift+⌘/Ctrl+←/→ switches between the Players and Leads tabs, wrapping —
   // the same worksheet-tab gesture as the Transactions sheet.
   useEffect(() => {
-    const keys: TabKey[] = isLeaderOrAdmin ? ["players", "leads"] : ["players"];
+    const keys: TabKey[] = isLeaderOrAdmin
+      ? ["players", "winloss", "leads"]
+      : ["players", "winloss"];
     if (keys.length < 2) return;
     const onKey = (e: KeyboardEvent) => {
       const mod = IS_MAC ? e.metaKey : e.ctrlKey;
@@ -675,6 +906,7 @@ export default function PlayersPage() {
 
   const tabs: { key: TabKey; label: string }[] = [
     { key: "players", label: "Players" },
+    { key: "winloss", label: "Win / Loss" },
     ...(isLeaderOrAdmin ? [{ key: "leads" as const, label: "Leads" }] : []),
   ];
 
@@ -702,8 +934,10 @@ export default function PlayersPage() {
         ))}
         <span className="ml-3 pb-1.5 text-[11px] text-muted-foreground">
           {tab === "players"
-            ? "Entry: Phone · Name · Lead List — prefix & member code fill themselves"
-            : "Leads come in by import — use the Import button, then convert them on the Players tab"}
+            ? "Entry: Name · Member Code — add a walk-in for anything more"
+            : tab === "winloss"
+              ? "Positive is the house up on that member, negative is the member up. Select a row and press ⌘↵ to open their profile."
+              : "Leads come in by import — use the Import button, then convert them on the Players tab"}
         </span>
       </div>
 
@@ -735,7 +969,13 @@ export default function PlayersPage() {
             onChange={(e) => setSearch(e.target.value)}
             data-page-search
             title="Press ⌘F / Ctrl+F (or /) to jump here"
-            placeholder={tab === "players" ? "Search name, code, phone…" : "Search leads…"}
+            placeholder={
+              tab === "players"
+                ? "Search name or code…"
+                : tab === "winloss"
+                  ? "Search name or code…"
+                  : "Search leads…"
+            }
             className="h-8 w-56 pl-7 text-[13px]"
           />
         </div>
@@ -753,6 +993,72 @@ export default function PlayersPage() {
               ))}
             </SelectContent>
           </Select>
+        )}
+        {tab === "winloss" && (
+          <div className="flex items-center gap-1.5">
+            <Input
+              type="date"
+              value={wlFrom}
+              onChange={(e) => setWlFrom(e.target.value)}
+              className="h-8 w-[140px] text-[13px]"
+              title="From — blank for all time"
+            />
+            <span className="text-xs text-muted-foreground">–</span>
+            <Input
+              type="date"
+              value={wlTo}
+              onChange={(e) => setWlTo(e.target.value)}
+              className="h-8 w-[140px] text-[13px]"
+              title="To — blank for all time"
+            />
+            {(wlFrom || wlTo) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setWlFrom("");
+                  setWlTo("");
+                }}
+                className="cursor-pointer rounded-md border px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                All time
+              </button>
+            )}
+          </div>
+        )}
+        {(tab === "players" || tab === "winloss") && (
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] text-muted-foreground">Last deposit</span>
+            <Select
+              value={lastDepDir}
+              onValueChange={(v) =>
+                setLastDepDir((v as typeof lastDepDir) ?? "any")
+              }
+            >
+              <SelectTrigger className="h-8 w-[104px] cursor-pointer text-[13px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="any">any</SelectItem>
+                <SelectItem value="within">within</SelectItem>
+                <SelectItem value="over">over</SelectItem>
+                <SelectItem value="never">never</SelectItem>
+              </SelectContent>
+            </Select>
+            {(lastDepDir === "within" || lastDepDir === "over") && (
+              <>
+                <Input
+                  type="number"
+                  min={0}
+                  value={lastDepDays}
+                  onChange={(e) => setLastDepDays(e.target.value)}
+                  className="h-8 w-16 text-[13px]"
+                />
+                <span className="text-[11px] text-muted-foreground">
+                  days ago
+                </span>
+              </>
+            )}
+          </div>
         )}
         {tab === "leads" && listOptions.length > 0 && (
           <Select value={listFilter} onValueChange={(v) => setListFilter(v ?? "all")}>
@@ -864,7 +1170,7 @@ export default function PlayersPage() {
         onDraftsChange={onDraftsChange}
         draftStatus={draftStatus}
         onCommit={handleCommit}
-        readOnly={tab === "leads" || playersReadOnly}
+        readOnly={tab !== "players" || playersReadOnly}
         onSelectedRowsChange={setSelectedIds}
         draftSuggestions={draftSuggestions}
         onEditStart={handleEditStart}

@@ -97,3 +97,22 @@ export function initialsOf(name: string): string {
     .join("")
     .toUpperCase();
 }
+
+/**
+ * A member's phone, hidden.
+ *
+ * Contact numbers identify a member to whoever holds the list, which is the
+ * one piece of member data worth exfiltrating — so nothing displays it. The
+ * last four digits stay, because CS still has to confirm the person calling
+ * them is the person on the row; everything before is masked and cannot be
+ * reassembled from the screen.
+ *
+ * Entry fields and search are untouched: CS types a number they were given,
+ * and this only governs what is shown back.
+ */
+export function maskPhone(phone: string | null | undefined): string {
+  const digits = (phone ?? "").replace(/\D/g, "");
+  if (!digits) return "—";
+  if (digits.length <= 4) return "••••";
+  return `••••${digits.slice(-4)}`;
+}
