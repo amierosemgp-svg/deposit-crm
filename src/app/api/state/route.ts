@@ -6,6 +6,7 @@ import {
   bonusPlans,
   botCommands,
   botHealth,
+  companyLeaders,
   deposits,
   expenses,
   gameCredits,
@@ -98,6 +99,26 @@ export async function GET(request: Request) {
     }
 
     const entityTree = await visibleEntityTree(user);
+
+    /**
+     * Who currently runs each visible company. Small — one row per company per
+     * leader — and the hierarchy cannot be drawn without it now that a company
+     * may sit under more than one leader.
+     */
+    const ownership = entityTree.length
+      ? await db
+          .select()
+          .from(companyLeaders)
+          .where(
+            and(
+              isNull(companyLeaders.valid_to),
+              inArray(
+                companyLeaders.company_entity_id,
+                entityTree.map((e) => e.entity_id),
+              ),
+            ),
+          )
+      : [];
     const entityIds = await visibleEntityIds(user);
     const companyIds =
       user.companyIds ??
@@ -396,6 +417,7 @@ export async function GET(request: Request) {
     return Response.json({
       me: user,
       entities: entityTree,
+      companyLeaders: ownership,
       users: allUsers,
       // Omitted, not nulled, when unchanged — the store shallow-merges, so an
       // absent key keeps the roster it already has.

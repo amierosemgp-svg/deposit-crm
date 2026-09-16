@@ -18,8 +18,12 @@ import {
   Crown,
   Headset,
   Landmark,
+  Loader2,
   Pencil,
   Plus,
+  Shuffle,
+  Star,
+  Trash2,
   UserPlus,
   Users,
 } from "lucide-react";
@@ -387,6 +391,7 @@ export default function HierarchyPage() {
   const hydrated = useStore((s) => s.hydrated);
   const me = useStore((s) => s.me);
   const entities = useStore((s) => s.entities);
+  const companyLeaders = useStore((s) => s.companyLeaders);
   const users = useStore((s) => s.users);
   const players = useStore((s) => s.players);
 
@@ -434,6 +439,41 @@ export default function HierarchyPage() {
    * from the page entirely while still being in the database — the company
    * filter in the top bar listed them, and the org chart did not.
    */
+  /**
+   * Companies by leader, read from the ownership record rather than the tree.
+   *
+   * A company can be run by two leaders at once, and `parent_entity_id` names
+   * only the primary — drawing from it alone hides the second leader's half of
+   * the org chart while they can plainly see the company's players.
+   */
+  const companiesByLeader = useMemo(() => {
+    const byId = new Map(entities.map((e) => [e.entity_id, e]));
+    const m = new Map<number, { company: Entity; primary: boolean }[]>();
+    for (const row of companyLeaders) {
+      const company = byId.get(row.company_entity_id);
+      if (!company || company.entity_type !== "company") continue;
+      const list = m.get(row.leader_entity_id) ?? [];
+      list.push({ company, primary: row.is_primary });
+      m.set(row.leader_entity_id, list);
+    }
+    for (const list of m.values()) {
+      list.sort((a, b) => a.company.name.localeCompare(b.company.name));
+    }
+    return m;
+  }, [entities, companyLeaders]);
+
+  /** How many leaders run this company — >1 gets a "shared" marker. */
+  const leaderCountOf = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const r of companyLeaders) {
+      m.set(r.company_entity_id, (m.get(r.company_entity_id) ?? 0) + 1);
+    }
+    return m;
+  }, [companyLeaders]);
+
+  const [ownerDialog, setOwnerDialog] = useState<Entity | null>(null);
+  const [restructure, setRestructure] = useState<Entity | null>(null);
+
   const mains = entities
     .filter((e) => e.entity_type === "main_company")
     .sort((a, b) => a.entity_id - b.entity_id);
@@ -600,9 +640,8 @@ export default function HierarchyPage() {
               <div className="absolute left-0 top-0 bottom-4 w-px bg-border" />
 
               {leaders.map((leader) => {
-                const leaderCompanies = (byParent.get(leader.entity_id) ?? []).filter(
-                  (e) => e.entity_type === "company",
-                );
+                const owned = companiesByLeader.get(leader.entity_id) ?? [];
+                const leaderCompanies = owned.map((o) => o.company);
                 const leaderUsers = usersByEntity.get(leader.entity_id) ?? [];
 
                 return (
@@ -647,6 +686,13 @@ export default function HierarchyPage() {
                               onClick={() => openAddUser(leader)}
                             />
                           )}
+                          {isSuper && leaders.length > 1 && (
+                            <NodeActionButton
+                              label="Restructure"
+                              icon={Shuffle}
+                              onClick={() => setRestructure(leader)}
+                            />
+                          )}
                         </div>
                       </CardHeader>
                       <CardContent className="pt-0 space-y-3">
@@ -685,6 +731,14 @@ export default function HierarchyPage() {
                                               {company.name}
                                             </span>
                                             <InactiveTag entity={company} />
+                                            {(leaderCountOf.get(company.entity_id) ?? 1) > 1 && (
+                                              <span
+                                                title="Run by more than one leader — it appears under each of them"
+                                                className="rounded-full bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 dark:text-violet-300"
+                                              >
+                                                Shared ×{leaderCountOf.get(company.entity_id)}
+                                              </span>
+                                            )}
                                           </div>
                                           <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
                                             <Users className="h-3 w-3" />
@@ -712,6 +766,13 @@ export default function HierarchyPage() {
                                                 entityType: "cs",
                                               })
                                             }
+                                          />
+                                        )}
+                                        {isSuper && (
+                                          <NodeActionButton
+                                            label="Leaders"
+                                            icon={Crown}
+                                            onClick={() => setOwnerDialog(company)}
                                           />
                                         )}
                                         {isSuper && (
@@ -794,6 +855,18 @@ export default function HierarchyPage() {
         );
       })}
 
+      {ownerDialog && (
+        <CompanyLeadersDialog
+          company={ownerDialog}
+          onClose={() => setOwnerDialog(null)}
+        />
+      )}
+      {restructure && (
+        <RestructureLeaderDialog
+          leader={restructure}
+          onClose={() => setRestructure(null)}
+        />
+      )}
       <AddEntityDialog
         state={entityDialog}
         onClose={() => setEntityDialog(null)}
@@ -803,5 +876,300 @@ export default function HierarchyPage() {
         onClose={() => setUserDialogState(null)}
       />
     </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Who runs a company
+// ---------------------------------------------------------------------------
+
+/**
+ * Add or remove the leaders running one company, and pick which of them the
+ * hierarchy draws it under.
+ *
+ * Removing the last leader is refused by the server, not hidden here: the
+ * button stays visible with the reason, because a disabled control with no
+ * explanation reads as a bug rather than a rule.
+ */
+function CompanyLeadersDialog({
+  company,
+  onClose,
+}: {
+  company: Entity;
+  onClose: () => void;
+}) {
+  const entities = useStore((s) => s.entities);
+  const companyLeaders = useStore((s) => s.companyLeaders);
+  const refresh = useStore((s) => s.refresh);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [adding, setAdding] = useState("");
+
+  const current = companyLeaders.filter(
+    (r) => r.company_entity_id === company.entity_id,
+  );
+  const currentIds = new Set(current.map((r) => r.leader_entity_id));
+  const leaders = entities.filter(
+    (e) => e.entity_type === "leader" && e.status === "active",
+  );
+  const available = leaders.filter((l) => !currentIds.has(l.entity_id));
+
+  async function act(
+    action: "assign" | "end" | "set_primary",
+    leaderId: number,
+    key: string,
+  ) {
+    setBusy(key);
+    try {
+      const res = await fetch("/api/company-leaders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action,
+          company_entity_id: company.entity_id,
+          leader_entity_id: leaderId,
+        }),
+      });
+      const data = (await res.json().catch(() => null)) as { error?: string } | null;
+      if (!res.ok) {
+        toast.error(data?.error ?? "Could not change who runs this company");
+        return;
+      }
+      await refresh();
+      if (action === "assign") setAdding("");
+      toast.success(
+        action === "assign"
+          ? "Leader added"
+          : action === "end"
+            ? "Leader removed"
+            : "Primary leader set",
+      );
+    } catch {
+      toast.error("Network error");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogTitle>Leaders running {company.name}</DialogTitle>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Each of these can see and act on this company. The primary is the one
+          it appears under in the hierarchy.
+        </p>
+
+        <div className="mt-3 space-y-2">
+          {current.map((row) => {
+            const leader = entities.find((e) => e.entity_id === row.leader_entity_id);
+            return (
+              <div
+                key={row.id}
+                className="flex items-center justify-between rounded-md border px-3 py-2"
+              >
+                <div className="flex items-center gap-2">
+                  <Crown className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+                  <span className="text-sm">{leader?.name ?? `#${row.leader_entity_id}`}</span>
+                  {row.is_primary && (
+                    <span className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                      Primary
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-1">
+                  {!row.is_primary && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 cursor-pointer px-2"
+                      disabled={busy !== null}
+                      onClick={() => act("set_primary", row.leader_entity_id, `p${row.id}`)}
+                    >
+                      {busy === `p${row.id}` ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Star className="h-3 w-3" />
+                      )}
+                    </Button>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 cursor-pointer px-2 text-destructive"
+                    disabled={busy !== null}
+                    onClick={() => act("end", row.leader_entity_id, `e${row.id}`)}
+                  >
+                    {busy === `e${row.id}` ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Trash2 className="h-3 w-3" />
+                    )}
+                  </Button>
+                </div>
+              </div>
+            );
+          })}
+          {current.length === 0 && (
+            <p className="rounded-md border border-dashed px-3 py-4 text-center text-xs text-muted-foreground">
+              Nobody runs this company.
+            </p>
+          )}
+        </div>
+
+        {available.length > 0 && (
+          <div className="mt-3 flex items-end gap-2">
+            <div className="flex-1 space-y-1.5">
+              <Label>Add a leader</Label>
+              <select
+                value={adding}
+                onChange={(e) => setAdding(e.target.value)}
+                className="h-9 w-full cursor-pointer rounded-md border border-input bg-background px-2 text-sm"
+              >
+                <option value="">Pick a leader…</option>
+                {available.map((l) => (
+                  <option key={l.entity_id} value={String(l.entity_id)}>
+                    {l.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <Button
+              className="cursor-pointer"
+              disabled={!adding || busy !== null}
+              onClick={() => act("assign", Number(adding), "add")}
+            >
+              {busy === "add" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Add"}
+            </Button>
+          </div>
+        )}
+
+        <div className="mt-4 flex justify-end">
+          <Button variant="outline" className="cursor-pointer" onClick={onClose}>
+            Done
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * Merge a leader into another, or downgrade them.
+ *
+ * Both hand every company over and retire the leader; downgrade also
+ * deactivates their logins. Nothing is deleted and no past figure moves — the
+ * ownership rows they held are closed, not removed, so August still reports
+ * against whoever actually ran the company in August.
+ */
+function RestructureLeaderDialog({
+  leader,
+  onClose,
+}: {
+  leader: Entity;
+  onClose: () => void;
+}) {
+  const entities = useStore((s) => s.entities);
+  const companyLeaders = useStore((s) => s.companyLeaders);
+  const refresh = useStore((s) => s.refresh);
+  const [action, setAction] = useState<"merge" | "downgrade">("merge");
+  const [target, setTarget] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const others = entities.filter(
+    (e) =>
+      e.entity_type === "leader" &&
+      e.status === "active" &&
+      e.entity_id !== leader.entity_id,
+  );
+  const moving = companyLeaders.filter(
+    (r) => r.leader_entity_id === leader.entity_id,
+  ).length;
+
+  async function submit() {
+    if (!target || busy) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/leaders/${leader.entity_id}/restructure`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, to_leader_entity_id: Number(target) }),
+      });
+      const data = (await res.json().catch(() => null)) as
+        | { error?: string; companies_moved?: number }
+        | null;
+      if (!res.ok) {
+        toast.error(data?.error ?? "Could not restructure");
+        return;
+      }
+      await refresh();
+      toast.success(
+        `${leader.name} ${action === "merge" ? "merged" : "downgraded"} — ` +
+          `${data?.companies_moved ?? 0} moved`,
+      );
+      onClose();
+    } catch {
+      toast.error("Network error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogTitle>Restructure {leader.name}</DialogTitle>
+
+        <div className="mt-3 space-y-3">
+          <div className="space-y-1.5">
+            <Label>What is happening</Label>
+            <select
+              value={action}
+              onChange={(e) => setAction(e.target.value as "merge" | "downgrade")}
+              className="h-9 w-full cursor-pointer rounded-md border border-input bg-background px-2 text-sm"
+            >
+              <option value="merge">Merge into another leader</option>
+              <option value="downgrade">Downgrade — also disable their logins</option>
+            </select>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Companies go to</Label>
+            <select
+              value={target}
+              onChange={(e) => setTarget(e.target.value)}
+              className="h-9 w-full cursor-pointer rounded-md border border-input bg-background px-2 text-sm"
+            >
+              <option value="">Pick a leader…</option>
+              {others.map((l) => (
+                <option key={l.entity_id} value={String(l.entity_id)}>
+                  {l.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-xs dark:bg-amber-950/40">
+            <p className="font-medium">
+              {moving} {moving === 1 ? "company moves" : "companies move"}, and{" "}
+              {leader.name} is retired.
+            </p>
+            <p className="mt-1 text-muted-foreground">
+              Nothing is deleted and no past report changes — {leader.name} stays
+              credited with whatever their companies did while they ran them.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-4 flex justify-end gap-2">
+          <Button variant="outline" className="cursor-pointer" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button className="cursor-pointer" disabled={!target || busy} onClick={submit}>
+            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Confirm"}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

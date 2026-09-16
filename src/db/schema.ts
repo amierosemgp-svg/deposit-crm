@@ -536,6 +536,53 @@ export const memberGameAccounts = pgTable(
   ],
 );
 
+/**
+ * Which leaders run a company, and when they did.
+ *
+ * entities.parent_entity_id gives a company one leader forever, which the
+ * business outgrows in three ways: a company run jointly, a leader downgraded
+ * and their companies handed on, two leaders merged.
+ *
+ * The dangerous one was the hand-off. No money row stores a leader — deposits,
+ * withdrawals, expenses and transactions carry only company_entity_id — so the
+ * leader was derived by walking the tree at read time, and moving a company
+ * silently rewrote history. Ownership is dated here instead: a change closes
+ * one row and opens another, and "who ran this company in August" survives any
+ * number of moves.
+ *
+ * Not a revenue split. Two leaders on one company both manage it; the money
+ * still belongs to the company and reports group by company. A share column
+ * would go here if that ever changes — the dating is already right for it.
+ */
+export const companyLeaders = pgTable(
+  "company_leaders",
+  {
+    id: serial("id").primaryKey(),
+    company_entity_id: integer("company_entity_id")
+      .notNull()
+      .references(() => entities.entity_id),
+    leader_entity_id: integer("leader_entity_id")
+      .notNull()
+      .references(() => entities.entity_id),
+    valid_from: timestamp("valid_from", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+    /** Null is the ownership in force now. */
+    valid_to: timestamp("valid_to", { withTimezone: true, mode: "string" }),
+    /**
+     * The leader this company draws under in the hierarchy. Exactly one live
+     * row per company carries it, so the tree still has a spine to hang on;
+     * `entities.parent_entity_id` is kept in step with it.
+     */
+    is_primary: boolean("is_primary").notNull().default(false),
+    note: text("note"),
+    created_by_user_id: integer("created_by_user_id").references(() => users.user_id),
+    created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+);
+
 // ---------- Money ----------
 
 export const bankAccounts = pgTable("bank_accounts", {

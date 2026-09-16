@@ -6,8 +6,8 @@ import {
   all,
   businessDay,
   parseReportParams,
-  scopeByPlayer,
-  scopeDeposits,
+  scopeByPlayerAsOf,
+  scopeDepositsAsOf,
   searchAcross,
 } from "@/lib/report-sql";
 
@@ -25,7 +25,10 @@ export async function GET(request: Request) {
     const p = parseReportParams(request.url);
     if ("error" in p) return jsonError(p.error);
 
-    const dw: SQL[] = [...scopeDeposits(user), sql`d.handled_by_user_id IS NOT NULL`];
+    const dw: SQL[] = [
+      ...scopeDepositsAsOf(user, sql`d.deposit_date`),
+      sql`d.handled_by_user_id IS NOT NULL`,
+    ];
     if (p.from) dw.push(sql`${businessDay(sql`d.deposit_date`)} >= ${p.from}::date`);
     if (p.to) dw.push(sql`${businessDay(sql`d.deposit_date`)} <= ${p.to}::date`);
     if (p.companyId !== null) dw.push(sql`d.company_entity_id = ${p.companyId}`);
@@ -41,7 +44,10 @@ export async function GET(request: Request) {
       );
     }
 
-    const ww: SQL[] = [...scopeByPlayer(user), sql`wd.handled_by_user_id IS NOT NULL`];
+    const ww: SQL[] = [
+      ...scopeByPlayerAsOf(user, sql`wd.created_at`),
+      sql`wd.handled_by_user_id IS NOT NULL`,
+    ];
     if (p.from) ww.push(sql`${businessDay(sql`wd.created_at`)} >= ${p.from}::date`);
     if (p.to) ww.push(sql`${businessDay(sql`wd.created_at`)} <= ${p.to}::date`);
     if (p.companyId !== null) ww.push(sql`pl.company_entity_id = ${p.companyId}`);

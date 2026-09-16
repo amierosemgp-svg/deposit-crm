@@ -6,7 +6,7 @@ import {
   all,
   businessDay,
   parseReportParams,
-  scopeByPlayer,
+  scopeByPlayerAsOf,
   searchAcross,
 } from "@/lib/report-sql";
 
@@ -23,7 +23,7 @@ export async function GET(request: Request) {
     const p = parseReportParams(request.url);
     if ("error" in p) return jsonError(p.error);
 
-    const w: SQL[] = [...scopeByPlayer(user)];
+    const w: SQL[] = [...scopeByPlayerAsOf(user, sql`wd.created_at`)];
     if (p.from) w.push(sql`${businessDay(sql`wd.created_at`)} >= ${p.from}::date`);
     if (p.to) w.push(sql`${businessDay(sql`wd.created_at`)} <= ${p.to}::date`);
     if (p.companyId !== null) w.push(sql`pl.company_entity_id = ${p.companyId}`);

@@ -95,6 +95,65 @@ export const searchAcross = (columns: SQL, q: string) =>
   sql`lower(${columns}) LIKE ${"%" + q + "%"}`;
 
 /**
+ * A leader's scope, resolved at each row's own date.
+ *
+ * Operational screens ask "what can I act on now", and current ownership is
+ * the right answer. A report asks something else: what was mine *then*. Since
+ * a company can change leaders, the two diverge the moment anything is
+ * restructured — and scoping a report by today's ownership would hand a leader
+ * last month's figures for a company they had not yet taken on, while hiding
+ * the ones they ran and have since passed along.
+ *
+ * `dateColumn` is the row's own timestamp, so every row is judged against the
+ * ownership in force when it happened. Nothing else can make a settlement
+ * already paid keep matching the report that justified it.
+ */
+function leaderOwnedAt(
+  leaderEntityId: number,
+  companyColumn: SQL,
+  dateColumn: SQL,
+): SQL {
+  return sql`EXISTS (
+    SELECT 1 FROM company_leaders cl
+     WHERE cl.company_entity_id = ${companyColumn}
+       AND cl.leader_entity_id = ${leaderEntityId}
+       AND cl.valid_from <= ${dateColumn}
+       AND (cl.valid_to IS NULL OR cl.valid_to > ${dateColumn})
+  )`;
+}
+
+/**
+ * The deposits this user may see in a *report*, judged per row.
+ *
+ * Same shape as scopeDeposits for everyone who is not a leader; a leader gets
+ * the as-of test above instead of a flat company list.
+ */
+export function scopeDepositsAsOf(
+  user: AuthedUser,
+  dateColumn: SQL,
+  alias = "d",
+): SQL[] {
+  const col = sql.raw(`${alias}.company_entity_id`);
+  if (user.role === "company_leader") {
+    return [leaderOwnedAt(user.entity_id, col, dateColumn)];
+  }
+  return scopeDeposits(user, alias);
+}
+
+/** As scopeByPlayer, judged at the row's own date for a leader. */
+export function scopeByPlayerAsOf(
+  user: AuthedUser,
+  dateColumn: SQL,
+  alias = "pl",
+): SQL[] {
+  const col = sql.raw(`${alias}.company_entity_id`);
+  if (user.role === "company_leader") {
+    return [leaderOwnedAt(user.entity_id, col, dateColumn)];
+  }
+  return scopeByPlayer(user, alias);
+}
+
+/**
  * The deposits this user may see. Mirrors depositScopeFilter (api-helpers) for
  * raw SQL, where the drizzle query builder is not in play. `d` is the alias.
  */

@@ -6,8 +6,8 @@ import {
   all,
   businessDay,
   parseReportParams,
-  scopeByPlayer,
-  scopeDeposits,
+  scopeByPlayerAsOf,
+  scopeDepositsAsOf,
   searchAcross,
 } from "@/lib/report-sql";
 
@@ -30,7 +30,10 @@ export async function GET(request: Request) {
     if ("error" in p) return jsonError(p.error);
 
     // ── deposits: completed only ─────────────────────────────────────────────
-    const dw: SQL[] = [...scopeDeposits(user), sql`d.status = 'completed'`];
+    const dw: SQL[] = [
+      ...scopeDepositsAsOf(user, sql`d.deposit_date`),
+      sql`d.status = 'completed'`,
+    ];
     if (p.from) dw.push(sql`${businessDay(sql`d.deposit_date`)} >= ${p.from}::date`);
     if (p.to) dw.push(sql`${businessDay(sql`d.deposit_date`)} <= ${p.to}::date`);
     if (p.companyId !== null) dw.push(sql`d.company_entity_id = ${p.companyId}`);
@@ -47,7 +50,10 @@ export async function GET(request: Request) {
     }
 
     // ── withdrawals: paid only, at what actually left the wallet ─────────────
-    const ww: SQL[] = [...scopeByPlayer(user), sql`wd.status = 'paid'`];
+    const ww: SQL[] = [
+      ...scopeByPlayerAsOf(user, sql`wd.created_at`),
+      sql`wd.status = 'paid'`,
+    ];
     if (p.from) ww.push(sql`${businessDay(sql`wd.created_at`)} >= ${p.from}::date`);
     if (p.to) ww.push(sql`${businessDay(sql`wd.created_at`)} <= ${p.to}::date`);
     if (p.companyId !== null) ww.push(sql`pl.company_entity_id = ${p.companyId}`);
@@ -63,8 +69,11 @@ export async function GET(request: Request) {
     }
 
     // ── recommend bonuses: credited to the upline, so the upline's company ───
-    const rw: SQL[] = [...scopeByPlayer(user, "up"), sql`rb.status = 'assigned'`];
     const rbAt = sql`coalesce(rb.assigned_at, rb.created_at)`;
+    const rw: SQL[] = [
+      ...scopeByPlayerAsOf(user, rbAt, "up"),
+      sql`rb.status = 'assigned'`,
+    ];
     if (p.from) rw.push(sql`${businessDay(rbAt)} >= ${p.from}::date`);
     if (p.to) rw.push(sql`${businessDay(rbAt)} <= ${p.to}::date`);
     if (p.companyId !== null) rw.push(sql`up.company_entity_id = ${p.companyId}`);
@@ -77,6 +86,23 @@ export async function GET(request: Request) {
         ),
       );
     }
+
+    /**
+     * Ownership rows overlapping the reported period.
+     *
+     * Built here rather than inline because an open-ended range needs the
+     * clause dropped, not a NULL parameter — Postgres cannot infer a type for
+     * a bare NULL and rejects the whole statement (42P18).
+     */
+    const overlapsPeriod = sql.join(
+      [
+        p.to ? sql`AND cl.valid_from <= (${p.to}::date + 1)` : undefined,
+        p.from
+          ? sql`AND (cl.valid_to IS NULL OR cl.valid_to > ${p.from}::date)`
+          : undefined,
+      ].filter((x): x is SQL => x !== undefined),
+      sql` `,
+    );
 
     const res = await db.execute(sql`
       WITH dep AS (
@@ -111,6 +137,16 @@ export async function GET(request: Request) {
       )
       SELECT i.company_id,
              coalesce(e.name, '#' || i.company_id)                AS company_name,
+             -- Who ran it during the period, not who runs it today. A company
+             -- handed over mid-month names both, which is the honest answer;
+             -- splitting the money between them is not something the ownership
+             -- record claims to know.
+             (SELECT string_agg(DISTINCT le.name, ', ')
+                FROM company_leaders cl
+                JOIN entities le ON le.entity_id = cl.leader_entity_id
+               WHERE cl.company_entity_id = i.company_id
+                 ${overlapsPeriod}
+             )                                                    AS leaders,
              coalesce(dep.dep_count, 0)                           AS dep_count,
              coalesce(dep.dep_volume, 0)                          AS dep_volume,
              coalesce(dep.bonus, 0) + coalesce(rec.bonus, 0)      AS bonus,

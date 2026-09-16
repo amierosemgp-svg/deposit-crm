@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 import type {
+  CompanyLeader,
   ApiKeyRow,
   BankAccount,
   BankTransfer,
@@ -66,6 +67,7 @@ async function api<T = unknown>(
 type StateResponse = {
   me: Me;
   entities: Entity[];
+  companyLeaders: CompanyLeader[];
   users: User[];
   /** Absent when the roster we already hold is current — see playersVersion. */
   players?: Player[];
@@ -92,6 +94,8 @@ type Store = {
   hydrated: boolean;
   me: Me | null;
   entities: Entity[];
+  /** Who currently runs each company — a company may have more than one. */
+  companyLeaders: CompanyLeader[];
   users: User[];
   players: Player[];
   deposits: Deposit[];
@@ -467,6 +471,7 @@ export const useStore = create<Store>((set, get) => {
     hydrated: false,
     me: null,
     entities: [],
+    companyLeaders: [],
     users: [],
     players: [],
     deposits: [],

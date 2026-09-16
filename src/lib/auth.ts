@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "@/db";
-import { entities, users } from "@/db/schema";
+import { companyLeaders, entities, users } from "@/db/schema";
 import { DuplicateGameAccountError } from "./game-name";
 import {
   SESSION_COOKIE,
@@ -54,7 +54,7 @@ export async function getSession(): Promise<SessionPayload | null> {
 /**
  * Resolve the entity-visibility scope for a session user.
  * - super_admin / viewer → their own main company and everything under it
- * - company_leader → all company entities under their leader entity
+ * - company_leader → every company they currently run (company_leaders)
  * - cs_agent → the single company their cs entity belongs to
  *
  * A super admin is the super admin *of one organisation*, not of the database.
@@ -105,11 +105,21 @@ export async function resolveScope(session: SessionPayload): Promise<AuthedUser>
     };
   }
   if (session.role === "company_leader") {
+    // Every company they run *now*, which is no longer the same question as
+    // "every company sitting under them in the tree": a company can be run by
+    // two leaders, and ownership moves without the tree being rewritten.
+    // Reports that look backwards ask companyLeaders for the date in question
+    // instead — see lib/company-leaders.ts.
     const companies = await db
-      .select({ id: entities.entity_id })
-      .from(entities)
-      .where(eq(entities.parent_entity_id, session.entity_id));
-    const companyIds = companies.map((c) => c.id);
+      .select({ id: companyLeaders.company_entity_id })
+      .from(companyLeaders)
+      .where(
+        and(
+          eq(companyLeaders.leader_entity_id, session.entity_id),
+          isNull(companyLeaders.valid_to),
+        ),
+      );
+    const companyIds = [...new Set(companies.map((c) => c.id))];
     return {
       ...session,
       companyIds,

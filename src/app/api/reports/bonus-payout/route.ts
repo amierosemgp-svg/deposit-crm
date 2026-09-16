@@ -6,8 +6,8 @@ import {
   all,
   businessDay,
   parseReportParams,
-  scopeByPlayer,
-  scopeDeposits,
+  scopeByPlayerAsOf,
+  scopeDepositsAsOf,
   searchAcross,
 } from "@/lib/report-sql";
 
@@ -59,7 +59,7 @@ export async function GET(request: Request) {
       const w: SQL[] = [
         // Non-zero, not positive: a clawback is part of what was paid out.
         sql`d.bonus_amount <> 0`,
-        ...scopeDeposits(user),
+        ...scopeDepositsAsOf(user, sql`d.deposit_date`),
       ];
       if (from) w.push(sql`${businessDay(sql`d.deposit_date`)} >= ${from}::date`);
       if (to) w.push(sql`${businessDay(sql`d.deposit_date`)} <= ${to}::date`);
@@ -99,11 +99,11 @@ export async function GET(request: Request) {
     if (wantRecommend) {
       // The upline is the one paid, so the row is theirs: their name, their
       // company. The downline only appears in the search text.
+      const at = sql`coalesce(rb.assigned_at, rb.created_at)`;
       const w: SQL[] = [
         sql`rb.status <> 'cancelled'`,
-        ...scopeByPlayer(user, "up"),
+        ...scopeByPlayerAsOf(user, at, "up"),
       ];
-      const at = sql`coalesce(rb.assigned_at, rb.created_at)`;
       if (from) w.push(sql`${businessDay(at)} >= ${from}::date`);
       if (to) w.push(sql`${businessDay(at)} <= ${to}::date`);
       if (companyId !== null) w.push(sql`up.company_entity_id = ${companyId}`);

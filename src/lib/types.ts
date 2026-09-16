@@ -539,6 +539,17 @@ export const EXPENSE_CATEGORIES = [
   "other",
 ] as const;
 
+/** Who currently runs a company. See lib/company-leaders.ts. */
+export type CompanyLeader = {
+  id: number;
+  company_entity_id: number;
+  leader_entity_id: number;
+  valid_from: string;
+  valid_to: string | null;
+  is_primary: boolean;
+  note: string | null;
+};
+
 export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
 
 export type Expense = {

@@ -69,7 +69,11 @@ export async function visibleEntityTree(user: AuthedUser) {
     user.role === "super_admin" || user.role === "viewer"
       ? (user.ownedEntityIds ?? [...user.companyIds])
       : user.role === "company_leader"
-        ? [user.entity_id]
+        // The leader itself *and* every company they run. A company shared
+        // with another leader is not their child in the tree, so walking
+        // downwards alone would leave them scoped to its players and deposits
+        // while its name rendered as "#34".
+        ? [user.entity_id, ...user.companyIds]
         : [...user.companyIds];
   const byId = new Map(all.map((e) => [e.entity_id, e]));
 
