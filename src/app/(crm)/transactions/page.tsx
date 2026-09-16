@@ -466,6 +466,9 @@ const ENTRY_HINT: Record<TabKey, string> = {
   leadertransfer: "Entry: From Leader · To Leader · Amount · Note — a settlement between leaders",
 };
 
+/** Stable empty map, so the alias memo below doesn't re-run every render. */
+const EMPTY_ALIASES: Record<string, string> = {};
+
 export default function TransactionsPage() {
   const deposits = useStore((s) => s.deposits);
   const withdrawals = useStore((s) => s.withdrawals);
@@ -505,6 +508,7 @@ export default function TransactionsPage() {
 
   const games = gamesFn();
   const banks = banksFn();
+  const gameAliases = useStore((s) => s.settings.game_aliases) ?? EMPTY_ALIASES;
   const companies = companiesFn();
   const isViewer = me?.role === "viewer";
   const isAdmin = me?.role === "super_admin";
@@ -834,11 +838,25 @@ export default function TransactionsPage() {
     return m;
   }, [players]);
 
+  /**
+   * Product name → catalogue name, including the operator's own spellings.
+   *
+   * Aliases are folded in after the catalogue, so a real game can never be
+   * shadowed by an alias pointing somewhere else, and an alias whose target
+   * has been removed from the catalogue is ignored rather than writing a name
+   * nothing else knows.
+   */
   const gameByName = useMemo(() => {
     const m = new Map<string, string>();
     for (const g of games) m.set(g.toLowerCase(), g);
+    for (const [alias, target] of Object.entries(gameAliases)) {
+      const key = alias.trim().toLowerCase();
+      if (!key || m.has(key)) continue;
+      const canonical = games.find((g) => g.toLowerCase() === target.toLowerCase());
+      if (canonical) m.set(key, canonical);
+    }
     return m;
-  }, [games]);
+  }, [games, gameAliases]);
 
   const companyByName = useMemo(() => {
     const m = new Map<string, number>();

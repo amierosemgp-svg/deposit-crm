@@ -95,7 +95,7 @@ export async function POST(request: Request) {
         bank_name: body.bank_name,
         bank_account_number: body.bank_account_number,
         source: "manual",
-        skip_bot: body.skip_bot ?? false,
+        skip_bot: body.skip_bot ?? true,
         handled_by_user_id: user.user_id,
         ...(body.assign_to_me
           ? { assigned_to_user_id: user.user_id, assigned_at: new Date().toISOString() }

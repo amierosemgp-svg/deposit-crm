@@ -561,6 +561,16 @@ export type ServerSettings = {
    */
   min_withdrawal_amount?: number;
   games?: string[];
+  /**
+   * Other spellings of a game, as the operator writes them on their own
+   * worksheet: {"MG888": "Mega888", "Scr918Kiss": "918Kiss"}.
+   *
+   * The catalogue holds one canonical name per game so the data stays joined
+   * up, but CS types what they have always typed. Without this the worksheet
+   * rejected "MG888" as an unknown product — the name that company had used
+   * every day for a month — and the row could not be saved at all.
+   */
+  game_aliases?: Record<string, string>;
   banks?: string[];
   /** Rebate window boundaries per period, in business time. See lib/rebates. */
   rebate_cutoffs?: {

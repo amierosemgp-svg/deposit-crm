@@ -756,11 +756,12 @@ export const deposits = pgTable("deposits", {
   // first (or only) account for the game — the pre-multi-account default.
   selected_game_username: varchar("selected_game_username", { length: 120 }),
   status: depositStatusEnum("status").notNull().default("pending"),
-  // Agent-detected bank credits default to "agent"; CRM-entered deposits set "manual".
-  source: transactionSourceEnum("source").notNull().default("bot"),
+  // The agent states "bot" on its own inserts; everything else is a person.
+  source: transactionSourceEnum("source").notNull().default("manual"),
   // When true the deposit is fully manual: the agent never matches or tops it up;
-  // a human approves → processing → completes (or rejects) it.
-  skip_bot: boolean("skip_bot").notNull().default(false),
+  // a human approves → processing → completes (or rejects) it. Defaults on —
+  // the agent takes work only where someone has opted into it.
+  skip_bot: boolean("skip_bot").notNull().default(true),
   matched_at: timestamp("matched_at", { withTimezone: true, mode: "string" }),
   /**
    * When the deposit stopped waiting on a human — the moment it was approved
@@ -826,8 +827,8 @@ export const withdrawals = pgTable("withdrawals", {
     .default(0),
   status: withdrawalStatusEnum("status").notNull().default("requested"),
   // When true the agent never auto-pulls/pays this withdrawal; CS handles it
-  // manually (pull → paid) and can reject it.
-  skip_bot: boolean("skip_bot").notNull().default(false),
+  // manually (pull → paid) and can reject it. Defaults on, as on deposits.
+  skip_bot: boolean("skip_bot").notNull().default(true),
   // CS-entered requests default to "manual"; agent-created requests set "agent".
   source: transactionSourceEnum("source").notNull().default("manual"),
   handled_by_user_id: integer("handled_by_user_id").references(() => users.user_id),

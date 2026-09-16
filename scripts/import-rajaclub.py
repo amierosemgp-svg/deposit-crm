@@ -694,6 +694,16 @@ UPDATE settings SET value = {lit(json.dumps(games_catalogue))}::jsonb, updated_a
 UPDATE settings SET value = {lit(json.dumps(banks_catalogue))}::jsonb, updated_at = now()
   WHERE key = 'banks';""")
 
+    # The operator's own product spellings, so the worksheet still accepts what
+    # CS has always typed. The import folds MG888 into Mega888 to keep one
+    # canonical game in the data; without this the grid then rejected "MG888"
+    # as an unknown product and the row could not be saved at all.
+    aliases = {k: v for k, v in GAME_ALIASES.items() if k != v}
+    add(f"""
+INSERT INTO settings (key, value) VALUES ('game_aliases', {lit(json.dumps(aliases))}::jsonb)
+  ON CONFLICT (key) DO UPDATE
+    SET value = settings.value || excluded.value, updated_at = now();""")
+
     # ── 4. bank accounts ─────────────────────────────────────────────────────
     dep_banks = {r["bank"] for r in d["deposits"]}
     used_banks = dep_banks | {r["bank"] for r in d["withdrawals"] + d["cash_outs"] if r["bank"]}

@@ -96,7 +96,9 @@ export default function WithdrawalsPage() {
   const [newAll, setNewAll] = useState(false);
   const [newBankName, setNewBankName] = useState("");
   const [newBankAccount, setNewBankAccount] = useState("");
-  const [newSkipBot, setNewSkipBot] = useState(false);
+  // Checked by default, matching the server: new withdrawals are handled by
+  // hand unless someone opts this one into the agent.
+  const [newSkipBot, setNewSkipBot] = useState(true);
   const [playerPickerOpen, setPlayerPickerOpen] = useState(false);
   const [newSubmitting, setNewSubmitting] = useState(false);
 

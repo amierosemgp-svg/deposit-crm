@@ -73,7 +73,8 @@ export async function POST(request: Request) {
 
     // A skip-agent deposit has no agent bank-match step, so it always starts at
     // "pending" (ready for manual approval), never "pending_match".
-    const status = body.skip_bot ? "pending" : body.status;
+    const skipBot = body.skip_bot ?? true;
+    const status = skipBot ? "pending" : body.status;
     const nowIso = new Date().toISOString();
     const [created] = await db
       .insert(deposits)
@@ -90,7 +91,7 @@ export async function POST(request: Request) {
         ...bonus.fields,
         status,
         source: "manual",
-        skip_bot: body.skip_bot ?? false,
+        skip_bot: skipBot,
         receipt_url: body.receipt_url,
         handled_by_user_id: user.user_id,
         ...(body.assign_to_me
@@ -112,7 +113,7 @@ export async function POST(request: Request) {
         source: "manual",
         action: "intent_created",
         status,
-        skip_bot: body.skip_bot ?? false,
+        skip_bot: skipBot,
         ...(bonus.plan
           ? {
               bonus: bonus.plan.name,
