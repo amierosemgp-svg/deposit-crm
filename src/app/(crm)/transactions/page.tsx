@@ -2000,7 +2000,40 @@ export default function TransactionsPage() {
 
   /** Columns of a saved deposit row that edit in place, while it still can. */
   const DEPOSIT_EDITABLE_COLS = useMemo(
-    () => new Set([COL.deposit.member, COL.deposit.product, COL.deposit.bonuspct]),
+    () =>
+      new Set([
+        COL.deposit.member,
+        COL.deposit.product,
+        COL.deposit.username,
+        COL.deposit.amount,
+        COL.deposit.bonuspct,
+        COL.deposit.bank,
+      ]),
+    [],
+  );
+  /** The same for a withdrawal, which is only correctable before the pull. */
+  const WITHDRAWAL_EDITABLE_COLS = useMemo(
+    () =>
+      new Set([
+        COL.withdrawal.product,
+        COL.withdrawal.username,
+        COL.withdrawal.amount,
+        COL.withdrawal.bank,
+        COL.withdrawal.account,
+      ]),
+    [],
+  );
+
+  /**
+   * Statuses a deposit can still be corrected in.
+   *
+   * "processing" belongs here: manual deposits are auto-approved on save, so
+   * that is where a freshly typed row lands, and leaving it out made every new
+   * row read-only the moment it was entered. No money has moved in any of
+   * these — it books at completion.
+   */
+  const DEPOSIT_EDITABLE_STATUS = useMemo(
+    () => new Set(["pending_match", "matched", "pending", "approved", "processing"]),
     [],
   );
   /** The saved sheets whose rows carry a claim — their Assign cell edits in place. */
@@ -2016,12 +2049,31 @@ export default function TransactionsPage() {
       // Assign to me: yes claims the row, no releases it — on any saved row of
       // a sheet that has claims (the server refuses someone else's claim).
       if (colIndex === assignColOf(tab)) return true;
-      if (tab !== "deposit") return false;
-      if (!DEPOSIT_EDITABLE_COLS.has(colIndex)) return false;
-      const dep = depositById.get(Number(rows[rowIndex]?.id));
-      return !!dep && ["pending_match", "matched", "pending"].includes(dep.status);
+      if (tab === "deposit") {
+        if (!DEPOSIT_EDITABLE_COLS.has(colIndex)) return false;
+        const dep = depositById.get(Number(rows[rowIndex]?.id));
+        return !!dep && DEPOSIT_EDITABLE_STATUS.has(dep.status);
+      }
+      if (tab === "withdrawal") {
+        if (!WITHDRAWAL_EDITABLE_COLS.has(colIndex)) return false;
+        // Only before the pull: after that the credit has left the wallet and
+        // an edit would disagree with what actually moved.
+        const w = withdrawalById.get(Number(rows[rowIndex]?.id));
+        return !!w && w.status === "requested";
+      }
+      return false;
     },
-    [tab, isViewer, DEPOSIT_EDITABLE_COLS, depositById, rows, assignColOf],
+    [
+      tab,
+      isViewer,
+      DEPOSIT_EDITABLE_COLS,
+      DEPOSIT_EDITABLE_STATUS,
+      WITHDRAWAL_EDITABLE_COLS,
+      depositById,
+      withdrawalById,
+      rows,
+      assignColOf,
+    ],
   );
 
   const onCommittedEdit = useCallback(
@@ -2047,6 +2099,52 @@ export default function TransactionsPage() {
         if (!res.ok) toast.error(res.error ?? (want ? "Could not claim the row" : "Could not release the row"));
         return;
       }
+      // ── withdrawals ─────────────────────────────────────────────────────
+      if (tab === "withdrawal") {
+        const w = withdrawalById.get(Number(rows[rowIndex]?.id));
+        if (!w) return;
+        const v = value.trim();
+        const c = COL.withdrawal;
+        let patch: Record<string, unknown> | null = null;
+
+        if (colIndex === c.product) {
+          const g = gameByName.get(v.toLowerCase());
+          if (!g) {
+            toast.error(`Unknown product "${v}" — game not changed`);
+            return;
+          }
+          patch = { game_name: g };
+        } else if (colIndex === c.username) {
+          patch = { game_username: v || null };
+        } else if (colIndex === c.amount) {
+          const amt = parseAmount(v);
+          if (amt === null || amt <= 0) {
+            toast.error(`Bad amount "${v}"`);
+            return;
+          }
+          patch = { requested_amount: amt };
+        } else if (colIndex === c.bank) {
+          patch = { bank_name: v || null };
+        } else if (colIndex === c.account) {
+          patch = { bank_account_number: v || null };
+        }
+        if (!patch) return;
+
+        const res = await fetch(`/api/withdrawals/${w.withdrawal_id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        });
+        const data = (await res.json().catch(() => null)) as { error?: string } | null;
+        if (!res.ok) {
+          toast.error(data?.error ?? "Could not edit the withdrawal");
+          return;
+        }
+        await refresh();
+        return;
+      }
+
+      // ── deposits ────────────────────────────────────────────────────────
       const dep = depositById.get(Number(rows[rowIndex]?.id));
       if (!dep) return;
       const v = value.trim();
@@ -2079,9 +2177,42 @@ export default function TransactionsPage() {
         }
         const res = await updateDepositDraft(dep.deposit_id, { bonus_percentage: pct });
         if (!res.ok) toast.error(res.error ?? "Failed to set bonus");
+      } else if (colIndex === COL.deposit.username) {
+        const res = await updateDepositDraft(dep.deposit_id, {
+          selected_game_username: v || null,
+        });
+        if (!res.ok) toast.error(res.error ?? "Failed to set the kiosk login");
+      } else if (colIndex === COL.deposit.amount) {
+        const amt = parseAmount(v);
+        if (amt === null || amt <= 0) {
+          toast.error(`Bad amount "${v}"`);
+          return;
+        }
+        // The server re-bases the bonus on the new figure, so a corrected
+        // amount can't leave a bonus struck on the old one.
+        const res = await updateDepositDraft(dep.deposit_id, { deposit_amount: amt });
+        if (!res.ok) toast.error(res.error ?? "Failed to set the amount");
+      } else if (colIndex === COL.deposit.bank) {
+        if (!v) {
+          toast.error("Bank is required");
+          return;
+        }
+        const res = await updateDepositDraft(dep.deposit_id, { bank_name: v });
+        if (!res.ok) toast.error(res.error ?? "Failed to set the bank");
       }
     },
-    [tab, assignColOf, setAssignment, depositById, rows, playerByCode, gameByName, updateDepositDraft],
+    [
+      tab,
+      assignColOf,
+      setAssignment,
+      depositById,
+      withdrawalById,
+      rows,
+      playerByCode,
+      gameByName,
+      updateDepositDraft,
+      refresh,
+    ],
   );
 
   const selectedNumericIds = useMemo(

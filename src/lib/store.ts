@@ -169,7 +169,14 @@ type Store = {
     patch: Partial<
       Pick<
         Deposit,
-        "bonus_percentage" | "bonus_plan_id" | "selected_game" | "player_id"
+        | "bonus_percentage"
+        | "bonus_plan_id"
+        | "selected_game"
+        | "selected_game_username"
+        | "player_id"
+        | "deposit_amount"
+        | "bank_name"
+        | "deposit_date"
       >
     > & { bonus_override_reason?: string },
   ) => Promise<MutationResult>;

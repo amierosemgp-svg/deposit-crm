@@ -14,6 +14,8 @@ export type ActivityCategory =
   | "api_key"
   | "settings"
   | "expense"
+  /** A saved deposit or withdrawal corrected after the fact. */
+  | "transaction"
   | "other";
 
 export type FieldChange = { field: string; from: unknown; to: unknown };

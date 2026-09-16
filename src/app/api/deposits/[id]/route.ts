@@ -5,6 +5,7 @@ import { deposits, players, transactions } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import { canOverrideEligibility, resolveBonusForDeposit } from "@/lib/bonus";
+import { describeChanges, diffFields, logActivity } from "@/lib/activity-log";
 
 const patchSchema = z.object({
   // The bonus to apply; null clears it back to no bonus.
@@ -15,9 +16,29 @@ const patchSchema = z.object({
   bonus_override_reason: z.string().max(200).optional(),
   selected_game: z.string().nullable().optional(),
   player_id: z.number().int().positive().optional(), // assign an unmatched bot deposit
+  // The rest of a worksheet row. Editable for the same reason the bonus is:
+  // no money has moved yet. total_deposits, the player's game credit and the
+  // company BO pool are all booked at completion, and a completed deposit is
+  // refused below — so correcting a mistyped figure here costs nothing to undo.
+  deposit_amount: z.number().positive().optional(),
+  bank_name: z.string().min(1).max(60).optional(),
+  selected_game_username: z.string().max(120).nullable().optional(),
+  deposit_date: z.string().datetime({ offset: true }).optional(),
 });
 
-/** PATCH /api/deposits/:id — edit the working draft (bonus %, game, player assignment). */
+/**
+ * PATCH /api/deposits/:id — correct a row that has not settled yet.
+ *
+ * Amount, bank, player, game, kiosk login, date and bonus are all fixable
+ * while the deposit is in flight; a completed or failed one is refused,
+ * because by then the money is booked and an edit would silently disagree with
+ * the ledger.
+ *
+ * Every change is recorded twice on purpose: a `transactions` row per field,
+ * which is what the History page reads, and one activity_log entry carrying
+ * the whole before/after diff, which is what answers "who changed this, and
+ * what did it say before".
+ */
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -149,11 +170,39 @@ export async function PATCH(
       }
     }
 
+    /**
+     * A new amount re-bases the bonus.
+     *
+     * The percentage is what CS chose; the cash figure follows from it. Left
+     * alone, correcting 500 to 50 would keep a bonus struck on the larger
+     * number and the deposit would credit more than it took in.
+     */
+    let amountPatch = {};
+    if (body.deposit_amount !== undefined && body.deposit_amount !== row.deposit_amount) {
+      const pct =
+        (bonusPatch as { bonus_percentage?: number }).bonus_percentage ??
+        row.bonus_percentage;
+      const bonus = +((body.deposit_amount * pct) / 100).toFixed(2);
+      amountPatch = {
+        deposit_amount: body.deposit_amount,
+        bonus_amount: bonus,
+        total_amount: +(body.deposit_amount + bonus).toFixed(2),
+      };
+    }
+
     const [updated] = await db
       .update(deposits)
       .set({
         ...playerPatch,
         ...bonusPatch,
+        ...amountPatch,
+        ...(body.bank_name !== undefined ? { bank_name: body.bank_name } : {}),
+        ...(body.selected_game_username !== undefined
+          ? { selected_game_username: body.selected_game_username }
+          : {}),
+        ...(body.deposit_date !== undefined
+          ? { deposit_date: body.deposit_date, deposit_time_known: true }
+          : {}),
         selected_game:
           body.selected_game !== undefined ? body.selected_game : row.selected_game,
         updated_at: new Date().toISOString(),
@@ -207,6 +256,45 @@ export async function PATCH(
       });
     }
     if (audits.length) await db.insert(transactions).values(audits);
+
+    // The whole diff, in the one place built for it. `transactions` says what
+    // kind of change happened; this says what the value was before, which is
+    // the question actually asked when a figure looks wrong.
+    const changes = diffFields(
+      {
+        deposit_amount: row.deposit_amount,
+        bank_name: row.bank_name,
+        selected_game: row.selected_game,
+        selected_game_username: row.selected_game_username,
+        deposit_date: row.deposit_date,
+        bonus_percentage: row.bonus_percentage,
+        bonus_amount: row.bonus_amount,
+        player_username: row.player_username,
+      },
+      {
+        deposit_amount: updated.deposit_amount,
+        bank_name: updated.bank_name,
+        selected_game: updated.selected_game,
+        selected_game_username: updated.selected_game_username,
+        deposit_date: updated.deposit_date,
+        bonus_percentage: updated.bonus_percentage,
+        bonus_amount: updated.bonus_amount,
+        player_username: updated.player_username,
+      },
+    );
+    if (changes.length) {
+      await logActivity({
+        category: "transaction",
+        action: "deposit.edited",
+        summary: `Deposit ${updated.transaction_ref} edited — ${describeChanges(changes)}`,
+        actor: user,
+        companyEntityId: updated.company_entity_id,
+        targetType: "deposit",
+        targetId: depositId,
+        targetLabel: updated.transaction_ref,
+        changes,
+      });
+    }
 
     return Response.json({ deposit: updated });
   } catch (e) {
