@@ -60,13 +60,33 @@ export async function PATCH(
     ) {
       throw new AuthError(403, "Deposit is outside your company scope");
     }
-    if (["completed", "failed"].includes(row.status)) {
-      return jsonError(`Deposit is already ${row.status}`, 409);
-    }
-
     const parsed = patchSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return jsonError("Invalid payload");
     const body = parsed.data;
+
+    /**
+     * A settled deposit is mostly frozen — but not entirely.
+     *
+     * Manual rows now complete the moment they are saved, which is what the
+     * desk wants and also means "correct the row you just typed" would have
+     * died with the old blanket refusal. So the fields that move no money stay
+     * editable after completion: which bank took the payment, and when. The
+     * ones that do — amount, bonus, player, game, kiosk login — are refused,
+     * because the credit has already landed in a specific wallet out of a
+     * specific float and an edit here would silently disagree with both.
+     */
+    const SETTLED_EDITABLE = new Set(["bank_name", "deposit_date"]);
+    if (["completed", "failed"].includes(row.status)) {
+      const touched = Object.keys(body).filter((k) => body[k as keyof typeof body] !== undefined);
+      const booked = touched.filter((k) => !SETTLED_EDITABLE.has(k));
+      if (booked.length) {
+        return jsonError(
+          `Deposit is already ${row.status} — only the bank and date can be corrected now ` +
+            `(not ${booked.join(", ")}). Reverse it and enter it again to change the money.`,
+          409,
+        );
+      }
+    }
 
     let playerPatch = {};
     let playerId = row.player_id;

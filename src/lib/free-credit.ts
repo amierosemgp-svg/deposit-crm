@@ -86,6 +86,7 @@ export async function issueFreeCredit(
         transfer_amount: amount,
         from_game_balance_before: 0,
         status: "pending",
+        skip_bot: false,
         started_at: nowIso,
         handled_by_user_id: user.user_id,
         note: `Free credit${reason ? ` — ${reason}` : ""}`,

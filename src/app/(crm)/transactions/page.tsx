@@ -102,11 +102,11 @@ type TabKey =
 const COLUMN_KEYS = {
   deposit: [
     "assign", "member", "product", "username", "amount", "bonuspct", "bonus",
-    "bank", "status", "date", "time", "remark", "bankdesc",
+    "bank", "mode", "status", "date", "time", "remark", "bankdesc",
   ],
   withdrawal: [
     "assign", "member", "product", "username", "amount", "bank", "account",
-    "holder", "status", "date", "time", "remark2",
+    "holder", "mode", "status", "date", "time", "remark2",
   ],
   freecredit: [
     "assign", "member", "product", "username", "amount", "mode", "remark",
@@ -114,7 +114,7 @@ const COLUMN_KEYS = {
   ],
   transfer: [
     "assign", "member", "from", "username", "to", "to_username", "amount",
-    "status", "date", "time", "note",
+    "mode", "status", "date", "time", "note",
   ],
   expense: ["assign", "date", "category", "description", "amount", "company", "paidfrom", "notes"],
   // Cash a leader took out of a company bank account (see Bank Accounts).
@@ -141,6 +141,31 @@ const COL = Object.fromEntries(
 /** Cells in a sheet's column order from a record keyed by column. */
 function toCells<T extends TabKey>(tab: T, rec: Partial<Record<ColKey<T>, string>>): string[] {
   return (COLUMN_KEYS[tab] as readonly ColKey<T>[]).map((k) => rec[k] ?? "");
+}
+
+/**
+ * The Mode cell, both ways.
+ *
+ * One axis: was the work done by hand in the back-office, or by the agent?
+ * Blank on entry means manual, matching every server default while the desk
+ * runs everything itself. Blank on a saved row means the row predates the
+ * column and nobody recorded which it was — an honest gap rather than a
+ * guessed "Manual".
+ */
+function parseMode(
+  cell: string | undefined,
+): { ok: true; skip_bot: boolean } | { ok: false; error: string } {
+  const m = (cell ?? "").trim().toLowerCase();
+  if (!m || ["manual", "cs", "hand"].includes(m)) return { ok: true, skip_bot: true };
+  if (["auto", "bot", "agent"].includes(m)) return { ok: true, skip_bot: false };
+  return {
+    ok: false,
+    error: `Mode must be "manual" or "auto", not "${(cell ?? "").trim()}"`,
+  };
+}
+
+function modeCell(skipBot: boolean | null | undefined): string {
+  return skipBot == null ? "" : skipBot ? "Manual" : "Auto";
 }
 
 /**
@@ -333,18 +358,26 @@ function gameUsername(p: Player | undefined, game: string | null | undefined): s
   return p.game_accounts[0]?.game_username ?? "";
 }
 
-async function post(path: string, body: unknown): Promise<{ ok: boolean; error?: string }> {
+async function post(
+  path: string,
+  body: unknown,
+): Promise<{ ok: boolean; error?: string; warning?: string }> {
   try {
     const res = await fetch(path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
+    const d = (await res.json().catch(() => null)) as
+      | { error?: string; warning?: string }
+      | null;
     if (!res.ok) {
-      const d = (await res.json().catch(() => null)) as { error?: string } | null;
       return { ok: false, error: d?.error ?? `Request failed (${res.status})` };
     }
-    return { ok: true };
+    // Saved, but it couldn't finish — a manual deposit whose kiosk float was
+    // short stops at "processing". Worth saying out loud: the row is there,
+    // the top-up is not.
+    return { ok: true, ...(d?.warning ? { warning: d.warning } : {}) };
   } catch {
     return { ok: false, error: "Network error" };
   }
@@ -683,8 +716,8 @@ export default function TransactionsPage() {
 
   const MODE_SUGGESTIONS = useMemo(
     () => [
-      { value: "manual", hint: "CS already credited it in the back-office (default)" },
-      { value: "bot", hint: "agent tops up the game" },
+      { value: "manual", hint: "CS does it in the back-office (default)" },
+      { value: "auto", hint: "hand it to the agent" },
     ],
     [],
   );
@@ -766,6 +799,13 @@ export default function TransactionsPage() {
     type Def = Omit<SheetColumn, "key">;
     const member: Def = { label: "Member Code", width: 110, entry: true, required: true, options: memberSuggestions, placeholder: "member code" };
     const username: Def = { label: "Username", width: 130, entry: true, placeholder: "game login" };
+    /**
+     * Who did the work: CS in the back-office, or the agent. Entered as well
+     * as shown, so the row that switches a job to the agent is the same cell
+     * that reports which one ran it — everything defaults to manual while the
+     * desk is running by hand.
+     */
+    const mode: Def = { label: "Mode", width: 84, entry: true, options: MODE_SUGGESTIONS, placeholder: "manual" };
     const date: Def = { label: "Date", width: 82, align: "center" };
     const time: Def = { label: "Time", width: 56, align: "center" };
     const status: Def = { label: "Status", width: 116 };
@@ -790,6 +830,7 @@ export default function TransactionsPage() {
         bonuspct: { label: "Bonus %", width: 76, align: "right", numeric: true, entry: true, placeholder: "10", dropdown: true },
         bonus: { label: "Bonus", width: 90, align: "right", numeric: true },
         bank: { label: "Bank", width: 110, entry: true, required: true, options: banks, placeholder: "bank" },
+        mode,
         status,
         date,
         time,
@@ -808,6 +849,7 @@ export default function TransactionsPage() {
         // holder, so it's read off the player's saved accounts — derived,
         // and there to be checked against the payout before it's sent.
         holder: { label: "Account Holder", width: 160 },
+        mode,
         status,
         date,
         time,
@@ -819,7 +861,7 @@ export default function TransactionsPage() {
         product: { label: "Product", width: 110, entry: true, required: true, options: games, placeholder: "game" },
         username,
         amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "50" },
-        mode: { label: "Mode", width: 90, entry: true, options: MODE_SUGGESTIONS, placeholder: "manual" },
+        mode,
         remark: { label: "Remark", width: 220, entry: true, placeholder: "reason (optional)" },
         status,
         date,
@@ -833,6 +875,7 @@ export default function TransactionsPage() {
         to: { label: "To Game", width: 110, entry: true, required: true, options: games, placeholder: "to game" },
         to_username: { label: "To Username", width: 130, entry: true, placeholder: "to login" },
         amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "100 / ALL" },
+        mode,
         status,
         date,
         time,
@@ -1199,6 +1242,7 @@ export default function TransactionsPage() {
             bonuspct: pct ? `${pct}%` : "—",
             bonus: d.bonus_amount ? fmtAmount(d.bonus_amount) : "—",
             bank: d.bank_name,
+            mode: modeCell(d.skip_bot),
             status: DEPOSIT_STATUS_LABEL[d.status],
             // Bot-matched rows carry the bank's own timestamp; a sheet-entered
             // row only knows its date.
@@ -1245,6 +1289,7 @@ export default function TransactionsPage() {
             account: w.bank_account_number ?? "",
             holder:
               payoutAccountOf(p, w.bank_name, w.bank_account_number)?.account_holder ?? "",
+            mode: modeCell(w.skip_bot),
             status: WITHDRAWAL_STATUS_LABEL[w.status],
             date: sheetDate(w.created_at),
             time: formatClock(w.created_at),
@@ -1331,6 +1376,7 @@ export default function TransactionsPage() {
             to: t.to_game,
             to_username: t.to_game_username ?? gameUsername(p, t.to_game),
             amount: t.transfer_all && !t.transfer_amount ? "ALL" : fmtAmount(t.transfer_amount),
+            mode: modeCell(t.skip_bot),
             status: TRANSFER_STATUS_LABEL[t.status],
             date: sheetDate(t.created_at),
             time: formatClock(t.created_at),
@@ -1721,6 +1767,8 @@ export default function TransactionsPage() {
       }
       const pct = parseBonusPct(bonuspct);
       if (pct === null) return { ok: false, error: `Bad bonus % "${bonuspct}"` };
+      const mode = parseMode(d[c.mode]);
+      if (!mode.ok) return mode;
       return {
         ok: true,
         payload: {
@@ -1735,6 +1783,7 @@ export default function TransactionsPage() {
             ? { selected_game_username: username.trim() }
             : {}),
           ...(pct ? { bonus_percentage: pct } : {}),
+          skip_bot: mode.skip_bot,
           ...(assign ? { assign_to_me: true } : {}),
         },
       };
@@ -1762,11 +1811,14 @@ export default function TransactionsPage() {
       const amt = all ? null : parseAmount(amount);
       if (!all && (amt === null || amt <= 0))
         return { ok: false, error: `Bad amount "${amount}" (number or ALL)` };
+      const mode = parseMode(d[c.mode]);
+      if (!mode.ok) return mode;
       return {
         ok: true,
         payload: {
           player_id: player.player_id,
           game_name: g,
+          skip_bot: mode.skip_bot,
           ...(username.trim() ? { game_username: username.trim() } : {}),
           ...(all ? { withdraw_all: true } : { requested_amount: amt }),
           ...(bank.trim() ? { bank_name: bank.trim() } : {}),
@@ -1802,13 +1854,9 @@ export default function TransactionsPage() {
         return { ok: false, error: `${player.username} has no ${g} account linked` };
       const amt = parseAmount(amount);
       if (amt === null || amt <= 0) return { ok: false, error: `Bad amount "${amount}"` };
-      // Blank means manual, matching the server: the house runs everything by
-      // hand until the workflow is settled. Type "bot" to hand one to the agent.
-      const m = mode.trim().toLowerCase();
-      let skip_bot: boolean;
-      if (!m || ["manual", "cs", "hand"].includes(m)) skip_bot = true;
-      else if (["bot", "agent", "auto"].includes(m)) skip_bot = false;
-      else return { ok: false, error: `Mode must be "bot" or "manual", not "${mode.trim()}"` };
+      const parsedMode = parseMode(mode);
+      if (!parsedMode.ok) return parsedMode;
+      const skip_bot = parsedMode.skip_bot;
       return {
         ok: true,
         payload: {
@@ -1847,12 +1895,15 @@ export default function TransactionsPage() {
       const amt = all ? null : parseAmount(amount);
       if (!all && (amt === null || amt <= 0))
         return { ok: false, error: `Bad amount "${amount}" (number or ALL)` };
+      const mode = parseMode(d[c.mode]);
+      if (!mode.ok) return mode;
       return {
         ok: true,
         payload: {
           player_id: player.player_id,
           from_game: fromGame,
           to_game: toGame,
+          skip_bot: mode.skip_bot,
           ...(username.trim() ? { from_game_username: username.trim() } : {}),
           ...(toUsername.trim() ? { to_game_username: toUsername.trim() } : {}),
           ...(all ? { transfer_all: true } : { amount: amt }),
@@ -2163,7 +2214,14 @@ export default function TransactionsPage() {
       if (tab === "deposit") {
         if (!DEPOSIT_EDITABLE_COLS.has(colIndex)) return false;
         const dep = depositById.get(Number(rows[rowIndex]?.id));
-        return !!dep && DEPOSIT_EDITABLE_STATUS.has(dep.status);
+        if (!dep) return false;
+        // A settled row keeps only the cells that move no money — the server
+        // refuses the rest, so offering them would be a cell that looks
+        // editable and then errors.
+        if (!DEPOSIT_EDITABLE_STATUS.has(dep.status)) {
+          return colIndex === COL.deposit.bank;
+        }
+        return true;
       }
       if (tab === "withdrawal") {
         if (!WITHDRAWAL_EDITABLE_COLS.has(colIndex)) return false;
@@ -2848,11 +2906,13 @@ export default function TransactionsPage() {
     const failures = new Map<string, string>(commitErrors);
     // Sequential on purpose: keeps server order = sheet order, and one clear
     // error per row instead of a burst of races.
+    const warnings: string[] = [];
     for (const job of jobs) {
       const res = await post(path, job.parsed.payload);
       if (res.ok) {
         succeeded.add(job.i);
         failures.delete(draftKey(job.d));
+        if (res.warning) warnings.push(res.warning);
       } else {
         failures.set(draftKey(job.d), res.error ?? "Save failed");
       }
@@ -2879,6 +2939,11 @@ export default function TransactionsPage() {
       );
     } else {
       toast.success(`${succeeded.size} ${noun}${succeeded.size === 1 ? "" : "s"} saved`);
+    }
+    // Saved-but-unfinished rows: one warning per distinct reason, so five
+    // deposits short on the same kiosk say it once.
+    for (const w of new Set(warnings)) {
+      toast.warning(`${w} — saved, waiting at Processing.`, { duration: 10_000 });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [saving, isViewer, drafts, parseDraft, tab, commitErrors, draftKey, refresh, loadLedgers]);

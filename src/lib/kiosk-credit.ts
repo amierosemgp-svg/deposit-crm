@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { providerBoAccounts } from "@/db/schema";
 
@@ -41,7 +41,20 @@ export async function moveKioskCredit(
   const { companyEntityId, gameName, delta } = input;
   if (companyEntityId === null || !gameName || delta === 0) return 0;
 
-  const [bo] = await txn
+  /**
+   * A company can hold more than one back-office login for the same game —
+   * RajaClub runs two on five of theirs, and in every pair one sits empty.
+   * Taking whichever row the database happened to return first meant a top-up
+   * could be refused for want of credit while the game's other account held
+   * RM 24,050, or be charged to an account that wasn't the one CS used.
+   *
+   * So the accounts are read as one float, richest first, and a debit comes
+   * out of the first account that can cover it on its own. Never split across
+   * two: each row mirrors a real back-office balance CS tops up by hand, and a
+   * half-here-half-there debit matches neither of them. When no single account
+   * can cover it the caller is told what each holds.
+   */
+  const rows = await txn
     .select()
     .from(providerBoAccounts)
     .where(
@@ -51,16 +64,24 @@ export async function moveKioskCredit(
         eq(providerBoAccounts.status, "active"),
       ),
     )
+    .orderBy(desc(providerBoAccounts.current_credit), asc(providerBoAccounts.bo_account_id))
     .for("update");
-  if (!bo) return 0;
+  if (!rows.length) return 0;
 
-  const next = +(bo.current_credit + delta).toFixed(2);
-  if (next < 0) {
+  // Returning credit goes to the account holding the most — the same one a
+  // debit would have come from, so a pull and its top-up meet in one place.
+  const bo = delta > 0 ? rows[0] : rows.find((r) => r.current_credit + delta >= 0);
+  if (!bo) {
+    const held = rows
+      .map((r) => `${r.bo_label ?? `#${r.bo_account_id}`} ${r.current_credit.toFixed(2)}`)
+      .join(", ");
     throw new InsufficientKioskCreditError(
       `Insufficient BO credit for ${gameName} ` +
-        `(${bo.current_credit.toFixed(2)} available, ${Math.abs(delta).toFixed(2)} needed)`,
+        `(${Math.abs(delta).toFixed(2)} needed; accounts hold ${held})`,
     );
   }
+
+  const next = +(bo.current_credit + delta).toFixed(2);
 
   await txn
     .update(providerBoAccounts)

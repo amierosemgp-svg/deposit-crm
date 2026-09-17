@@ -1156,6 +1156,10 @@ export const gameTransfers = pgTable("game_transfers", {
     scale: 2,
     mode: "number",
   }).notNull(),
+  // true = CS moved the credit in the back-office themselves; false = the
+  // agent did it. Null on rows written before the column existed, which the
+  // sheet shows as blank rather than guessing — see the 2026-09-17 migration.
+  skip_bot: boolean("skip_bot"),
   // "Move the whole source wallet." game_credits is a cache that lags the
   // provider, so resolving "all" to a number at request time posts a stale
   // figure — the flag travels to the agent instead, which reads the real

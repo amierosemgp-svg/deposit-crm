@@ -373,6 +373,8 @@ export type GameTransfer = {
   /** Move the whole source balance; the agent discovers the real figure. */
   transfer_all: boolean;
   status: GameTransferStatus;
+  /** true = CS moved it by hand, false = the agent did, null = unrecorded. */
+  skip_bot?: boolean | null;
   /** The agent's reason for the outcome — why it failed, when it failed. */
   note: string | null;
   /** 1 on the first try; bumped each time the stuck-transfer sweep restarts it. */

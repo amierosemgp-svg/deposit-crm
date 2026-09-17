@@ -172,6 +172,7 @@ export async function POST(request: Request) {
           // it actually starts, so a transfer nobody picked up is
           // distinguishable from one genuinely in progress.
           status: skipBot ? "completed" : "pending",
+          skip_bot: skipBot,
           started_at: nowIso,
           ...(skipBot ? { completed_at: nowIso } : {}),
           handled_by_user_id: user.user_id,
