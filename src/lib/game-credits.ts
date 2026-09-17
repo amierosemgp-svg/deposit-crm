@@ -157,3 +157,54 @@ export async function moveGameCredit(
 
 /** The source wallet can't cover the move. Callers map this to a 422. */
 export class InsufficientCreditError extends Error {}
+
+/**
+ * Add to or take from one wallet, and report where it ended up.
+ *
+ * For corrections rather than transactions: re-booking a deposit that was
+ * recorded wrong has to undo a credit that has already been written. Unlike
+ * moveGameCredit this does not refuse to go negative — the correction is the
+ * truth, and a balance that ends below zero says the cached figure and the
+ * provider have parted company, which is worth showing rather than rounding
+ * away. Callers surface that to CS.
+ */
+export async function adjustGameCredit(
+  txn: {
+    select: typeof import("@/db").db.select;
+    insert: typeof import("@/db").db.insert;
+  },
+  input: {
+    playerId: number;
+    gameName: string;
+    gameUsername: string;
+    delta: number;
+    nowIso: string;
+  },
+): Promise<number> {
+  const { playerId, gameName, gameUsername, delta, nowIso } = input;
+  if (delta === 0) return 0;
+
+  const [existing] = await txn
+    .select()
+    .from(gameCredits)
+    .where(creditWhere(playerId, gameName, gameUsername))
+    .for("update");
+
+  const next = +((existing?.current_balance ?? 0) + delta).toFixed(2);
+  await txn
+    .insert(gameCredits)
+    .values({
+      player_id: playerId,
+      // Write back under the spelling already on file, so a case variant can't
+      // fork the balance the unique index forbids.
+      game_name: existing?.game_name ?? gameName,
+      game_username: existing?.game_username ?? gameUsername,
+      current_balance: next,
+      last_updated_at: nowIso,
+    })
+    .onConflictDoUpdate({
+      target: [...CREDIT_CONFLICT_TARGET],
+      set: { current_balance: next, last_updated_at: nowIso },
+    });
+  return next;
+}

@@ -292,6 +292,8 @@ export type Deposit = {
   /** Which login under selected_game this top-up targets. Null = first account. */
   selected_game_username?: string | null;
   status: DepositStatus;
+  /** Corrections made after saving, newest first — shown in Remark. */
+  edit_note?: string | null;
   source?: TransactionSource;
   skip_bot?: boolean;
   matched_at?: string | null;
@@ -325,6 +327,8 @@ export type Withdrawal = {
   withdraw_all?: boolean;
   credit_pulled_amount: number;
   status: WithdrawalStatus;
+  /** Corrections made after saving, newest first — shown in Remark. */
+  edit_note?: string | null;
   source?: TransactionSource;
   skip_bot?: boolean;
   handled_by_user_id?: number | null;

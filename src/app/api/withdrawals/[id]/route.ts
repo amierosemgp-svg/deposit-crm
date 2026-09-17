@@ -4,7 +4,7 @@ import { db } from "@/db";
 import { players, transactions, withdrawals } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
-import { describeChanges, diffFields, logActivity } from "@/lib/activity-log";
+import { appendEditNote, describeChanges, diffFields, logActivity } from "@/lib/activity-log";
 import { canonicalise } from "@/lib/game-name";
 
 const patchSchema = z.object({
@@ -132,6 +132,13 @@ export async function PATCH(
         targetLabel: `WD-${withdrawalId}`,
         changes,
       });
+      // …and on the row, which is where the sheet asks the question.
+      const [withNote] = await db
+        .update(withdrawals)
+        .set({ edit_note: appendEditNote(row.edit_note, user, changes) })
+        .where(eq(withdrawals.withdrawal_id, withdrawalId))
+        .returning();
+      return Response.json({ withdrawal: withNote ?? updated });
     }
 
     return Response.json({ withdrawal: updated });

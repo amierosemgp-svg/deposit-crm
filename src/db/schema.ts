@@ -835,6 +835,10 @@ export const deposits = pgTable("deposits", {
   assigned_at: timestamp("assigned_at", { withTimezone: true, mode: "string" }),
   game_topup_reference: varchar("game_topup_reference", { length: 80 }),
   receipt_url: text("receipt_url"),
+  // A one-line trail of corrections made after the row was saved, newest
+  // first — what the worksheet shows in Remark. The full diff is in
+  // activity_log; this is the part that fits in a cell.
+  edit_note: text("edit_note"),
   created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
     .notNull()
     .defaultNow(),
@@ -890,6 +894,8 @@ export const withdrawals = pgTable("withdrawals", {
     () => bankAccounts.account_id,
   ),
   proof_url: text("proof_url"),
+  // See deposits.edit_note.
+  edit_note: text("edit_note"),
   paid_at: timestamp("paid_at", { withTimezone: true, mode: "string" }),
   created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
     .notNull()

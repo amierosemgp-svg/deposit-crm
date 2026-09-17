@@ -35,7 +35,12 @@ export type Notification = {
   createdAt: number;
 };
 
-export type MutationResult = { ok: boolean; error?: string };
+export type MutationResult = {
+  ok: boolean;
+  error?: string;
+  /** Saved, but something about it needs saying — see the deposit PATCH. */
+  warning?: string;
+};
 
 async function api<T = unknown>(
   path: string,
@@ -682,7 +687,7 @@ export const useStore = create<Store>((set, get) => {
           return next;
         }),
       });
-      const res = await api<{ deposit: Deposit }>(`/api/deposits/${depositId}`, {
+      const res = await api<{ deposit: Deposit; warning?: string }>(`/api/deposits/${depositId}`, {
         method: "PATCH",
         body: JSON.stringify(patch),
       });
@@ -701,7 +706,7 @@ export const useStore = create<Store>((set, get) => {
           ),
         });
       }
-      return { ok: true };
+      return { ok: true, ...(res.data?.warning ? { warning: res.data.warning } : {}) };
     },
 
     approveDeposit: async (depositId) => {

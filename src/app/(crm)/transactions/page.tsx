@@ -13,7 +13,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useStore } from "@/lib/store";
+import { useStore, type MutationResult } from "@/lib/store";
 import { formatClock, formatRelative, formatRM } from "@/lib/format";
 import { extractSenderName } from "@/lib/bank-remark";
 import { usePlayerProfile } from "@/components/player-name-link";
@@ -1248,11 +1248,18 @@ export default function TransactionsPage() {
             // row only knows its date.
             date: sheetDate(d.deposit_date),
             time: d.deposit_time_known ? formatClock(d.deposit_date) : "",
-            remark:
+            // Who the money is from, and — once someone has corrected the
+            // row — who changed what. The correction goes first: it is the
+            // thing being looked for when a figure is questioned.
+            remark: [
+              d.edit_note,
               p?.full_name ??
-              extractSenderName(d.bank_description) ??
-              d.bank_account_holder ??
-              "",
+                extractSenderName(d.bank_description) ??
+                d.bank_account_holder ??
+                "",
+            ]
+              .filter(Boolean)
+              .join(" · "),
             bankdesc: d.bank_description ?? "",
           }),
         };
@@ -1293,7 +1300,7 @@ export default function TransactionsPage() {
             status: WITHDRAWAL_STATUS_LABEL[w.status],
             date: sheetDate(w.created_at),
             time: formatClock(w.created_at),
-            remark2: p?.full_name ?? "",
+            remark2: [w.edit_note, p?.full_name ?? ""].filter(Boolean).join(" · "),
           }),
         };
       })
@@ -2215,13 +2222,12 @@ export default function TransactionsPage() {
         if (!DEPOSIT_EDITABLE_COLS.has(colIndex)) return false;
         const dep = depositById.get(Number(rows[rowIndex]?.id));
         if (!dep) return false;
-        // A settled row keeps only the cells that move no money — the server
-        // refuses the rest, so offering them would be a cell that looks
-        // editable and then errors.
-        if (!DEPOSIT_EDITABLE_STATUS.has(dep.status)) {
-          return colIndex === COL.deposit.bank;
-        }
-        return true;
+        if (DEPOSIT_EDITABLE_STATUS.has(dep.status)) return true;
+        // A completed row a person entered is still correctable: the server
+        // unwinds the credit it booked and lays down the new one. A row the
+        // agent completed is its own record of what happened at the provider,
+        // so it stays frozen — and so does a failed one, which booked nothing.
+        return dep.status === "completed" && !!dep.skip_bot;
       }
       if (tab === "withdrawal") {
         if (!WITHDRAWAL_EDITABLE_COLS.has(colIndex)) return false;
@@ -2317,6 +2323,16 @@ export default function TransactionsPage() {
       const dep = depositById.get(Number(rows[rowIndex]?.id));
       if (!dep) return;
       const v = value.trim();
+      /**
+       * Correcting a completed row unwinds the credit it booked. When the
+       * player has already spent some of it the wallet lands below zero, and
+       * the server says so — that is the desk's cue to sync the kiosk, so it
+       * gets its own line rather than being folded into a quiet success.
+       */
+      const report = (res: MutationResult, fallback: string) => {
+        if (!res.ok) toast.error(res.error ?? fallback);
+        else if (res.warning) toast.warning(res.warning, { duration: 10_000 });
+      };
       if (colIndex === COL.deposit.member) {
         const pl = playerByCode.get(v.toLowerCase());
         if (!pl) {
@@ -2324,11 +2340,11 @@ export default function TransactionsPage() {
           return;
         }
         const res = await updateDepositDraft(dep.deposit_id, { player_id: pl.player_id });
-        if (!res.ok) toast.error(res.error ?? "Failed to assign player");
+        report(res, "Failed to assign player");
       } else if (colIndex === COL.deposit.product) {
         if (!v) {
           const res = await updateDepositDraft(dep.deposit_id, { selected_game: null });
-          if (!res.ok) toast.error(res.error ?? "Failed to clear game");
+          report(res, "Failed to clear game");
           return;
         }
         const g = gameByName.get(v.toLowerCase());
@@ -2337,7 +2353,7 @@ export default function TransactionsPage() {
           return;
         }
         const res = await updateDepositDraft(dep.deposit_id, { selected_game: g });
-        if (!res.ok) toast.error(res.error ?? "Failed to set game");
+        report(res, "Failed to set game");
       } else if (colIndex === COL.deposit.bonuspct) {
         const pct = parseBonusPct(value);
         if (pct === null) {
@@ -2345,12 +2361,12 @@ export default function TransactionsPage() {
           return;
         }
         const res = await updateDepositDraft(dep.deposit_id, { bonus_percentage: pct });
-        if (!res.ok) toast.error(res.error ?? "Failed to set bonus");
+        report(res, "Failed to set bonus");
       } else if (colIndex === COL.deposit.username) {
         const res = await updateDepositDraft(dep.deposit_id, {
           selected_game_username: v || null,
         });
-        if (!res.ok) toast.error(res.error ?? "Failed to set the kiosk login");
+        report(res, "Failed to set the kiosk login");
       } else if (colIndex === COL.deposit.amount) {
         const amt = parseAmount(v);
         if (amt === null || amt <= 0) {
@@ -2360,14 +2376,14 @@ export default function TransactionsPage() {
         // The server re-bases the bonus on the new figure, so a corrected
         // amount can't leave a bonus struck on the old one.
         const res = await updateDepositDraft(dep.deposit_id, { deposit_amount: amt });
-        if (!res.ok) toast.error(res.error ?? "Failed to set the amount");
+        report(res, "Failed to set the amount");
       } else if (colIndex === COL.deposit.bank) {
         if (!v) {
           toast.error("Bank is required");
           return;
         }
         const res = await updateDepositDraft(dep.deposit_id, { bank_name: v });
-        if (!res.ok) toast.error(res.error ?? "Failed to set the bank");
+        report(res, "Failed to set the bank");
       }
     },
     [

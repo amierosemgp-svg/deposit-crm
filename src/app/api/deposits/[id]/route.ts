@@ -5,7 +5,14 @@ import { deposits, players, transactions } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import { canOverrideEligibility, resolveBonusForDeposit } from "@/lib/bonus";
-import { describeChanges, diffFields, logActivity } from "@/lib/activity-log";
+import { rebookCompletedDeposit } from "@/lib/deposit-complete";
+import { InsufficientKioskCreditError } from "@/lib/kiosk-credit";
+import {
+  appendEditNote,
+  describeChanges,
+  diffFields,
+  logActivity,
+} from "@/lib/activity-log";
 
 const patchSchema = z.object({
   // The bonus to apply; null clears it back to no bonus.
@@ -65,27 +72,27 @@ export async function PATCH(
     const body = parsed.data;
 
     /**
-     * A settled deposit is mostly frozen — but not entirely.
+     * A completed deposit is correctable, so long as a person did it.
      *
-     * Manual rows now complete the moment they are saved, which is what the
-     * desk wants and also means "correct the row you just typed" would have
-     * died with the old blanket refusal. So the fields that move no money stay
-     * editable after completion: which bank took the payment, and when. The
-     * ones that do — amount, bonus, player, game, kiosk login — are refused,
-     * because the credit has already landed in a specific wallet out of a
-     * specific float and an edit here would silently disagree with both.
+     * Manual rows complete the moment they are saved, so "fix the row you just
+     * typed" is the normal case, not an exception — and the money it moved is
+     * unwound and re-laid below rather than left to disagree with the row.
+     *
+     * A row the agent completed is not editable: its booking is the agent's
+     * own record of what it did at the provider, and rewriting it here would
+     * leave the CRM claiming something the kiosk never saw. Same for a failed
+     * row, which never booked anything to correct.
      */
-    const SETTLED_EDITABLE = new Set(["bank_name", "deposit_date"]);
-    if (["completed", "failed"].includes(row.status)) {
-      const touched = Object.keys(body).filter((k) => body[k as keyof typeof body] !== undefined);
-      const booked = touched.filter((k) => !SETTLED_EDITABLE.has(k));
-      if (booked.length) {
-        return jsonError(
-          `Deposit is already ${row.status} — only the bank and date can be corrected now ` +
-            `(not ${booked.join(", ")}). Reverse it and enter it again to change the money.`,
-          409,
-        );
-      }
+    const settled = row.status === "completed";
+    const rebooking = settled && !!row.skip_bot;
+    if (settled && !row.skip_bot) {
+      return jsonError(
+        "That deposit was completed by the agent — only manual rows can be corrected here",
+        409,
+      );
+    }
+    if (row.status === "failed") {
+      return jsonError("Deposit is already failed", 409);
     }
 
     let playerPatch = {};
@@ -210,25 +217,51 @@ export async function PATCH(
       };
     }
 
-    const [updated] = await db
-      .update(deposits)
-      .set({
-        ...playerPatch,
-        ...bonusPatch,
-        ...amountPatch,
-        ...(body.bank_name !== undefined ? { bank_name: body.bank_name } : {}),
-        ...(body.selected_game_username !== undefined
-          ? { selected_game_username: body.selected_game_username }
-          : {}),
-        ...(body.deposit_date !== undefined
-          ? { deposit_date: body.deposit_date, deposit_time_known: true }
-          : {}),
-        selected_game:
-          body.selected_game !== undefined ? body.selected_game : row.selected_game,
-        updated_at: new Date().toISOString(),
-      })
-      .where(eq(deposits.deposit_id, depositId))
-      .returning();
+    const nowIso = new Date().toISOString();
+    const patch = {
+      ...playerPatch,
+      ...bonusPatch,
+      ...amountPatch,
+      ...(body.bank_name !== undefined ? { bank_name: body.bank_name } : {}),
+      ...(body.selected_game_username !== undefined
+        ? { selected_game_username: body.selected_game_username }
+        : {}),
+      ...(body.deposit_date !== undefined
+        ? { deposit_date: body.deposit_date, deposit_time_known: true }
+        : {}),
+      selected_game:
+        body.selected_game !== undefined ? body.selected_game : row.selected_game,
+      updated_at: nowIso,
+    };
+
+    /**
+     * The correction and its re-booking commit together. Half of this — a row
+     * that says RM 50 over credit of RM 550 — is worse than either outcome.
+     */
+    const { updated, negativeWallets } = await db.transaction(async (txn) => {
+      const [saved] = await txn
+        .update(deposits)
+        .set(patch)
+        .where(eq(deposits.deposit_id, depositId))
+        .returning();
+
+      if (!rebooking) return { updated: saved, negativeWallets: [] };
+      const moved =
+        saved.total_amount !== row.total_amount ||
+        saved.deposit_amount !== row.deposit_amount ||
+        saved.selected_game !== row.selected_game ||
+        saved.selected_game_username !== row.selected_game_username ||
+        saved.player_id !== row.player_id;
+      if (!moved) return { updated: saved, negativeWallets: [] };
+
+      const { negativeWallets } = await rebookCompletedDeposit(txn, {
+        before: row,
+        after: saved,
+        userId: user.user_id,
+        nowIso,
+      });
+      return { updated: saved, negativeWallets };
+    });
 
     // Audit each draft edit that actually changed a value. amount = 0 because
     // no money moves on a draft edit (that happens at approval).
@@ -302,6 +335,7 @@ export async function PATCH(
         player_username: updated.player_username,
       },
     );
+    let edited = updated;
     if (changes.length) {
       await logActivity({
         category: "transaction",
@@ -314,10 +348,33 @@ export async function PATCH(
         targetLabel: updated.transaction_ref,
         changes,
       });
+      // The same sentence, on the row, because that is where it gets read.
+      const [withNote] = await db
+        .update(deposits)
+        .set({ edit_note: appendEditNote(row.edit_note, user, changes) })
+        .where(eq(deposits.deposit_id, depositId))
+        .returning();
+      edited = withNote ?? updated;
     }
 
-    return Response.json({ deposit: updated });
+    return Response.json({
+      deposit: edited,
+      ...(negativeWallets.length
+        ? {
+            warning:
+              `Corrected, but the player has already spent some of it — ` +
+              negativeWallets
+                .map(
+                  (w) =>
+                    `${w.game}${w.login ? ` ${w.login}` : ""} is now ${w.balance.toFixed(2)}`,
+                )
+                .join(", ") +
+              `. Sync the kiosk balance.`,
+          }
+        : {}),
+    });
   } catch (e) {
+    if (e instanceof InsufficientKioskCreditError) return jsonError(e.message, 422);
     return (
       authErrorResponse(e) ?? (console.error(e), jsonError("Server error", 500))
     );
