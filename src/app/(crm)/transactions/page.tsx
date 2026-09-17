@@ -2925,7 +2925,16 @@ export default function TransactionsPage() {
       parsed: { ok: true; payload: Record<string, unknown> };
     }>;
     if (!jobs.length) {
-      toast.info("No ready rows to save — fix the rows marked ! first.");
+      // The reason was only ever a tooltip on the ! marker, which is a hard
+      // place to find an answer when the save just refused. Say it outright.
+      const why = drafts
+        .map((d, i) => ({ d, i, parsed: parseDraft(d) }))
+        .filter((j) => !isBlankDraft(tab, j.d) && !j.parsed.ok)
+        .map((j) => `Row ${j.i + 1}: ${(j.parsed as { error?: string }).error ?? "incomplete"}`);
+      toast.error("No rows saved", {
+        description: why.length ? why.slice(0, 3).join("\n") : "Nothing filled in yet.",
+        duration: 15_000,
+      });
       return;
     }
     setSaving(true);
@@ -2962,9 +2971,20 @@ export default function TransactionsPage() {
       expense: "expense",
     }[tab];
     if (failed) {
-      toast.error(
-        `${succeeded.size} saved, ${failed} rejected — rejected rows stay below with the reason on the ! marker.`,
-      );
+      // One line per distinct reason — five rows refused for the same reason
+      // is one thing to fix, not five.
+      const reasons = [
+        ...new Set(
+          jobs
+            .filter((j) => !succeeded.has(j.i))
+            .map((j) => failures.get(draftKey(j.d)))
+            .filter((r): r is string => !!r),
+        ),
+      ];
+      toast.error(`${succeeded.size} saved, ${failed} rejected`, {
+        description: reasons.slice(0, 3).join("\n") || "Rejected rows stay below, marked !.",
+        duration: 15_000,
+      });
     } else {
       toast.success(`${succeeded.size} ${noun}${succeeded.size === 1 ? "" : "s"} saved`);
     }
