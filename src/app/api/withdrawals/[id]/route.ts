@@ -6,6 +6,7 @@ import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import { appendEditNote, describeChanges, diffFields, logActivity } from "@/lib/activity-log";
 import { canonicalise } from "@/lib/game-name";
+import { rebookPulledWithdrawal } from "@/lib/withdrawal-pull";
 
 const patchSchema = z.object({
   requested_amount: z.number().positive().optional(),
@@ -52,9 +53,21 @@ export async function PATCH(
     ) {
       throw new AuthError(403, "Withdrawal is outside your company scope");
     }
-    if (row.status !== "requested") {
+    /**
+     * Correctable while it is still a request, and — for a row a person
+     * handled — after the pull too, because a manual row is created already
+     * pulled and "fix what I just typed" would otherwise be impossible. The
+     * pull is re-booked below so the float and the row keep saying the same
+     * thing. Once it is paid, money has left a bank account and the fix is a
+     * reversal, not an edit.
+     */
+    const pulled = row.status === "credits_pulled";
+    const rebooking = pulled && !!row.skip_bot;
+    if (!(row.status === "requested" || rebooking)) {
       return jsonError(
-        `Withdrawal is already ${row.status} — reject and re-enter it instead`,
+        row.status === "credits_pulled"
+          ? "The agent pulled that one — only manual rows can be corrected here"
+          : `Withdrawal is already ${row.status} — reject and re-enter it instead`,
         409,
       );
     }
@@ -70,24 +83,40 @@ export async function PATCH(
     const gameName =
       body.game_name !== undefined ? await canonicalise(body.game_name) : undefined;
 
-    const [updated] = await db
-      .update(withdrawals)
-      .set({
-        ...(body.requested_amount !== undefined
-          ? { requested_amount: body.requested_amount }
-          : {}),
-        ...(gameName !== undefined ? { game_name: gameName } : {}),
-        ...(body.game_username !== undefined
-          ? { game_username: body.game_username }
-          : {}),
-        ...(body.bank_name !== undefined ? { bank_name: body.bank_name } : {}),
-        ...(body.bank_account_number !== undefined
-          ? { bank_account_number: body.bank_account_number }
-          : {}),
-        updated_at: new Date().toISOString(),
-      })
-      .where(eq(withdrawals.withdrawal_id, withdrawalId))
-      .returning();
+    const patch = {
+      ...(body.requested_amount !== undefined
+        ? {
+            requested_amount: body.requested_amount,
+            // On a pulled row the two figures are the same claim: CS pulled
+            // what they typed. Leaving the pulled amount behind would pay the
+            // player one number and account for another.
+            ...(rebooking ? { credit_pulled_amount: body.requested_amount } : {}),
+          }
+        : {}),
+      ...(gameName !== undefined ? { game_name: gameName } : {}),
+      ...(body.game_username !== undefined ? { game_username: body.game_username } : {}),
+      ...(body.bank_name !== undefined ? { bank_name: body.bank_name } : {}),
+      ...(body.bank_account_number !== undefined
+        ? { bank_account_number: body.bank_account_number }
+        : {}),
+      updated_at: new Date().toISOString(),
+    };
+
+    const updated = await db.transaction(async (txn) => {
+      const [saved] = await txn
+        .update(withdrawals)
+        .set(patch)
+        .where(eq(withdrawals.withdrawal_id, withdrawalId))
+        .returning();
+      const moved =
+        saved.credit_pulled_amount !== row.credit_pulled_amount ||
+        saved.game_name !== row.game_name ||
+        saved.game_username !== row.game_username;
+      if (rebooking && moved && player) {
+        await rebookPulledWithdrawal(txn, { before: row, after: saved, player, userId: user.user_id });
+      }
+      return saved;
+    });
 
     const changes = diffFields(
       {

@@ -1,4 +1,4 @@
-import { desc, eq, inArray } from "drizzle-orm";
+import { desc, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { bankAccounts, entities, leaderTransfers, transactions } from "@/db/schema";
@@ -50,7 +50,7 @@ export async function GET() {
   }
 }
 
-/** POST /api/leader-transfers — record a transfer from one leader to another. */
+/** POST /api/leader-transfers — record a transfer between leaders, or one leader's own accounts. */
 export async function POST(request: Request) {
   try {
     const user = await requireUser();
@@ -59,8 +59,32 @@ export async function POST(request: Request) {
     if (!parsed.success) return jsonError("Invalid payload");
     const body = parsed.data;
 
+    /**
+     * One leader can move money to themselves — bank to cash, cash to bank,
+     * one account to another. That is a real thing they do and it belongs in
+     * the same ledger as a settlement between two leaders.
+     *
+     * What is still refused is a row that moves nothing: the same leader with
+     * the same end on both sides, or with neither end named, which records a
+     * sum leaving and arriving in the same place. Between two leaders, unnamed
+     * ends stay allowed — that is the "not recorded" state every row written
+     * before the columns existed is in.
+     */
     if (body.from_leader_entity_id === body.to_leader_entity_id) {
-      return jsonError("From and to leader must differ");
+      const sameAccount =
+        body.from_account_id != null && body.from_account_id === body.to_account_id;
+      const bothCash = !!body.from_cash && !!body.to_cash;
+      const neither =
+        body.from_account_id == null &&
+        body.to_account_id == null &&
+        !body.from_cash &&
+        !body.to_cash;
+      if (sameAccount || bothCash || neither) {
+        return jsonError(
+          "A leader moving money to themselves needs two different ends — " +
+            "one account to another, or between an account and cash",
+        );
+      }
     }
 
     // Both ends must be actual leader entities.

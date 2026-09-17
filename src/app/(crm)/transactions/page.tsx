@@ -2094,7 +2094,6 @@ export default function TransactionsPage() {
       if (!fromId) return { ok: false, error: `Unknown leader "${fromCell}"` };
       const toId = leaderByName.get(toCell.toLowerCase());
       if (!toId) return { ok: false, error: `Unknown leader "${toCell}"` };
-      if (fromId === toId) return { ok: false, error: "From and To are the same leader" };
       const amt = parseAmount(d[c.amount] ?? "");
       if (amt === null || amt <= 0) return { ok: false, error: `Bad amount "${d[c.amount]}"` };
       const note = (d[c.note] ?? "").trim();
@@ -2106,6 +2105,20 @@ export default function TransactionsPage() {
       const toEnd = resolveTransferEnd(toEndCell);
       if (!toEnd.ok)
         return { ok: false, error: `Unknown account "${toEndCell}" — pick one from the list, or Cash` };
+      // One leader moving money to themselves is fine — bank to cash, cash to
+      // bank, one account to another — as long as the two ends differ. Same
+      // leader, same end moves nothing.
+      if (
+        fromId === toId &&
+        ((fromEnd.account_id != null && fromEnd.account_id === toEnd.account_id) ||
+          (fromEnd.cash && toEnd.cash) ||
+          (!fromEndCell && !toEndCell))
+      ) {
+        return {
+          ok: false,
+          error: `${fromCell} to themselves needs two different ends — account to account, or account to Cash`,
+        };
+      }
       return {
         ok: true,
         payload: {
@@ -2243,10 +2256,13 @@ export default function TransactionsPage() {
       }
       if (tab === "withdrawal") {
         if (!WITHDRAWAL_EDITABLE_COLS.has(colIndex)) return false;
-        // Only before the pull: after that the credit has left the wallet and
-        // an edit would disagree with what actually moved.
         const w = withdrawalById.get(Number(rows[rowIndex]?.id));
-        return !!w && w.status === "requested";
+        if (!w) return false;
+        if (w.status === "requested") return true;
+        // A manual row is created already pulled, so it stays correctable —
+        // the server re-books the float and the wallet. The agent's own pulls
+        // stay as the agent reported them, and a paid row has left a bank.
+        return w.status === "credits_pulled" && !!w.skip_bot;
       }
       return false;
     },

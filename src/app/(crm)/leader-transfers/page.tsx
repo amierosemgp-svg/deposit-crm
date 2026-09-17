@@ -135,12 +135,13 @@ export default function LeaderTransfersPage() {
         <div>
           <h1 className="text-2xl font-semibold">Leader Transfers</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Settlements between leaders — kept separate from expenses.
+            Settlements between leaders, and a leader&apos;s own moves between bank
+            and cash — kept separate from expenses.
           </p>
         </div>
         <Button
           onClick={() => setOpen(true)}
-          disabled={leaders.length < 2}
+          disabled={leaders.length < 1}
           className="cursor-pointer gap-1.5"
         >
           <Plus className="h-4 w-4" />
@@ -323,7 +324,13 @@ function NewTransferDialog({
   };
 
   const amt = Number(amount.replace(/[,\s]/g, ""));
-  const valid = from && to && from !== to && Number.isFinite(amt) && amt > 0;
+  /**
+   * A leader can move money to themselves — between two of their own accounts,
+   * or between an account and cash. Only a row whose two ends are the same
+   * place moves nothing, and that is what's refused.
+   */
+  const sameEnd = from === to && (fromEnd === toEnd || (!fromEnd && !toEnd));
+  const valid = !!from && !!to && !sameEnd && Number.isFinite(amt) && amt > 0;
 
   async function submit() {
     if (!valid || busy) return;
@@ -376,7 +383,7 @@ function NewTransferDialog({
                 </SelectTrigger>
                 <SelectContent>
                   {leaders.map((l) => (
-                    <SelectItem key={l.id} value={String(l.id)} disabled={String(l.id) === to}>
+                    <SelectItem key={l.id} value={String(l.id)}>
                       {l.name}
                     </SelectItem>
                   ))}
@@ -397,7 +404,7 @@ function NewTransferDialog({
                 </SelectTrigger>
                 <SelectContent>
                   {leaders.map((l) => (
-                    <SelectItem key={l.id} value={String(l.id)} disabled={String(l.id) === from}>
+                    <SelectItem key={l.id} value={String(l.id)}>
                       {l.name}
                     </SelectItem>
                   ))}

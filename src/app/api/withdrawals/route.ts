@@ -5,6 +5,7 @@ import { gameCredits, players, transactions, withdrawals } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import { checkWithdrawalMinimum } from "@/lib/withdrawal-limits";
+import { bookManualPull } from "@/lib/withdrawal-pull";
 
 const createSchema = z.object({
   player_id: z.number().int().positive(),
@@ -84,44 +85,84 @@ export async function POST(request: Request) {
     // 0 is the placeholder for "as much as is there"; the pull writes the truth.
     const requested = withdrawAll ? 0 : body.requested_amount!;
 
-    const [created] = await db
-      .insert(withdrawals)
-      .values({
-        player_id: body.player_id,
-        requested_amount: requested,
-        withdraw_all: withdrawAll,
-        game_name: body.game_name,
-        game_username: body.game_username,
-        bank_name: body.bank_name,
-        bank_account_number: body.bank_account_number,
-        source: "manual",
-        skip_bot: body.skip_bot ?? true,
-        handled_by_user_id: user.user_id,
-        ...(body.assign_to_me
-          ? { assigned_to_user_id: user.user_id, assigned_at: new Date().toISOString() }
-          : {}),
-      })
-      .returning();
+    const skipBot = body.skip_bot ?? true;
+    const nowIso = new Date().toISOString();
 
-    await db.insert(transactions).values({
-      player_id: body.player_id,
-      entity_id: player.company_entity_id,
-      type: "withdrawal",
-      amount: requested,
-      game_name: body.game_name,
-      reference_id: created.withdrawal_id,
-      user_id: user.user_id,
-      details: {
-        action: "requested",
-        source: "manual",
-        withdraw_all: withdrawAll,
-        // What the CRM believed the wallet held at the time. Kept because it
-        // is a cache — when the pulled figure differs, this says by how much.
-        known_balance: balance,
-      },
+    /**
+     * A manual withdrawal is already pulled by the time it is typed.
+     *
+     * CS opens the kiosk, takes the player's credit out, types the row, then
+     * pays the bank — so "requested" was a state the row was never really in.
+     * It is created at credits_pulled with the credit booked back into the
+     * company's float, leaving one honest step left: marking it paid, which is
+     * the part that has not happened yet.
+     *
+     * Two rows can't take that shortcut: an agent row (the agent does the
+     * pulling and reports the figure back), and a withdraw-all, where nobody
+     * yet knows what the wallet held — those wait at "requested" as before.
+     */
+    const autoPull = skipBot && !withdrawAll && requested > 0;
+
+    const { created, pulled } = await db.transaction(async (txn) => {
+      const [row] = await txn
+        .insert(withdrawals)
+        .values({
+          player_id: body.player_id,
+          requested_amount: requested,
+          withdraw_all: withdrawAll,
+          game_name: body.game_name,
+          game_username: body.game_username,
+          bank_name: body.bank_name,
+          bank_account_number: body.bank_account_number,
+          source: "manual",
+          skip_bot: skipBot,
+          handled_by_user_id: user.user_id,
+          ...(body.assign_to_me
+            ? { assigned_to_user_id: user.user_id, assigned_at: nowIso }
+            : {}),
+        })
+        .returning();
+
+      await txn.insert(transactions).values({
+        player_id: body.player_id,
+        entity_id: player.company_entity_id,
+        type: "withdrawal",
+        amount: requested,
+        game_name: body.game_name,
+        reference_id: row.withdrawal_id,
+        user_id: user.user_id,
+        details: {
+          action: "requested",
+          source: "manual",
+          withdraw_all: withdrawAll,
+          // What the CRM believed the wallet held at the time. Kept because it
+          // is a cache — when the pulled figure differs, this says by how much.
+          known_balance: balance,
+        },
+      });
+
+      if (!autoPull) return { created: row, pulled: false };
+      const done = await bookManualPull(txn, {
+        row,
+        player,
+        pulled: requested,
+        userId: user.user_id,
+        nowIso,
+      });
+      return { created: done, pulled: true };
     });
 
-    return Response.json({ withdrawal: created }, { status: 201 });
+    return Response.json(
+      {
+        withdrawal: created,
+        // Say when the shortcut didn't apply, so "why is this one still
+        // Requested?" is answered where it is asked.
+        ...(!pulled && skipBot && withdrawAll
+          ? { warning: "Saved as Requested — pull it once you know what the wallet held." }
+          : {}),
+      },
+      { status: 201 },
+    );
   } catch (e) {
     return (
       authErrorResponse(e) ?? (console.error(e), jsonError("Server error", 500))
