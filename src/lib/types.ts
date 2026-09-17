@@ -542,6 +542,10 @@ export const EXPENSE_CATEGORIES = [
   "utilities",
   "equipment",
   "marketing",
+  // Fees the bank takes: transfer charges, maintenance, GST on them. Recorded
+  // like any other expense, and — like any expense paid from an account — it
+  // moves that account's balance.
+  "bank_charge",
   "other",
 ] as const;
 

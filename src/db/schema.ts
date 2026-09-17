@@ -214,6 +214,9 @@ export const auditTypeEnum = pgEnum("audit_type", [
   "leader_transfer",
   // Cash a leader took out of a company bank account by hand.
   "bank_cash_out",
+  // An operational cost paid out of a company bank account — bank charges,
+  // rent, a subscription. The ledger line behind that balance moving.
+  "expense",
 ]);
 
 // ---------- Core hierarchy ----------
@@ -1286,6 +1289,7 @@ export const expenseCategoryEnum = pgEnum("expense_category", [
   "utilities",
   "equipment",
   "marketing",
+  "bank_charge",
   "other",
 ]);
 

@@ -39,6 +39,7 @@ const CATEGORY_META: Record<ExpenseCategory, { label: string; cls: string }> = {
   utilities: { label: "Utilities", cls: "bg-cyan-500/10 text-cyan-700" },
   equipment: { label: "Equipment", cls: "bg-slate-500/10 text-slate-700 dark:text-slate-300" },
   marketing: { label: "Marketing", cls: "bg-rose-500/10 text-rose-700 dark:text-rose-300" },
+  bank_charge: { label: "Bank Charge", cls: "bg-orange-500/10 text-orange-700 dark:text-orange-300" },
   other: { label: "Other", cls: "bg-zinc-500/10 text-zinc-700 dark:text-zinc-300" },
 };
 

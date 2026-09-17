@@ -351,14 +351,32 @@ export async function GET(request: Request) {
         .orderBy(desc(botCommands.command_id))
         .limit(20),
 
-      // Operational expenses are admin-only.
+      /**
+       * Expenses are the admin's book — salaries, rent, what the business
+       * costs — except for the one kind the desk has to record itself: bank
+       * charges, which move a bank balance and so have to be enterable by
+       * whoever is reconciling it. Everyone else sees those, for their own
+       * companies, and nothing else.
+       */
       user.role === "super_admin"
         ? db
             .select()
             .from(expenses)
             .orderBy(desc(expenses.expense_date))
             .limit(500)
-        : Promise.resolve([]),
+        : user.companyIds?.length
+          ? db
+              .select()
+              .from(expenses)
+              .where(
+                and(
+                  eq(expenses.category, "bank_charge"),
+                  inArray(expenses.company_entity_id, user.companyIds),
+                ),
+              )
+              .orderBy(desc(expenses.expense_date))
+              .limit(500)
+          : Promise.resolve([]),
 
       boIds.length
         ? db

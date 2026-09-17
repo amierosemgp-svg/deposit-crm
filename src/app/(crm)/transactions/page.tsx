@@ -921,7 +921,14 @@ export default function TransactionsPage() {
       expense: order("expense", {
         assign,
         date: { label: "Date", width: 92, align: "center", entry: true, required: true, placeholder: "31/8/2026" },
-        category: { label: "Category", width: 110, entry: true, required: true, options: [...EXPENSE_CATEGORIES], placeholder: "category" },
+        category: {
+          label: "Category",
+          width: 110,
+          entry: true,
+          required: true,
+          options: isAdmin ? [...EXPENSE_CATEGORIES] : ["bank_charge"],
+          placeholder: isAdmin ? "category" : "bank_charge",
+        },
         description: { label: "Description", width: 260, entry: true, required: true, placeholder: "what it's for" },
         amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "100" },
         company: { label: "Company", width: 150, entry: true, options: companies.map((c) => c.company_name), placeholder: "company" },
@@ -929,7 +936,7 @@ export default function TransactionsPage() {
         notes: { label: "Notes", width: 240, entry: true, placeholder: "notes (optional)" },
       }),
     };
-  }, [games, banks, companies, memberSuggestions, MODE_SUGGESTIONS, ASSIGN_SUGGESTIONS, ACCOUNT_SUGGESTIONS, LEADER_SUGGESTIONS, END_SUGGESTIONS, PAID_FROM_SUGGESTIONS]);
+  }, [games, banks, companies, isAdmin, memberSuggestions, MODE_SUGGESTIONS, ASSIGN_SUGGESTIONS, ACCOUNT_SUGGESTIONS, LEADER_SUGGESTIONS, END_SUGGESTIONS, PAID_FROM_SUGGESTIONS]);
 
   const columns = columnsByTab[tab];
 
@@ -1970,6 +1977,11 @@ export default function TransactionsPage() {
       const cat = category.trim().toLowerCase().replace(/[\s-]+/g, "_");
       if (!(EXPENSE_CATEGORIES as readonly string[]).includes(cat))
         return { ok: false, error: `Unknown category "${category.trim()}"` };
+      if (!isAdmin && cat !== "bank_charge")
+        return {
+          ok: false,
+          error: `Only admins record ${cat.replace(/_/g, " ")} — you can record bank charges`,
+        };
       if (!description.trim()) return { ok: false, error: "Description is required" };
       const amt = parseAmount(amount);
       if (amt === null || amt <= 0) return { ok: false, error: `Bad amount "${amount}"` };
@@ -2002,7 +2014,7 @@ export default function TransactionsPage() {
         },
       };
     },
-    [companyByName, resolvePaidFrom],
+    [companyByName, isAdmin, resolvePaidFrom],
   );
 
   const parseLeaderWithdrawalDraft = useCallback(
@@ -3232,14 +3244,11 @@ export default function TransactionsPage() {
     { key: "freecredit", label: "Free Credit" },
     { key: "transfer", label: "Game Transfer" },
     { key: "leaderwithdrawal", label: "Leader Withdrawal" },
-    // Leader settlements and expenses are super-admin only — same rule as
-    // their own pages.
-    ...(isAdmin
-      ? [
-          { key: "leadertransfer" as const, label: "Leader Transfer" },
-          { key: "expense" as const, label: "Expenses" },
-        ]
-      : []),
+    // Leader settlements stay super-admin, as on their own page. Expenses are
+    // open to everyone now, but only for bank charges — the desk records those
+    // because they move a bank balance nobody else is watching.
+    ...(isAdmin ? [{ key: "leadertransfer" as const, label: "Leader Transfer" }] : []),
+    { key: "expense" as const, label: isAdmin ? "Expenses" : "Bank Charges" },
   ];
 
   return (

@@ -164,6 +164,12 @@ export async function GET(request: Request) {
                           WHERE ${businessDay(sql`c2.occurred_at`)} > s.day
                             AND c2.account_id IN
                                 (SELECT ba.account_id FROM bank_accounts ba WHERE ${bankScope})), 0)
+             -- Expenses paid out of these accounts move the balance too, so
+             -- winding back past one has to add it in like any other payment.
+             + coalesce((SELECT sum(e2.amount)::float8 FROM expenses e2
+                          WHERE ${businessDay(sql`e2.expense_date`)} > s.day
+                            AND e2.paid_from_account_id IN
+                                (SELECT ba.account_id FROM bank_accounts ba WHERE ${bankScope})), 0)
                                                                     AS bank_balance
         FROM days s
         LEFT JOIN dep ON dep.day = s.day
