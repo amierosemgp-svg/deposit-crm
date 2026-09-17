@@ -5,6 +5,7 @@ import type {
   CompanyLeader,
   ApiKeyRow,
   BankAccount,
+  BankAccountRole,
   BankTransfer,
   BonusOption,
   BonusPlan,
@@ -301,7 +302,7 @@ type Store = {
   ) => Promise<MutationResult>;
   addBankAccount: (input: {
     entity_id: number;
-    role: "deposit" | "withdrawal";
+    role: BankAccountRole;
     bank_name: string;
     account_number: string;
     account_holder: string;

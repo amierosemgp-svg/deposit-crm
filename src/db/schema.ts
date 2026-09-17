@@ -70,6 +70,10 @@ export const botStateEnum = pgEnum("bot_state", [
 export const bankAccountRoleEnum = pgEnum("bank_account_role", [
   "deposit",
   "withdrawal",
+  // One account doing both jobs — common where a house runs a single account.
+  // Ask takesDeposits() / paysWithdrawals() rather than comparing to a
+  // literal, or "both" silently drops out of one side.
+  "both",
 ]);
 
 export const bankTransferStatusEnum = pgEnum("bank_transfer_status", [

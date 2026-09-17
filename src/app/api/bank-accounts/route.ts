@@ -8,7 +8,7 @@ import { companyOfEntity, logActivity } from "@/lib/activity-log";
 
 const createSchema = z.object({
   entity_id: z.number().int().positive(),
-  role: z.enum(["deposit", "withdrawal"]),
+  role: z.enum(["deposit", "withdrawal", "both"]),
   bank_name: z.string().min(1),
   account_number: z.string().min(4),
   account_holder: z.string().min(1),

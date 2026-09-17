@@ -22,6 +22,7 @@ import { botForName } from "@/lib/bot-category";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Banknote, Coins, Landmark, Wallet } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { takesDeposits, paysWithdrawals } from "@/lib/types";
 
 /**
  * The order the client's own workbook lists kiosks in.
@@ -169,7 +170,7 @@ export function CompanyInfoPanel({ range }: { range: DateRange }) {
 
   const scope = useMemo(() => {
     const depositAccounts = bankAccounts.filter(
-      (a) => a.status === "active" && a.role === "deposit" && companyInScope(a.entity_id),
+      (a) => a.status === "active" && takesDeposits(a.role) && companyInScope(a.entity_id),
     );
 
     /**
@@ -192,16 +193,23 @@ export function CompanyInfoPanel({ range }: { range: DateRange }) {
     }
     const depositCount = new Map<number, number>();
 
+    /**
+     * A hybrid account is listed on both cards, because it really is available
+     * for both — but it is the same money twice, so it says so. Without the
+     * mark, reading the two totals as a sum would count it once too often.
+     */
+    const roleMark = (a: { role: string }) => (a.role === "both" ? " · both" : "");
+
     const banksDeposit = depositAccounts.map((a) => ({
-      label: a.label || `${a.bank_name}`,
+      label: (a.label || `${a.bank_name}`) + roleMark(a),
       value: a.current_balance,
       online: isBotOnline(botForName(botHealth, a.bank_name)?.last_heartbeat_at),
       accountId: a.account_id,
     }));
     const banksWithdrawal = bankAccounts
-      .filter((a) => a.status === "active" && a.role === "withdrawal" && companyInScope(a.entity_id))
+      .filter((a) => a.status === "active" && paysWithdrawals(a.role) && companyInScope(a.entity_id))
       .map((a) => ({
-        label: a.label || `${a.bank_name}`,
+        label: (a.label || `${a.bank_name}`) + roleMark(a),
         value: a.current_balance,
         online: isBotOnline(botForName(botHealth, a.bank_name)?.last_heartbeat_at),
       }));

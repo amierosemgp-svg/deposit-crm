@@ -412,7 +412,27 @@ export type GameCredit = {
   last_updated_at: string;
 };
 
-export type BankAccountRole = "deposit" | "withdrawal";
+export type BankAccountRole = "deposit" | "withdrawal" | "both";
+
+/**
+ * What an account is for, asked as a question rather than compared to a value.
+ *
+ * A hybrid account answers yes to both. Every `role === "deposit"` in the
+ * codebase was a place where "both" would have been silently excluded — from
+ * the bot's collection list, from the payout picker, from the balance cards —
+ * so the comparison lives here once instead of being spelled out at each site.
+ */
+export const takesDeposits = (role: BankAccountRole): boolean =>
+  role === "deposit" || role === "both";
+export const paysWithdrawals = (role: BankAccountRole): boolean =>
+  role === "withdrawal" || role === "both";
+
+/** How the role reads on screen. */
+export const BANK_ROLE_LABEL: Record<BankAccountRole, string> = {
+  deposit: "Deposit",
+  withdrawal: "Withdrawal",
+  both: "Deposit & Withdrawal",
+};
 
 export type BankAccount = {
   account_id: number;

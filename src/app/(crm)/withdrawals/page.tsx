@@ -47,6 +47,7 @@ import {
   ConfirmActionDialog,
   type SummaryRow,
 } from "@/components/confirm-action-dialog";
+import { paysWithdrawals } from "@/lib/types";
 
 const STATUS_FILTERS: { value: string; tab: string }[] = [
   { value: "requested", tab: "Requested" },
@@ -184,7 +185,7 @@ export default function WithdrawalsPage() {
   );
 
   const payoutAccounts = bankAccounts.filter(
-    (a) => a.role === "withdrawal" && a.status === "active",
+    (a) => paysWithdrawals(a.role) && a.status === "active",
   );
 
   const newPlayer = newPlayerId ? playerById(Number(newPlayerId)) : undefined;

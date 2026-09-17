@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { bankAccounts, entities, leaderTransfers, transactions } from "@/db/schema";
 import { AuthError, authErrorResponse, requireUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
+import { InsufficientBankBalanceError, moveBankBalance } from "@/lib/bank-balance";
 import { logActivity } from "@/lib/activity-log";
 
 const createSchema = z
@@ -44,6 +45,7 @@ export async function GET() {
       .limit(2000);
     return Response.json({ leader_transfers: rows });
   } catch (e) {
+    if (e instanceof InsufficientBankBalanceError) return jsonError(e.message, 422);
     return (
       authErrorResponse(e) ?? (console.error(e), jsonError("Server error", 500))
     );
@@ -138,6 +140,20 @@ export async function POST(request: Request) {
       }
     }
 
+    /**
+     * A named account moves; cash doesn't.
+     *
+     * These rows used to record where money went without moving anything, on
+     * the grounds that a settlement between leaders is their business. But the
+     * moment a row names one of our accounts, it is making a claim about that
+     * account's balance — a leader paying RM 1,000 of their own cash into the
+     * company Maybank means the Maybank has RM 1,000 more, and the CRM saying
+     * otherwise is just wrong. Cash ends move nothing because cash is not a
+     * balance the CRM keeps; it is what the row is telling us about.
+     *
+     * Note this is the same money a Bank Transfer would move if the pair were
+     * also recorded there — record each movement once.
+     */
     const created = await db.transaction(async (txn) => {
       const [row] = await txn
         .insert(leaderTransfers)
@@ -153,6 +169,20 @@ export async function POST(request: Request) {
           created_by_user_id: user.user_id,
         })
         .returning();
+
+      const balances: Record<string, number> = {};
+      if (body.from_account_id != null) {
+        balances.from_balance_after = await moveBankBalance(txn, {
+          accountId: body.from_account_id,
+          delta: -body.amount,
+        });
+      }
+      if (body.to_account_id != null) {
+        balances.to_balance_after = await moveBankBalance(txn, {
+          accountId: body.to_account_id,
+          delta: body.amount,
+        });
+      }
 
       // One audit row for the unified history + the transaction filter. Kept as
       // its own type (never "expense"), scoped to the sending leader.
@@ -174,6 +204,7 @@ export async function POST(request: Request) {
             ? "cash"
             : (accountById.get(body.to_account_id ?? -1)?.label ?? null),
           note: body.note ?? null,
+          ...balances,
         },
       });
 
@@ -192,6 +223,7 @@ export async function POST(request: Request) {
 
     return Response.json({ leader_transfer: created }, { status: 201 });
   } catch (e) {
+    if (e instanceof InsufficientBankBalanceError) return jsonError(e.message, 422);
     return (
       authErrorResponse(e) ?? (console.error(e), jsonError("Server error", 500))
     );

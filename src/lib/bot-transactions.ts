@@ -9,6 +9,7 @@ import {
   withdrawals,
 } from "@/db/schema";
 import { checkWithdrawalMinimum } from "./withdrawal-limits";
+import { takesDeposits } from "@/lib/types";
 
 /** The agent's native transaction shape (see sources/transaction_queue.json). */
 export type BotTransactionInput = {
@@ -137,7 +138,7 @@ export async function resolveReceivingAccount(input: BotTransactionInput) {
   const pool = input.company_entity_id
     ? byBank.filter((a) => a.entity_id === input.company_entity_id)
     : byBank;
-  return pool.find((a) => a.role === "deposit") ?? pool[0] ?? null;
+  return pool.find((a) => takesDeposits(a.role)) ?? pool[0] ?? null;
 }
 
 /** Minimal player fields the agent needs to perform the top-up in the provider. */

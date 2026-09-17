@@ -110,7 +110,7 @@ async function resolveTargets(
     filters.push(eq(bankAccounts.account_id, row.bank_account_id));
   } else {
     // A crawl is about money coming in — payout accounts aren't in scope.
-    filters.push(eq(bankAccounts.role, "deposit"));
+    filters.push(inArray(bankAccounts.role, ["deposit", "both"]));
     // Narrowest of the command's own scope and the key's.
     const scopeId = row.company_entity_id ?? keyCompanyId;
     if (scopeId != null) {

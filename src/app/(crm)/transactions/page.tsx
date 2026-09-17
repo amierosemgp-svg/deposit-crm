@@ -942,6 +942,11 @@ export default function TransactionsPage() {
 
   // ---- drafts, one set per tab so switching loses nothing ----
 
+  /** Commits the cell being typed, so ⌘S doesn't save the row without it. */
+  const flushEdit = useRef<
+    null | (() => { draftIndex: number; col: number; value: string } | null)
+  >(null);
+
   const [draftsByTab, setDraftsByTab] = useState<Record<TabKey, string[][]>>(() => ({
     deposit: padDrafts([], "deposit"),
     withdrawal: padDrafts([], "withdrawal"),
@@ -956,6 +961,7 @@ export default function TransactionsPage() {
   const [commitErrors, setCommitErrors] = useState<Map<string, string>>(new Map());
 
   const drafts = draftsByTab[tab];
+  const draftsRaw = drafts;
 
   // ---- lookups ----
 
@@ -2933,6 +2939,23 @@ export default function TransactionsPage() {
 
   const handleCommit = useCallback(async () => {
     if (saving || isViewer) return;
+    /**
+     * Land the cell still under the cursor first.
+     *
+     * The shortcut is caught on window before the editor sees it, so without
+     * this the row is parsed as it was one keystroke ago — which is why typing
+     * an amount and pressing ⌘S reported "Bad amount """. The flush writes it
+     * into the grid's state and hands it back, because that state update won't
+     * be visible to this call.
+     */
+    const pending = flushEdit.current?.() ?? null;
+    const drafts = pending
+      ? draftsRaw.map((d, i) =>
+          i === pending.draftIndex
+            ? d.map((v, c) => (c === pending.col ? pending.value : v))
+            : d,
+        )
+      : draftsRaw;
     const jobs = drafts
       .map((d, i) => ({ d, i, parsed: parseDraft(d) }))
       .filter((j) => !isBlankDraft(tab, j.d) && j.parsed.ok) as Array<{
@@ -3010,7 +3033,7 @@ export default function TransactionsPage() {
       toast.warning(`${w} — saved, waiting at Processing.`, { duration: 10_000 });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [saving, isViewer, drafts, parseDraft, tab, commitErrors, draftKey, refresh, loadLedgers]);
+  }, [saving, isViewer, draftsRaw, parseDraft, tab, commitErrors, draftKey, refresh, loadLedgers]);
 
   // Cmd/Ctrl+S saves the ready entry rows from anywhere on the page — and
   // preventDefault stops the browser's own "save this page" dialog.
@@ -3578,6 +3601,7 @@ export default function TransactionsPage() {
         onDraftsChange={onDraftsChange}
         draftStatus={draftStatus}
         onCommit={handleCommit}
+        flushRef={flushEdit}
         readOnly={isViewer || tab === "rebate"}
         committedEditable={committedEditable}
         onCommittedEdit={onCommittedEdit}

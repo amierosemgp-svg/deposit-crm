@@ -1,4 +1,4 @@
-import { and, desc, eq, type SQL } from "drizzle-orm";
+import { and, desc, eq, inArray, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { bankAccounts, entities } from "@/db/schema";
@@ -23,8 +23,10 @@ export async function GET(request: Request) {
   } else if (entityId) {
     filters.push(eq(bankAccounts.entity_id, Number(entityId)));
   }
+  // Asking for deposit accounts means every account that takes deposits —
+  // a hybrid one does, and leaving it out would hide it from the agent.
   if (role === "deposit" || role === "withdrawal") {
-    filters.push(eq(bankAccounts.role, role));
+    filters.push(inArray(bankAccounts.role, [role, "both"]));
   }
   if (status === "active" || status === "inactive") {
     filters.push(eq(bankAccounts.status, status));
@@ -41,7 +43,7 @@ export async function GET(request: Request) {
 
 const createSchema = z.object({
   entity_id: z.number().int().positive(),
-  role: z.enum(["deposit", "withdrawal"]),
+  role: z.enum(["deposit", "withdrawal", "both"]),
   bank_name: z.string().min(1),
   account_number: z.string().min(4),
   account_holder: z.string().min(1),

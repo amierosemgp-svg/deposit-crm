@@ -15,7 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useStore } from "@/lib/store";
-import type { BankAccount } from "@/lib/types";
+import type { BankAccount, BankAccountRole } from "@/lib/types";
 
 type Props = {
   open: boolean;
@@ -27,7 +27,7 @@ const OTHER_BANK = "__other__";
 
 type FormState = {
   entity_id: string;
-  role: "deposit" | "withdrawal";
+  role: BankAccountRole;
   bank_select: string; // a bank name from settings, or OTHER_BANK
   bank_custom: string; // free text when OTHER_BANK
   account_number: string;
@@ -63,6 +63,7 @@ const ROLE_HINTS: Record<FormState["role"], string> = {
   deposit:
     "Collection account — receives player deposits and is watched by the bank agent.",
   withdrawal: "Payout account — used to pay player withdrawals.",
+  both: "One account for both — it collects deposits and pays withdrawals, and appears wherever either does.",
 };
 
 export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
@@ -253,11 +254,12 @@ export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
               <Select
                 value={form.role}
                 onValueChange={(v) =>
-                  update("role", (v as "deposit" | "withdrawal") ?? "deposit")
+                  update("role", (v as BankAccountRole) ?? "deposit")
                 }
                 items={{
                   deposit: "Deposit · Collection",
                   withdrawal: "Withdrawal · Payout",
+                  both: "Both · Collection & Payout",
                 }}
               >
                 <SelectTrigger className="h-8 w-full cursor-pointer">
@@ -269,6 +271,9 @@ export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
                   </SelectItem>
                   <SelectItem value="withdrawal" className="cursor-pointer">
                     Withdrawal · Payout
+                  </SelectItem>
+                  <SelectItem value="both" className="cursor-pointer">
+                    Both · Collection &amp; Payout
                   </SelectItem>
                 </SelectContent>
               </Select>
