@@ -102,6 +102,28 @@ export function TopNav() {
     return entities.find((e) => e.entity_type === "main_company");
   }, [entities, me]);
 
+  /**
+   * What the corner names: the thing this user works inside.
+   *
+   * A CS agent's world is one casino, a leader's is their company, the main
+   * company's is the whole group — so each sees the level they actually
+   * operate at rather than the group name three levels above them, which told
+   * a Pokercity CS nothing they didn't know.
+   *
+   * Derived from where the user's entity sits, not from their role: a CS desk
+   * hangs off a casino, so the casino is its parent, and everything else names
+   * itself.
+   */
+  const scopeEntity = useMemo(() => {
+    const byId = new Map(entities.map((e) => [e.entity_id, e]));
+    const own = me ? byId.get(me.entity_id) : undefined;
+    if (!own) return mainEntity;
+    if (own.entity_type === "cs") {
+      return (own.parent_entity_id ? byId.get(own.parent_entity_id) : undefined) ?? own;
+    }
+    return own;
+  }, [entities, me, mainEntity]);
+
   // "View as company" — only the main-company super admin sees this. It scopes
   // the whole CRM to a leader's companies and narrows the company dropdown.
   const leaders = useMemo(
@@ -177,8 +199,11 @@ export function TopNav() {
             <span className="truncate text-sm font-semibold">
               Players Console
             </span>
-            <span className="truncate text-[10px] text-muted-foreground">
-              {mainEntity?.name ?? "—"}
+            <span
+              className="truncate text-[10px] text-muted-foreground"
+              title={mainEntity?.name ?? undefined}
+            >
+              {scopeEntity?.name ?? mainEntity?.name ?? "—"}
             </span>
           </div>
           <button
@@ -227,18 +252,6 @@ export function TopNav() {
               </Select>
               <ScopeDivider />
             </>
-          )}
-
-          {ownCompany && (
-            <span
-              className={cn(
-                SCOPE_TRIGGER.replace("cursor-pointer ", ""),
-                "flex items-center font-semibold",
-              )}
-              title={`Signed in on ${ownCompany.name}`}
-            >
-              {ownCompany.name}
-            </span>
           )}
 
           {(companies.length > 1 || selectedLeaderId !== null || !!ownCompany) && (
