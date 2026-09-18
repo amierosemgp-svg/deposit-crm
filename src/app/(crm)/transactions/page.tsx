@@ -102,7 +102,7 @@ type TabKey =
 const COLUMN_KEYS = {
   deposit: [
     "assign", "member", "product", "username", "amount", "bonuspct", "bonus",
-    "bank", "mode", "status", "date", "time", "remark", "bankdesc",
+    "total", "bank", "mode", "status", "date", "time", "remark", "bankdesc",
   ],
   withdrawal: [
     "assign", "member", "product", "username", "amount", "bank", "account",
@@ -432,20 +432,29 @@ function padDrafts(drafts: string[][], tab: TabKey): string[][] {
 }
 
 /**
- * Deposit drafts derive their Bonus cell: amount x bonus %. Recomputed on
- * every draft change so it tracks both inputs and clears when either goes.
+ * Deposit drafts derive two cells: Bonus (amount x bonus %) and Total (what
+ * actually reaches the player's game — amount plus whatever bonus there is).
+ *
+ * Recomputed on every draft change so both track their inputs and clear when
+ * the amount goes. Total shows as soon as an amount is typed, with or without
+ * a bonus, because a deposit with no bonus still has a total and CS should not
+ * have to know which case they are in.
+ *
  * (For a rebate plan the true basis is the period loss, not the deposit — the
- * server computes the real figure at save; this cell is the entry-time view.)
+ * server computes the real figure at save; these cells are the entry-time view.)
  */
-function computeDepositBonus(drafts: string[][]): string[][] {
+function computeDepositDerived(drafts: string[][]): string[][] {
   const c = COL.deposit;
   return drafts.map((row) => {
     const amt = parseAmount(row[c.amount] ?? "");
     const pct = parseBonusPct(row[c.bonuspct] ?? "");
-    const bonus = amt && pct ? fmtAmount((amt * pct) / 100) : "";
-    if ((row[c.bonus] ?? "") === bonus) return row;
+    const bonusValue = amt && pct ? +((amt * pct) / 100).toFixed(2) : 0;
+    const bonus = amt && pct ? fmtAmount(bonusValue) : "";
+    const total = amt ? fmtAmount(amt + bonusValue) : "";
+    if ((row[c.bonus] ?? "") === bonus && (row[c.total] ?? "") === total) return row;
     const out = [...row];
     out[c.bonus] = bonus;
+    out[c.total] = total;
     return out;
   });
 }
@@ -829,6 +838,10 @@ export default function TransactionsPage() {
         amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "100" },
         bonuspct: { label: "Bonus %", width: 76, align: "right", numeric: true, entry: true, placeholder: "10", dropdown: true },
         bonus: { label: "Bonus", width: 90, align: "right", numeric: true },
+        // Derived from the two cells before it, on saved rows and while typing
+        // alike. Never an entry cell: a total someone can type is a total that
+        // can disagree with the figures it is made of.
+        total: { label: "Total", width: 100, align: "right", numeric: true },
         bank: { label: "Bank", width: 110, entry: true, required: true, options: banks, placeholder: "bank" },
         mode,
         status,
@@ -1209,7 +1222,7 @@ export default function TransactionsPage() {
     (next: string[][]) =>
       setDraftsByTab((prev) => {
         let processed = enrichMemberChanges(prev[tab], next);
-        if (tab === "deposit") processed = computeDepositBonus(processed);
+        if (tab === "deposit") processed = computeDepositDerived(processed);
         return { ...prev, [tab]: padDrafts(processed, tab) };
       }),
     [tab, enrichMemberChanges],
@@ -1254,6 +1267,7 @@ export default function TransactionsPage() {
             amount: fmtAmount(d.deposit_amount),
             bonuspct: pct ? `${pct}%` : "—",
             bonus: d.bonus_amount ? fmtAmount(d.bonus_amount) : "—",
+            total: fmtAmount(d.total_amount),
             bank: d.bank_name,
             mode: modeCell(d.skip_bot),
             status: DEPOSIT_STATUS_LABEL[d.status],
