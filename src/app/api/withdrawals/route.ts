@@ -5,7 +5,7 @@ import { gameCredits, players, transactions, withdrawals } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import { checkWithdrawalMinimum } from "@/lib/withdrawal-limits";
-import { bookManualPull } from "@/lib/withdrawal-pull";
+import { bookManualPayout, bookManualPull } from "@/lib/withdrawal-pull";
 
 const createSchema = z.object({
   player_id: z.number().int().positive(),
@@ -153,7 +153,15 @@ export async function POST(request: Request) {
         userId: user.user_id,
         nowIso,
       });
-      return { created: done, pulled: true };
+      // Named an account to pay from? Then the cash is already out of it, and
+      // the row is finished rather than waiting for someone to press Paid.
+      const settled = await bookManualPayout(txn, {
+        row: done,
+        player,
+        userId: user.user_id,
+        nowIso,
+      });
+      return { created: settled, pulled: true };
     });
 
     return Response.json(
@@ -163,7 +171,13 @@ export async function POST(request: Request) {
         // Requested?" is answered where it is asked.
         ...(!pulled && skipBot && withdrawAll
           ? { warning: "Saved as Requested — pull it once you know what the wallet held." }
-          : {}),
+          : pulled && !body.paid_from_account_id
+            ? {
+                warning:
+                  "Credits pulled, but no paying account was named — the bank has not been " +
+                  "deducted. Fill Paid From, or mark it paid from the account it left.",
+              }
+            : {}),
       },
       { status: 201 },
     );

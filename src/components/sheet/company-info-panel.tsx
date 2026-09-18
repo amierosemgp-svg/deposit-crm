@@ -19,6 +19,7 @@ import { useStore } from "@/lib/store";
 import { inRange, rangeLabel, type DateRange } from "@/lib/date-range";
 import { formatRM, isBotOnline } from "@/lib/format";
 import { botForName } from "@/lib/bot-category";
+import { byBankOrder } from "@/lib/bank-order";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Banknote, Coins, Landmark, Wallet } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -169,9 +170,11 @@ export function CompanyInfoPanel({ range }: { range: DateRange }) {
   const inMonth = (iso: string) => inRange(iso, range);
 
   const scope = useMemo(() => {
-    const depositAccounts = bankAccounts.filter(
-      (a) => a.status === "active" && takesDeposits(a.role) && companyInScope(a.entity_id),
-    );
+    // Sorted here, once: everything below derives from this list, and an
+    // unsorted one reshuffled the card every time a row was saved.
+    const depositAccounts = bankAccounts
+      .filter((a) => a.status === "active" && takesDeposits(a.role) && companyInScope(a.entity_id))
+      .sort(byBankOrder);
 
     /**
      * How many deposits each collection account took in over the period —
@@ -208,6 +211,7 @@ export function CompanyInfoPanel({ range }: { range: DateRange }) {
     }));
     const banksWithdrawal = bankAccounts
       .filter((a) => a.status === "active" && paysWithdrawals(a.role) && companyInScope(a.entity_id))
+      .sort(byBankOrder)
       .map((a) => ({
         label: (a.label || `${a.bank_name}`) + roleMark(a),
         value: a.current_balance,

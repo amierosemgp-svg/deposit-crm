@@ -1,12 +1,13 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { gameCredits, transactions, withdrawals } from "@/db/schema";
+import { gameCredits, players, transactions, withdrawals } from "@/db/schema";
 import { adjustGameCredit, creditWhere, resolveGameLogin } from "@/lib/game-credits";
+import { moveBankBalance } from "@/lib/bank-balance";
 import { moveKioskCredit } from "@/lib/kiosk-credit";
 
 type Txn = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type WithdrawalRow = typeof withdrawals.$inferSelect;
-type PlayerRow = typeof import("@/db/schema").players.$inferSelect;
+type PlayerRow = typeof players.$inferSelect;
 
 /**
  * Book a manual withdrawal as already pulled.
@@ -205,4 +206,60 @@ export async function rebookPulledWithdrawal(
       wallet_debited: debited,
     },
   });
+}
+
+/**
+ * Book a manual withdrawal as paid: the bank down, the member's total up.
+ *
+ * A manual row is typed after the work is done — the credit is out of the game
+ * and the cash is out of the bank — so a row that names the account it was
+ * paid from is finished, not half-done. Without this the balance only moved
+ * when somebody remembered to press Paid, and "I entered a withdrawal and the
+ * bank didn't change" was the result.
+ *
+ * Only when an account is named: with nothing to deduct the row stops at
+ * credits_pulled, which is honest about what the CRM knows.
+ */
+export async function bookManualPayout(
+  txn: Txn,
+  input: { row: WithdrawalRow; player: PlayerRow; userId: number; nowIso?: string },
+): Promise<WithdrawalRow> {
+  const { row, player, userId } = input;
+  const nowIso = input.nowIso ?? new Date().toISOString();
+  if (row.paid_from_account_id === null) return row;
+
+  await moveBankBalance(txn, {
+    accountId: row.paid_from_account_id,
+    delta: -row.credit_pulled_amount,
+  });
+
+  const [updated] = await txn
+    .update(withdrawals)
+    .set({ status: "paid", paid_at: nowIso, updated_at: nowIso })
+    .where(eq(withdrawals.withdrawal_id, row.withdrawal_id))
+    .returning();
+
+  await txn
+    .update(players)
+    .set({
+      total_withdrawals: sql`${players.total_withdrawals} + ${row.credit_pulled_amount}`,
+    })
+    .where(eq(players.player_id, row.player_id));
+
+  await txn.insert(transactions).values({
+    player_id: row.player_id,
+    entity_id: player.company_entity_id,
+    type: "withdrawal",
+    amount: row.credit_pulled_amount,
+    game_name: row.game_name,
+    reference_id: row.withdrawal_id,
+    user_id: userId,
+    details: {
+      source: "manual",
+      action: "paid_on_entry",
+      paid_from_account_id: row.paid_from_account_id,
+    },
+  });
+
+  return updated;
 }

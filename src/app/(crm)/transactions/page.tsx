@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore, type MutationResult } from "@/lib/store";
 import { formatClock, formatRelative, formatRM } from "@/lib/format";
+import { byBankOrder } from "@/lib/bank-order";
 import { extractSenderName } from "@/lib/bank-remark";
 import { usePlayerProfile } from "@/components/player-name-link";
 import {
@@ -743,6 +744,8 @@ export default function TransactionsPage() {
     () =>
       bankAccounts
         .filter((a) => a.status === "active" && companyInScope(a.entity_id))
+        // The workbook's order, so the list reads the same every time it opens.
+        .sort(byBankOrder)
         .map((a) => ({
           value: `${a.bank_name} ${a.account_number}`,
           hint: `${entityName(a.entity_id)} · ${fmtAmount(a.current_balance)}`,
@@ -815,6 +818,10 @@ export default function TransactionsPage() {
   const accountByLabel = useMemo(() => {
     const m = new Map<string, (typeof bankAccounts)[number]>();
     for (const a of bankAccounts) {
+      // The label first, because that is what every dropdown offers: the lists
+      // show "AMBANK 2" and "CIMB · Moganah", and a map keyed only on
+      // "<bank> <number>" rejected the very value it had just suggested.
+      if (a.label?.trim()) m.set(a.label.trim().toLowerCase(), a);
       m.set(`${a.bank_name} ${a.account_number}`.toLowerCase(), a);
       // The number alone is enough when it's unambiguous.
       if (!m.has(a.account_number.toLowerCase())) m.set(a.account_number.toLowerCase(), a);
