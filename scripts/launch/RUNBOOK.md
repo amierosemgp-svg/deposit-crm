@@ -5,8 +5,18 @@ and reconciles to the workbook's own dashboard. Times are Kuala Lumpur.
 
 ## Before 22:00 — on the new Singapore Supabase
 
+Supabase hands out two pooler ports. Use them for different things:
+
+| port | pooler | for |
+|------|--------|-----|
+| 6543 | transaction | the app — `DATABASE_URL` in Vercel |
+| 5432 | session | bootstrap, seeding, imports, psql |
+
+The transaction pooler drops session state between statements, so a schema load
+over 6543 creates the tables and then fails on the first unqualified INSERT.
+
 ```bash
-export NEW="postgres://…singapore…"           # new project, fresh password
+export NEW="postgres://…pooler.supabase.com:5432/postgres"   # session pooler
 
 ./scripts/launch/bootstrap.sh "$NEW"          # schema + settings + bonus plans
 npx tsx scripts/launch/seed-tree.ts --db "$NEW" \

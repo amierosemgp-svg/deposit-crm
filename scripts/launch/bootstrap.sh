@@ -10,6 +10,13 @@
 # it declares players.username globally unique, while the real database scopes
 # it per company. A new database built from push would refuse a member code
 # that another company already uses.
+#
+# Use the SESSION pooler (port 5432) or the direct connection for this, never
+# the transaction pooler (6543). Session state does not survive between
+# statements on 6543: the dump sets search_path at the top, the later INSERTs
+# land on a different backend without it, and "relation settings does not
+# exist" is the result even though the tables are right there. 6543 is for the
+# app, which sends one self-contained statement at a time.
 set -euo pipefail
 
 DB="${1:-}"
