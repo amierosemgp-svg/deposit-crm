@@ -690,6 +690,7 @@ export function SheetGrid({
   onDraftsChange,
   draftStatus,
   onCommit,
+  entryColumns: entryColumnsProp,
   flushRef,
   readOnly = false,
   /** Changing this key re-scrolls to the entry area and selects its first cell. */
@@ -707,6 +708,19 @@ export function SheetGrid({
   onDraftsChange: (next: string[][]) => void;
   draftStatus: (draft: string[], index: number) => DraftStatus;
   onCommit: () => void;
+  /**
+   * The NEW ENTRIES dock's own columns, when they differ from the saved list's.
+   *
+   * The two areas answer different questions. The list reports what a member
+   * has done — status, deposits, withdrawals, last deposit — none of which
+   * exists before they do. The dock asks what it takes to create one: a name,
+   * a prefix, the product and login they play under. Neither set is a subset
+   * of the other, so the dock gets its own.
+   *
+   * Drafts are then rows of THIS shape, and every column lookup below picks
+   * the array that matches the row it is looking at.
+   */
+  entryColumns?: SheetColumn[];
   /**
    * Handed a function that commits whatever cell is mid-edit, and returns what
    * it wrote so a save firing in the same tick can see it.
@@ -897,10 +911,21 @@ export function SheetGrid({
     }
   }, []);
 
+  /** The dock's columns — its own when given, otherwise the list's. */
+  const entryColumns = entryColumnsProp ?? columns;
+  /** The column list that governs a given row. */
+  const colsFor = useCallback(
+    (r: number) => (r >= draftStart ? entryColumns : columns),
+    [draftStart, entryColumns, columns],
+  );
+
   const moveTo = useCallback(
     (r: number, c: number, extend = false) => {
       const nr = Math.max(0, Math.min(nRows - 1, r));
-      const nc = Math.max(0, Math.min(nCols - 1, c));
+      // An entry row is only as wide as the dock draws it; without this, Tab
+      // off the last entry cell parked the cursor on a column that isn't there.
+      const lastCol = (nr >= draftStart ? entryColumns.length : nCols) - 1;
+      const nc = Math.max(0, Math.min(lastCol, c));
       if (extend) {
         setExt({ r: nr, c: nc });
       } else {
@@ -916,7 +941,7 @@ export function SheetGrid({
         scrollCellIntoView(nr, nc);
       }
     },
-    [nRows, nCols, hiddenAbove, rows.length, scrollCellIntoView],
+    [nRows, nCols, hiddenAbove, rows.length, scrollCellIntoView, draftStart, entryColumns.length],
   );
 
   // Load the next older chunk whenever the sentinel row scrolls into view.
@@ -998,6 +1023,19 @@ export function SheetGrid({
         );
         return;
       }
+      /**
+       * An entry row only takes typing in its entry columns.
+       *
+       * This guard existed for saved rows but not for drafts, so every derived
+       * cell in the NEW ENTRIES panel opened an editor: the member code built
+       * from the prefix, a deposit's bonus and total. Whatever was typed then
+       * vanished the moment the cell it derives from changed, which reads as
+       * the sheet eating the input.
+       */
+      if (r >= draftStart && !entryColumns[c]?.entry) {
+        flash("That cell fills itself from the others — nothing to type here.");
+        return;
+      }
       editDoneRef.current = false;
       onEditStart?.(r, c);
       setEditing({
@@ -1008,7 +1046,7 @@ export function SheetGrid({
         browse,
       });
     },
-    [readOnly, draftStart, cellValue, flash, committedEditable, onEditStart],
+    [readOnly, draftStart, cellValue, flash, committedEditable, onEditStart, entryColumns],
   );
 
   const commitWith = useCallback(
@@ -1071,16 +1109,16 @@ export function SheetGrid({
       (r >= draftStart
         ? draftSuggestions?.(r - draftStart, c)
         : committedSuggestions?.(r, c)) ??
-      columns[c]?.options?.map((o) => (typeof o === "string" ? { value: o } : o)),
-    [draftStart, draftSuggestions, committedSuggestions, columns],
+      colsFor(r)[c]?.options?.map((o) => (typeof o === "string" ? { value: o } : o)),
+    [draftStart, draftSuggestions, committedSuggestions, colsFor],
   );
 
   /** Can this cell be edited at all (an entry cell, or an editable saved one)? */
   const isEditableCell = useCallback(
     (r: number, c: number): boolean =>
       !readOnly &&
-      (r >= draftStart ? !!columns[c]?.entry : !!committedEditable?.(r, c)),
-    [readOnly, draftStart, columns, committedEditable],
+      (r >= draftStart ? !!entryColumns[c]?.entry : !!committedEditable?.(r, c)),
+    [readOnly, draftStart, committedEditable, entryColumns],
   );
 
   /**
@@ -1091,11 +1129,11 @@ export function SheetGrid({
   const isDropdownCell = useCallback(
     (r: number, c: number): boolean => {
       if (!isEditableCell(r, c)) return false;
-      const col = columns[c];
+      const col = colsFor(r)[c];
       if (col?.dropdown || col?.options?.length) return true;
       return !!suggestionsAt(r, c)?.length;
     },
-    [isEditableCell, columns, suggestionsAt],
+    [isEditableCell, suggestionsAt, colsFor],
   );
 
   /**
@@ -1639,14 +1677,14 @@ export function SheetGrid({
             <table className="w-full table-fixed border-separate border-spacing-0">
           <colgroup>
             <col style={{ width: 44 }} />
-            {columns.map((c) => (
+            {entryColumns.map((c) => (
               <col key={c.key} style={{ width: c.width }} />
             ))}
             {/* Unsized filler column — takes whatever width is left. */}
             <col />
           </colgroup>
               <thead>
-                <LabelHeaderRow columns={columns} offset="top-0" />
+                <LabelHeaderRow columns={entryColumns} offset="top-0" />
               </thead>
               <tbody>
                 {(() => {
@@ -1655,7 +1693,7 @@ export function SheetGrid({
                   // — hinting the blanks — until every field is filled, then the
                   // hint moves to the next row.
                   const placeholderIndex = drafts.findIndex((d) =>
-                    columns.some((col, c) => col.entry && !(d[c] ?? "").trim()),
+                    entryColumns.some((col, c) => col.entry && !(d[c] ?? "").trim()),
                   );
                   return drafts.map((draft, i) => {
                   const r = draftStart + i;
@@ -1674,7 +1712,7 @@ export function SheetGrid({
                             : null
                       }
                       cells={draft}
-                      columns={columns}
+                      columns={entryColumns}
                       tone="default"
                       isDraft
                       firstDraft={false}

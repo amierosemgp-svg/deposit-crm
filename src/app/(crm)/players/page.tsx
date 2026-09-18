@@ -154,13 +154,26 @@ function sinceLabel(iso: string | undefined): string {
 // screen at all — not even masked. It is still stored, still searchable, and
 // still enterable on the Walk-in form where CS has been given it directly.
 const PLAYER_COLUMNS: SheetColumn[] = [
-  { key: "name", label: "Name", width: 210, entry: true, required: true, placeholder: "Full name" },
-  { key: "code", label: "Member Code", width: 130, entry: true, required: true, placeholder: "S1234" },
+  { key: "name", label: "Name", width: 210 },
+  { key: "code", label: "Member Code", width: 130 },
   { key: "status", label: "Status", width: 90 },
   { key: "deposits", label: "Deposits", width: 110, align: "right", numeric: true },
   { key: "withdrawals", label: "Withdrawals", width: 110, align: "right", numeric: true },
   { key: "lastdep", label: "Last Deposit", width: 110, align: "right" },
   { key: "games", label: "Game Accounts", width: 320 },
+];
+
+/**
+ * What it takes to create a member — which is not what the list reports about
+ * one. Prefix picks the code series, Product and Game Username link the first
+ * kiosk login, and the Member Code is derived rather than typed.
+ */
+const PLAYER_ENTRY_COLUMNS: SheetColumn[] = [
+  { key: "name", label: "Name", width: 210, entry: true, required: true, placeholder: "Full name" },
+  { key: "prefix", label: "Prefix", width: 90, entry: true, required: true, placeholder: "GA" },
+  { key: "code", label: "Member Code", width: 130 },
+  { key: "product", label: "Product", width: 130, entry: true, placeholder: "game (optional)" },
+  { key: "gameuser", label: "Game Username", width: 170, entry: true, placeholder: "login (optional)" },
 ];
 /**
  * Win/Loss tab. The sign is the house's, as in every report: positive means
@@ -197,6 +210,9 @@ export default function PlayersPage() {
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
   const selectedLeaderId = useStore((s) => s.selectedLeaderId);
   const { openPlayer } = usePlayerProfile();
+
+  const gamesFn = useStore((s) => s.games);
+  const games = gamesFn();
 
   const isViewer = me?.role === "viewer";
   const isLeaderOrAdmin = me?.role === "super_admin" || me?.role === "company_leader";
@@ -310,11 +326,15 @@ export default function PlayersPage() {
   const [selectedIds, setSelectedIds] = useState<(string | number)[]>([]);
   const [commitErrors, setCommitErrors] = useState<Map<string, string>>(() => new Map());
   const [draftsByTab, setDraftsByTab] = useState<Record<TabKey, string[][]>>(() => ({
-    players: padDrafts([], PLAYER_COLUMNS.length),
+    players: padDrafts([], PLAYER_ENTRY_COLUMNS.length),
     leads: padDrafts([], LEAD_COLUMNS.length),
     // Win/Loss is a read-only view: no entry row, so no drafts to hold.
     winloss: [],
   }));
+
+  /** The dock's shape — what drafts are padded to and parsed by. */
+  const entryColumns = tab === "players" ? PLAYER_ENTRY_COLUMNS : undefined;
+  const draftWidth = (entryColumns ?? PLAYER_COLUMNS).length;
 
   const columns =
     tab === "players"
@@ -348,15 +368,6 @@ export default function PlayersPage() {
     return m;
   }, [leadListsData]);
 
-  // A lead's name by phone — for filling the Name cell when CS picks a phone.
-  const leadNameByPhone = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const l of leadsData) {
-      const p = (l.phone ?? "").trim().toLowerCase();
-      if (p && !m.has(p)) m.set(p, l.name);
-    }
-    return m;
-  }, [leadsData]);
 
   // ---- Players-tab: phone → lead lists lookup, cached per phone ----
   const [leadCache, setLeadCache] = useState<Map<string, LeadHit[]>>(() => new Map());
@@ -379,48 +390,75 @@ export default function PlayersPage() {
     },
     [entryCompanyId, leadCache],
   );
-  const hitFor = useCallback(
-    (phone: string, listName: string): LeadHit | undefined =>
-      leadCache
-        .get(phone.trim())
-        ?.find((h) => h.name.toLowerCase() === listName.trim().toLowerCase()),
-    [leadCache],
-  );
 
   // ---- per-tab enrich (fill derived cells as CS types) ----
   // Left for the Leads sheet, which still fills a name from a picked phone.
-  const enrichPlayers = useCallback(
-    (prev: string[][], next: string[][]): string[][] =>
-      next.map((row, i) => {
-        const out = [...row];
-        const phone = out[0]?.trim() ?? "";
-        if (phone !== (prev[i]?.[0]?.trim() ?? "")) {
-          out[2] = "";
-          out[3] = "";
-          out[4] = "";
-          // Picked (or typed) a known lead phone — carry its name over.
-          const leadName = leadNameByPhone.get(phone.toLowerCase());
-          if (leadName && !out[1]?.trim()) out[1] = leadName;
-          return out;
-        }
-        const listName = out[2]?.trim() ?? "";
-        if (!listName) {
-          out[4] = "";
-          return out;
-        }
-        const hit = hitFor(phone, listName);
-        if (hit && hit.dist_id != null) {
-          out[3] = hit.prefix ?? ""; // fixed — a member already came from this list here
-          out[4] = hit.next_code ?? "";
-        } else {
-          const pfx = out[3]?.trim() ?? "";
-          out[4] = pfx ? fmtSeq(pfx, 1) : "";
-        }
-        return out;
-      }),
-    [hitFor, leadNameByPhone],
+  /**
+   * Every member code already in this casino, grouped by its letter prefix,
+   * so a new one can continue the right series.
+   *
+   * The letters are matched exactly: "G" and "GA" are different series, and
+   * treating GA2283 as a G-code would hand the next member G2284 — a number
+   * three thousand short of where that series actually is.
+   */
+  const codeSeries = useMemo(() => {
+    const series = new Map<string, { next: number; width: number }>();
+    for (const p of players) {
+      if (entryCompanyId !== null && p.company_entity_id !== entryCompanyId) continue;
+      const m = /^([A-Za-z]+)(\d+)$/.exec(p.username.trim());
+      if (!m) continue;
+      const [, letters, digits] = m;
+      const key = letters.toUpperCase();
+      const at = series.get(key) ?? { next: 0, width: digits.length };
+      at.next = Math.max(at.next, Number(digits) + 1);
+      at.width = Math.max(at.width, digits.length);
+      series.set(key, at);
+    }
+    return series;
+  }, [players, entryCompanyId]);
+
+  const prefixSuggestions = useMemo<SheetSuggestion[]>(
+    () =>
+      [...codeSeries.entries()]
+        .sort((a, b) => b[1].next - a[1].next)
+        .map(([prefix, at]) => ({
+          value: prefix,
+          hint: `next ${prefix}${String(at.next).padStart(at.width, "0")}`,
+        })),
+    [codeSeries],
   );
 
+  /**
+   * Fill each entry row's Member Code from its prefix.
+   *
+   * Counted per prefix across the rows being typed, so adding five members at
+   * once gives five consecutive codes rather than five copies of the same one.
+   * A prefix nobody has used yet starts at 1, padded to four digits — the
+   * width every series in the data uses.
+   */
+  const enrichPlayers = useCallback(
+    (_prev: string[][], next: string[][]): string[][] => {
+      const used = new Map<string, number>();
+      return next.map((row) => {
+        const out = [...row];
+        const prefix = (out[1] ?? "").trim().toUpperCase();
+        if (!prefix) {
+          out[2] = "";
+          return out;
+        }
+        const series = codeSeries.get(prefix);
+        const base = series?.next ?? 1;
+        const offset = used.get(prefix) ?? 0;
+        used.set(prefix, offset + 1);
+        const width = series?.width ?? 4;
+        out[2] = `${prefix}${String(base + offset).padStart(width, "0")}`;
+        return out;
+      });
+    },
+    [codeSeries],
+  );
+
+  /** Leads tab: the next code its list will issue, shown before saving. */
   const enrichLeads = useCallback(
     (next: string[][]): string[][] =>
       next.map((row) => {
@@ -437,9 +475,9 @@ export default function PlayersPage() {
       setDraftsByTab((prev) => {
         const processed =
           tab === "players" ? enrichPlayers(prev.players, next) : enrichLeads(next);
-        return { ...prev, [tab]: padDrafts(processed, columns.length) };
+        return { ...prev, [tab]: padDrafts(processed, draftWidth) };
       }),
-    [tab, columns.length, enrichPlayers, enrichLeads],
+    [tab, draftWidth, enrichPlayers, enrichLeads],
   );
 
   // ---- committed rows ----
@@ -573,6 +611,15 @@ export default function PlayersPage() {
   // ---- entry-row typeahead ----
   const draftSuggestions = useCallback(
     (draftIndex: number, colIndex: number): SheetSuggestion[] | undefined => {
+      // The Prefix cell offers the series this casino already runs, each
+      // showing the code it would issue next.
+      if (tab === "players" && colIndex === 1) {
+        return prefixSuggestions.length ? prefixSuggestions : undefined;
+      }
+      if (tab === "players" && colIndex === 3) {
+        return games.length ? games.map((g) => ({ value: g })) : undefined;
+      }
+
       // Leads only: the Phone cell there is the lead's identity, so it still
       // autocompletes. The Players sheet has no phone cell to fill.
       if (tab === "leads" && colIndex === 0) {
@@ -649,7 +696,7 @@ export default function PlayersPage() {
         figure: h.dist_id != null ? (h.next_code ?? undefined) : undefined,
       }));
     },
-    [tab, drafts, leadCache, leadListsData, leadsData],
+    [tab, drafts, leadCache, leadListsData, leadsData, prefixSuggestions, games],
   );
 
   const handleEditStart = useCallback(
@@ -667,6 +714,31 @@ export default function PlayersPage() {
       if (d.every((v) => !v.trim())) return { state: "empty" };
       const rejected = commitErrors.get(draftKey(d));
       if (rejected) return { state: "error", message: rejected };
+      /**
+       * The two tabs have different columns, and this only ever described the
+       * Leads one — so on Players it read Name as the phone, Member Code as
+       * the name, and Status as the lead list, and demanded a value in a cell
+       * the sheet fills in itself. No new member could ever be saved.
+       *
+       * Players: 0 Name · 1 Member Code · 2 Status · 3 Deposits · 4 Withdrawals
+       * · 5 Last Deposit · 6 Game Accounts — everything from Status on is
+       * derived, so only the first two are asked for.
+       */
+      if (tab === "players") {
+        const [name, prefix, code] = d;
+        if (!name.trim()) return { state: "error", message: "Name is required" };
+        if (!prefix.trim())
+          return { state: "error", message: "Pick a prefix — the member code follows from it" };
+        if (!code.trim())
+          return { state: "error", message: `No code could be built from "${prefix.trim()}"` };
+        const [, , , product, login] = d;
+        if (product?.trim() && !login?.trim())
+          return { state: "error", message: `Give the ${product.trim()} login, or clear the product` };
+        if (login?.trim() && !product?.trim())
+          return { state: "error", message: "Pick the product that login belongs to" };
+        return { state: "ready" };
+      }
+
       const [phone, name, list, prefix] = d;
       if (!phone.trim()) return { state: "error", message: "Phone is required" };
       if (!name.trim()) return { state: "error", message: "Name is required" };
@@ -734,8 +806,15 @@ export default function PlayersPage() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               company_entity_id: entryCompanyId,
-              username: (d[1] ?? "").trim(),
+              username: (d[2] ?? "").trim(),
               full_name: (d[0] ?? "").trim(),
+              ...((d[3] ?? "").trim() && (d[4] ?? "").trim()
+                ? {
+                    game_accounts: [
+                      { game_name: (d[3] ?? "").trim(), game_username: (d[4] ?? "").trim() },
+                    ],
+                  }
+                : {}),
             }),
           });
           ok = res.ok;
@@ -769,7 +848,7 @@ export default function PlayersPage() {
     }
 
     const remaining = drafts.filter((_, i) => !succeeded.has(i));
-    setDraftsByTab((prev) => ({ ...prev, [tab]: padDrafts(remaining, columns.length) }));
+    setDraftsByTab((prev) => ({ ...prev, [tab]: padDrafts(remaining, draftWidth) }));
     setCommitErrors(failures);
     // Counters moved, so cached lookups/previews are stale.
     setLeadCache(new Map());
@@ -787,7 +866,7 @@ export default function PlayersPage() {
     }
   }, [
     saving, tab, canEnterPlayers, entryCompanyId, drafts, draftStatus,
-    commitErrors, draftKey, listByName, columns.length, refresh, loadLeadData,
+    commitErrors, draftKey, listByName, draftWidth, refresh, loadLeadData,
   ]);
 
   // ---- selection → player modal ----
@@ -1173,6 +1252,10 @@ export default function PlayersPage() {
         readOnly={tab !== "players" || playersReadOnly}
         onSelectedRowsChange={setSelectedIds}
         draftSuggestions={draftSuggestions}
+        // A new member needs a name and a series; status, deposits,
+        // withdrawals, last deposit and game accounts are all things they
+        // won't have until they exist.
+        entryColumns={entryColumns}
         onEditStart={handleEditStart}
         focusKey={`${tab}:${hydrated}`}
       />
