@@ -367,11 +367,11 @@ export async function GET(request: Request) {
         .limit(20),
 
       /**
-       * Expenses are the admin's book — salaries, rent, what the business
-       * costs — except for the one kind the desk has to record itself: bank
-       * charges, which move a bank balance and so have to be enterable by
-       * whoever is reconciling it. Everyone else sees those, for their own
-       * companies, and nothing else.
+       * Expenses, scoped like everything else: a company's own.
+       *
+       * They were the admin's book alone, then admins plus bank charges. The
+       * desk pays for things out of the company's accounts every day, so they
+       * keep the same list — for their own companies, never the group's.
        */
       user.role === "super_admin"
         ? db
@@ -383,12 +383,7 @@ export async function GET(request: Request) {
           ? db
               .select()
               .from(expenses)
-              .where(
-                and(
-                  eq(expenses.category, "bank_charge"),
-                  inArray(expenses.company_entity_id, user.companyIds),
-                ),
-              )
+              .where(inArray(expenses.company_entity_id, user.companyIds))
               .orderBy(desc(expenses.expense_date))
               .limit(500)
           : Promise.resolve([]),

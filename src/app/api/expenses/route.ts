@@ -27,17 +27,13 @@ const createSchema = z
   });
 
 /**
- * Categories anyone who can write may record.
+ * POST /api/expenses — operational expenses.
  *
- * The rest of the book — salaries, rent, what the business pays out — stays
- * the admin's. Bank charges are different in kind: the bank takes them out of
- * a company account whether anyone is looking or not, and the balance does not
- * tally again until somebody records it. Making the desk wait for an admin to
- * do that is how the figure stays wrong.
+ * Anyone who can write may record one against a company they work for. It used
+ * to be admins only, then admins plus bank charges; the desk pays for things
+ * out of the company's accounts all day, and an expense nobody can enter is an
+ * expense the bank balance never hears about.
  */
-const OPEN_CATEGORIES = new Set(["bank_charge"]);
-
-/** POST /api/expenses — operational expenses; bank charges by anyone. */
 export async function POST(request: Request) {
   try {
     const user = await requireWriteUser();
@@ -49,25 +45,17 @@ export async function POST(request: Request) {
     const body = parsed.data;
 
     if (!isAdmin) {
-      if (!OPEN_CATEGORIES.has(body.category)) {
-        throw new AuthError(
-          403,
-          `Only admins record ${body.category.replace(/_/g, " ")} — you can record bank charges`,
-        );
-      }
-      // Theirs to record means theirs to account for: a company they work for,
-      // and an account that company actually holds.
+      // Theirs to record means theirs to account for: a company they work for.
       if (
         body.company_entity_id == null ||
         (user.companyIds !== null && !user.companyIds.includes(body.company_entity_id))
       ) {
-        throw new AuthError(403, "Record the charge against one of your own companies");
+        throw new AuthError(403, "Record the expense against one of your own companies");
       }
-      if (body.paid_from_account_id == null) {
-        throw new AuthError(422, "Say which bank account the charge came out of");
-      }
+      // Cash out of a leader's own pocket is a settlement between them and the
+      // business, which is the admin's book to keep.
       if (body.paid_from_cash_entity_id != null) {
-        throw new AuthError(403, "Only admins record cash payments");
+        throw new AuthError(403, "Only admins record payments from a leader's cash");
       }
     }
 

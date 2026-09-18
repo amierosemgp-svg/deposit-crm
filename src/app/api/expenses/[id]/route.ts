@@ -9,9 +9,9 @@ import { moveBankBalance } from "@/lib/bank-balance";
 /**
  * DELETE /api/expenses/:id — remove a mistaken entry, and put the money back.
  *
- * Admins delete anything. Anyone else may undo a bank charge they recorded
- * themselves: they can enter those, so leaving them unable to fix a mistyped
- * one would just mean an admin doing it later from a worse description.
+ * Admins delete anything. Anyone else may undo one they recorded themselves:
+ * they can enter expenses, so leaving them unable to fix a mistyped one would
+ * just mean an admin doing it later from a worse description.
  */
 export async function DELETE(
   _request: Request,
@@ -28,8 +28,8 @@ export async function DELETE(
         .from(expenses)
         .where(eq(expenses.expense_id, Number(id)));
       if (!row) return jsonError("Expense not found", 404);
-      if (row.category !== "bank_charge" || row.recorded_by_user_id !== user.user_id) {
-        throw new AuthError(403, "Only admins remove that one");
+      if (row.recorded_by_user_id !== user.user_id) {
+        throw new AuthError(403, "Only the person who recorded it, or an admin, can remove it");
       }
     }
 

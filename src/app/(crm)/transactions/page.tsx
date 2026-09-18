@@ -693,15 +693,40 @@ export default function TransactionsPage() {
   >({});
   const loadRangeRows = useCallback(
     async (which: TabKey) => {
-      const qs = new URLSearchParams({ sheet: which });
-      if (range.from) qs.set("from", range.from);
-      if (range.to) qs.set("to", range.to);
-      if (selectedCompanyId != null) qs.set("company", String(selectedCompanyId));
+      /**
+       * Pages until the range is complete, not just the first page of it.
+       *
+       * One request returns at most 2,000 rows. A month here is ~2,600
+       * deposits, so a single page stopped three days into September and the
+       * sheet looked like the month began on the 4th — the same blind spot as
+       * the old 500-row cap, moved further back. The ceiling stops a year-wide
+       * filter from pulling everything ever recorded in one go.
+       */
+      const PAGE = 2000;
+      const MAX_PAGES = 10;
       try {
-        const res = await fetch(`/api/worksheet/rows?${qs}`);
-        if (!res.ok) return;
-        const data = await res.json();
-        setRangeRows((prev) => ({ ...prev, [which]: data }));
+        let rows: unknown[] = [];
+        let totals: { rows: number; amount: number } | undefined;
+        for (let page = 0; page < MAX_PAGES; page++) {
+          const qs = new URLSearchParams({
+            sheet: which,
+            limit: String(PAGE),
+            offset: String(page * PAGE),
+          });
+          if (range.from) qs.set("from", range.from);
+          if (range.to) qs.set("to", range.to);
+          if (selectedCompanyId != null) qs.set("company", String(selectedCompanyId));
+          const res = await fetch(`/api/worksheet/rows?${qs}`);
+          if (!res.ok) return;
+          const data = await res.json();
+          rows = rows.concat(data.rows ?? []);
+          totals ??= data.totals;
+          if ((data.rows?.length ?? 0) < PAGE) break;
+        }
+        setRangeRows((prev) => ({
+          ...prev,
+          [which]: { rows, totals: totals ?? { rows: rows.length, amount: 0 } },
+        }));
       } catch {
         // Keep whatever is on screen; the next refresh or poll retries.
       }
@@ -1030,14 +1055,7 @@ export default function TransactionsPage() {
       expense: order("expense", {
         assign,
         date: { label: "Date", width: 92, align: "center", entry: true, required: true, placeholder: "31/8/2026" },
-        category: {
-          label: "Category",
-          width: 110,
-          entry: true,
-          required: true,
-          options: isAdmin ? [...EXPENSE_CATEGORIES] : ["bank_charge"],
-          placeholder: isAdmin ? "category" : "bank_charge",
-        },
+        category: { label: "Category", width: 110, entry: true, required: true, options: [...EXPENSE_CATEGORIES], placeholder: "category" },
         description: { label: "Description", width: 260, entry: true, required: true, placeholder: "what it's for" },
         amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "100" },
         company: { label: "Company", width: 150, entry: true, options: companies.map((c) => c.company_name), placeholder: "company" },
@@ -2141,11 +2159,6 @@ export default function TransactionsPage() {
       const cat = category.trim().toLowerCase().replace(/[\s-]+/g, "_");
       if (!(EXPENSE_CATEGORIES as readonly string[]).includes(cat))
         return { ok: false, error: `Unknown category "${category.trim()}"` };
-      if (!isAdmin && cat !== "bank_charge")
-        return {
-          ok: false,
-          error: `Only admins record ${cat.replace(/_/g, " ")} — you can record bank charges`,
-        };
       if (!description.trim()) return { ok: false, error: "Description is required" };
       const amt = parseAmount(amount);
       if (amt === null || amt <= 0) return { ok: false, error: `Bad amount "${amount}"` };
@@ -2178,7 +2191,7 @@ export default function TransactionsPage() {
         },
       };
     },
-    [companyByName, isAdmin, resolvePaidFrom],
+    [companyByName, resolvePaidFrom],
   );
 
   const parseLeaderWithdrawalDraft = useCallback(
@@ -3497,7 +3510,7 @@ export default function TransactionsPage() {
     // because CS records them alongside the day's takings. Each is scoped
     // server-side to the caller's own tree, so "open" does not mean "all".
     { key: "leadertransfer" as const, label: "Leader Transfer" },
-    { key: "expense" as const, label: isAdmin ? "Expenses" : "Bank Charges" },
+    { key: "expense" as const, label: "Expenses" },
   ];
 
   return (

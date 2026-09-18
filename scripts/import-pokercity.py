@@ -670,7 +670,7 @@ DELETE FROM transactions     WHERE player_id IN (SELECT player_id FROM old_pl)
 DELETE FROM deposits         WHERE player_id IN (SELECT player_id FROM old_pl)
                                 OR company_entity_id = (SELECT v FROM ctx WHERE k = 'company');
 DELETE FROM member_bank_accounts WHERE company_entity_id = (SELECT v FROM ctx WHERE k = 'company');
-DELETE FROM member_game_accounts WHERE player_id IN (SELECT player_id FROM old_pl);
+DELETE FROM member_game_accounts WHERE member_id IN (SELECT player_id FROM old_pl);
 DELETE FROM bank_cash_outs   WHERE account_id IN (SELECT account_id FROM old_acct);
 DELETE FROM bank_transfers   WHERE from_account_id IN (SELECT account_id FROM old_acct)
                                 OR to_account_id IN (SELECT account_id FROM old_acct);
@@ -1000,9 +1000,43 @@ INSERT INTO withdrawals (withdrawal_id, player_id, requested_amount, game_name,
     FROM imp_wd w JOIN imp_member m USING (code)
     LEFT JOIN imp_bank b ON b.code = w.bank_code, cs_user u;""")
 
-    # ── 12. bank cash-outs ───────────────────────────────────────────────────
+    # ── 12. bank cash-outs, and the expenses among them ─────────────────────
+    #
+    # The sheet keeps three different things in one column. "Clear Bank" is the
+    # house moving its own money between accounts — that belongs with the cash
+    # withdrawals, because it is what makes each account's closing balance come
+    # out right. The other two are the business paying for things:
+    #
+    #   Bank Charge   what the bank took, or (negative) the hibah it paid
+    #   Expenses      groceries, loyalty payouts, a rebate top-up
+    #
+    # Those go to the expenses book, where the desk reads them, rather than
+    # sitting in a list of cash somebody walked out of the bank with.
+    EXPENSE_KINDS = {"Bank Charge": "bank_charge", "Expenses": "other"}
+    ex_src = [r for r in d["cash_outs"] if r["kind"] in EXPENSE_KINDS]
+    co_src = [r for r in d["cash_outs"] if r["kind"] not in EXPENSE_KINDS]
+
+    ex_rows = [(r["at"], EXPENSE_KINDS[r["kind"]],
+                (r["holder"] or r["kind"])[:200], r["amount"], r["bank"])
+               for r in ex_src]
+    add("""
+CREATE TEMP TABLE imp_ex (at timestamptz, category text, description text,
+                          amount numeric, bank_code text) ON COMMIT DROP;""")
+    add(copy_block("imp_ex", ["at", "category", "description", "amount", "bank_code"], ex_rows))
+    add("""
+-- The account each one was paid from is named, so the Expenses sheet shows it
+-- and a future correction can put the money back where it came from. Balances
+-- are not moved here: they are set from the dashboard's closing figures, which
+-- already account for these.
+INSERT INTO expenses (expense_date, category, description, amount,
+                      company_entity_id, paid_from_account_id, recorded_by_user_id, notes)
+  SELECT e.at, e.category::expense_category, e.description, e.amount, c.v,
+         b.account_id, u.v, 'Imported from the Pokercity trading sheet.'
+    FROM imp_ex e LEFT JOIN imp_bank b ON b.code = e.bank_code, ctx c, cs_user u
+   WHERE c.k = 'company';""")
+
     co_rows = [(f"PC-C-{r['row']}", r["at"], r["bank"], r["amount"], r["kind"],
-                (r["holder"] or r["kind"])[:120]) for r in d["cash_outs"]]
+                (r["holder"] or r["kind"])[:120]) for r in co_src]
     add("""
 CREATE TEMP TABLE imp_co (ref text, at timestamptz, bank_code text, amount numeric,
                           kind text, taken_by text, cash_out_id int) ON COMMIT DROP;""")
@@ -1126,7 +1160,17 @@ INSERT INTO transactions (entity_id, type, amount, reference_id, user_id, detail
          jsonb_build_object('source', 'import', 'kind', o.kind, 'bank', o.bank_code,
                             'taken_by', o.taken_by, 'sheet_row', o.ref),
          o.at
-    FROM imp_co o, ctx c, cs_user u WHERE c.k = 'company';""")
+    FROM imp_co o, ctx c, cs_user u WHERE c.k = 'company';
+
+-- Expenses get a ledger line too, the same one the app writes when CS records
+-- one, so the History page shows an imported charge exactly like a typed one.
+INSERT INTO transactions (entity_id, type, amount, user_id, details, created_at)
+  SELECT c.v, 'expense', e.amount, u.v,
+         jsonb_build_object('source', 'import', 'action', 'expense_paid',
+                            'category', e.category, 'description', e.description,
+                            'bank', e.bank_code),
+         e.at
+    FROM imp_ex e, ctx c, cs_user u WHERE c.k = 'company';""")
 
     add("\nCOMMIT;")
     return "\n".join(sql)
@@ -1271,6 +1315,8 @@ UNION ALL SELECT 'withdrawals', count(*)::text FROM withdrawals WHERE player_id 
 UNION ALL SELECT 'withdrawal amount', coalesce(sum(credit_pulled_amount),0)::text FROM withdrawals WHERE player_id IN (SELECT player_id FROM pl)
 UNION ALL SELECT 'bank cash-outs', count(*)::text FROM bank_cash_outs WHERE entity_id IN (SELECT entity_id FROM co)
 UNION ALL SELECT 'bank cash-out amount', coalesce(sum(amount),0)::text FROM bank_cash_outs WHERE entity_id IN (SELECT entity_id FROM co)
+UNION ALL SELECT 'expenses', count(*)::text FROM expenses WHERE company_entity_id IN (SELECT entity_id FROM co)
+UNION ALL SELECT 'expense amount', coalesce(sum(amount),0)::text FROM expenses WHERE company_entity_id IN (SELECT entity_id FROM co)
 UNION ALL SELECT 'game transfers', count(*)::text FROM game_transfers WHERE player_id IN (SELECT player_id FROM pl)
 UNION ALL SELECT 'free credit rows', count(*)::text FROM transactions WHERE entity_id IN (SELECT entity_id FROM co) AND details->>'kind' = 'free_credit'
 UNION ALL SELECT 'free credit amount', coalesce(sum(amount),0)::text FROM transactions WHERE entity_id IN (SELECT entity_id FROM co) AND details->>'kind' = 'free_credit'
@@ -1296,8 +1342,14 @@ def verify(dsn, data):
         "referral bonus amount": money(sum(r["bonus"] for r in d["referrals"])),
         "withdrawals": len(d["withdrawals"]),
         "withdrawal amount": money(sum(r["amount"] for r in d["withdrawals"])),
-        "bank cash-outs": len(d["cash_outs"]),
-        "bank cash-out amount": money(sum(r["amount"] for r in d["cash_outs"])),
+        "bank cash-outs": len([r for r in d["cash_outs"]
+                               if r["kind"] not in ("Bank Charge", "Expenses")]),
+        "bank cash-out amount": money(sum(r["amount"] for r in d["cash_outs"]
+                                          if r["kind"] not in ("Bank Charge", "Expenses"))),
+        "expenses": len([r for r in d["cash_outs"]
+                         if r["kind"] in ("Bank Charge", "Expenses")]),
+        "expense amount": money(sum(r["amount"] for r in d["cash_outs"]
+                                    if r["kind"] in ("Bank Charge", "Expenses"))),
         "game transfers": len(d["transfers"]),
         "free credit rows": len(d["free_credits"]),
         "free credit amount": money(sum(r["amount"] for r in d["free_credits"])),
