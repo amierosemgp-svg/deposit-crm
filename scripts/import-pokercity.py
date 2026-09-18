@@ -1,5 +1,5 @@
 """
-Import a month of RajaClub trading into a brand-new company tree.
+Import Pokercity's trading history into the casino seeded by seed-tree.ts.
 
 The source is the operator's own working spreadsheet, not an export: the first
 dozen rows of every sheet are a dashboard, the transaction table starts further
@@ -27,10 +27,10 @@ What lands in the CRM
 Usage
 -----
     export DATABASE_URL=postgres://…
-    python3 import-rajaclub.py <xlsx>                  # parse + reconcile, write nothing
-    python3 import-rajaclub.py <xlsx> --apply          # write, in one transaction
-    python3 import-rajaclub.py <xlsx> --verify         # tally the DB against the sheet
-    python3 import-rajaclub.py <xlsx> --apply --replace   # drop a previous run first
+    python3 import-pokercity.py <xlsx>                  # parse + reconcile, write nothing
+    python3 import-pokercity.py <xlsx> --apply          # write, in one transaction
+    python3 import-pokercity.py <xlsx> --verify         # tally the DB against the sheet
+    python3 import-pokercity.py <xlsx> --apply --replace   # drop a previous run first
 
 The same command runs against production; only DATABASE_URL changes.
 """
@@ -751,7 +751,7 @@ INSERT INTO bank_accounts (account_id, entity_id, role, bank_name, account_numbe
     # ── 5. kiosks ────────────────────────────────────────────────────────────
     kiosk_rows = []
     for name, label, group, credit in d["dashboard"]["kiosks"]:
-        kiosk_rows.append((game(name), f"RC-{label.replace(' ', '')}",
+        kiosk_rows.append((game(name), f"PC-{label.replace(' ', '')}",
                            f"Kiosk {group}", money(credit),
                            f"Closing credit for {label} at the end of the imported month."))
     add("""
@@ -837,8 +837,8 @@ INSERT INTO players (player_id, username, full_name, person_id, company_entity_i
                      registration_date, status, total_deposits, total_withdrawals, notes)
   SELECT m.player_id, m.code, m.full_name, m.person_id, c.v,
          coalesce(m.first_seen, now()), 'active', m.total_dep, m.total_wd,
-         CASE WHEN m.named THEN 'Imported from the RajaClub trading sheet.'
-              ELSE 'Imported from the RajaClub trading sheet. The source never '
+         CASE WHEN m.named THEN 'Imported from the Pokercity trading sheet.'
+              ELSE 'Imported from the Pokercity trading sheet. The source never '
                    'records a name for this member — only free credits and '
                    'referrals, which carry the code alone. Name needs filling in.'
          END
@@ -901,7 +901,7 @@ UPDATE players p SET bank_accounts = a.accounts
         amount = r.get("amount", Decimal(0))
         description = " · ".join(x for x in (r["remark"], r["contact"]) if x)
         dep_rows.append((
-            f"rajaclub:D{r['row']}", f"RC-D-{r['row']}", r["at"], r["timed"],
+            f"pokercity:D{r['row']}", f"PC-D-{r['row']}", r["at"], r["timed"],
             r["code"] or None, amount, r.get("bank", "Adjustment"),
             None if is_adj else r["bank"],
             pct, r["bonus"], money(amount + r["bonus"]),
@@ -940,7 +940,7 @@ INSERT INTO deposits (deposit_id, external_id, transaction_ref, deposit_date,
    WHERE c.k = 'company';""")
 
     # ── 10. referral bonuses ─────────────────────────────────────────────────
-    ref_rows = [(f"RC-R-{r['row']}", r["at"], r["code"], r["downline"], r["amount"],
+    ref_rows = [(f"PC-R-{r['row']}", r["at"], r["code"], r["downline"], r["amount"],
                  (r["pct"] * 100).quantize(CENT), r["bonus"], game(r["product"]) or None)
                 for r in d["referrals"] if r["code"]]
     add("""
@@ -971,7 +971,7 @@ UPDATE players p SET upline_player_id = x.upline_id, upline_assigned_at = x.at
  WHERE p.player_id = x.downline_id;""")
 
     # ── 11. withdrawals ──────────────────────────────────────────────────────
-    wd_rows = [(f"RC-W-{r['row']}", r["at"], r["code"], r["amount"], game(r["product"]),
+    wd_rows = [(f"PC-W-{r['row']}", r["at"], r["code"], r["amount"], game(r["product"]),
                 r["login"] or None, r["account"] or None, r["holder"] or None, r["bank"])
                for r in d["withdrawals"]]
     add("""
@@ -993,7 +993,7 @@ INSERT INTO withdrawals (withdrawal_id, player_id, requested_amount, game_name,
     LEFT JOIN imp_bank b ON b.code = w.bank_code, cs_user u;""")
 
     # ── 12. bank cash-outs ───────────────────────────────────────────────────
-    co_rows = [(f"RC-C-{r['row']}", r["at"], r["bank"], r["amount"], r["kind"],
+    co_rows = [(f"PC-C-{r['row']}", r["at"], r["bank"], r["amount"], r["kind"],
                 (r["holder"] or r["kind"])[:120]) for r in d["cash_outs"]]
     add("""
 CREATE TEMP TABLE imp_co (ref text, at timestamptz, bank_code text, amount numeric,
@@ -1013,7 +1013,7 @@ INSERT INTO bank_cash_outs (cash_out_id, account_id, entity_id, amount, taken_by
    WHERE c.k = 'company';""")
 
     # ── 13. game transfers ───────────────────────────────────────────────────
-    tr_rows = [(f"RC-T-{r['row']}", r["at"], r["code"], r["amount"],
+    tr_rows = [(f"PC-T-{r['row']}", r["at"], r["code"], r["amount"],
                 game(r["from_product"]), r["from_login"] or None,
                 game(r["to_product"]), r["to_login"] or None) for r in d["transfers"]]
     add("""
@@ -1034,7 +1034,7 @@ INSERT INTO game_transfers (transfer_id, player_id, from_game, from_game_usernam
     FROM imp_tr t JOIN imp_member m USING (code), cs_user u;""")
 
     # ── 14. free credits ─────────────────────────────────────────────────────
-    fc_rows = [(f"RC-F-{r['row']}", r["at"], r["code"], r["amount"], game(r["product"]),
+    fc_rows = [(f"PC-F-{r['row']}", r["at"], r["code"], r["amount"], game(r["product"]),
                 r["login"] or None, r["remark"] or None) for r in d["free_credits"]]
     add("""
 CREATE TEMP TABLE imp_fc (ref text, at timestamptz, code text, amount numeric,
@@ -1251,7 +1251,7 @@ UNION ALL SELECT 'game accounts', count(*)::text FROM member_game_accounts WHERE
 UNION ALL SELECT 'member bank accounts', count(*)::text FROM member_bank_accounts WHERE member_id IN (SELECT player_id FROM pl)
 UNION ALL SELECT 'bank accounts', count(*)::text FROM bank_accounts WHERE entity_id IN (SELECT entity_id FROM co)
 UNION ALL SELECT 'kiosks', count(*)::text FROM provider_bo_accounts WHERE company_entity_id IN (SELECT entity_id FROM co)
-UNION ALL SELECT 'bonus plans', count(*)::text FROM bonus_plans WHERE company_entity_id IN (SELECT entity_id FROM co)
+UNION ALL SELECT 'bonus plans', count(*)::text FROM bonus_plans WHERE company_entity_id IN (SELECT entity_id FROM co) AND type <> 'welcome'
 UNION ALL SELECT 'deposits with a plan', count(*)::text FROM deposits WHERE company_entity_id IN (SELECT entity_id FROM co) AND bonus_plan_id IS NOT NULL
 UNION ALL SELECT 'planned bonus amount', coalesce(sum(bonus_amount),0)::text FROM deposits WHERE company_entity_id IN (SELECT entity_id FROM co) AND bonus_plan_id IS NOT NULL
 UNION ALL SELECT 'deposits', count(*)::text FROM deposits WHERE company_entity_id IN (SELECT entity_id FROM co)
@@ -1304,7 +1304,8 @@ def verify(dsn, data):
                                 + d["cash_outs"] if r["bank"]}),
         "kiosks": len(d["dashboard"]["kiosks"]),
         # Plans are not minted by this import — the everyday rates are typed
-        # percentages — so nothing here should carry one.
+        # percentages — so nothing here should carry one. The two welcome
+        # plans are seeded by settings.sql and are excluded from the count.
         "bonus plans": 0,
         "deposits with a plan": 0,
         "planned bonus amount": money(Decimal(0)),

@@ -23,6 +23,13 @@ import bcrypt from "bcryptjs";
 import { Client } from "pg";
 
 const MAIN_COMPANY = "ALL Group";
+/**
+ * Club shortname → the company's name. A club is the company that owns
+ * casinos; its people are logins on it, not entities of their own. Only AB's
+ * full name is known so far, so the rest carry their shortname until someone
+ * renames them in the UI.
+ */
+const COMPANY_NAMES: Record<string, string> = { ab: "Abdullah Club" };
 const SUPER_ADMINS = ["jianlun", "tiang", "wesly"];
 const COMPANY = { club: "ab", name: "Pokercity" };
 /** Pokercity's leaders keep the logins they were issued. */
@@ -116,8 +123,10 @@ async function main() {
 
   console.log(`main company   ${MAIN_COMPANY}`);
   console.log(`super admins   ${SUPER_ADMINS.join(", ")}`);
-  console.log(`leaders        ${leaders.length} across ${new Set(leaders.map((l) => l.club)).size} clubs`);
-  console.log(`company        ${COMPANY.name} — ${pokercity.map((l) => l.display).join(", ")}`);
+  const clubs = [...new Set(leaders.map((l) => l.club))];
+  console.log(`companies      ${clubs.length} clubs — ${clubs.map((c) => COMPANY_NAMES[c] ?? c.toUpperCase()).join(", ")}`);
+  console.log(`leader logins  ${leaders.length}`);
+  console.log(`casino         ${COMPANY.name} under ${COMPANY_NAMES[COMPANY.club] ?? COMPANY.club.toUpperCase()} — partners ${pokercity.map((l) => l.display).join(", ")}`);
   console.log(`  primary      ${primary.display} (${primary.username})`);
   console.log(`cs desk        ${CS_USERNAMES.join(", ")}`);
   if (dryRun) {
@@ -131,9 +140,28 @@ async function main() {
   const client = new Client({ connectionString: db });
   await client.connect();
   try {
+    /**
+     * An empty database is the launch case. --allow-existing is for a local
+     * copy that already holds other operators: the tree is multi-tenant, so
+     * ALL Group can sit beside them, and a super admin sees only their own
+     * root. What is never allowed is a second ALL Group, which would split the
+     * clubs across two trees.
+     */
+    const allowExisting = process.argv.includes("--allow-existing");
+    const { rows: dup } = await client.query(
+      "SELECT count(*)::int AS n FROM entities WHERE name = $1 AND entity_type = 'main_company'",
+      [MAIN_COMPANY],
+    );
+    if (dup[0].n > 0) {
+      console.error(`\nRefusing: "${MAIN_COMPANY}" already exists.`);
+      process.exit(1);
+    }
     const { rows: has } = await client.query("SELECT count(*)::int AS n FROM entities");
-    if (has[0].n > 0) {
-      console.error(`\nRefusing: this database already has ${has[0].n} entities.`);
+    if (has[0].n > 0 && !allowExisting) {
+      console.error(
+        `\nRefusing: this database already has ${has[0].n} entities. ` +
+          `Pass --allow-existing to add ${MAIN_COMPANY} alongside them.`,
+      );
       process.exit(1);
     }
 
@@ -175,27 +203,33 @@ async function main() {
       await user(admin, "super_admin", mainId, admin.charAt(0).toUpperCase() + admin.slice(1));
     }
 
-    const leaderEntity = new Map<string, number>();
+    /**
+     * One entity per club, not per person.
+     *
+     * "tiong ab", "kc ab" and "eddie ab" are three partners in one company —
+     * AB — so they become three logins on a single entity. Leader scope reads
+     * company_leaders by the signed-in user's entity, so all three then see
+     * every casino under AB without anything else being wired up.
+     */
+    const clubEntity = new Map<string, number>();
+    for (const club of [...new Set(leaders.map((l) => l.club))]) {
+      const name = COMPANY_NAMES[club] ?? club.toUpperCase();
+      clubEntity.set(club, await entity(name, "leader", mainId));
+    }
     for (const l of leaders) {
-      const id = await entity(l.display, "leader", mainId);
-      leaderEntity.set(l.raw.toLowerCase(), id);
-      await user(l.username, "company_leader", id, l.display);
+      await user(l.username, "company_leader", clubEntity.get(l.club)!, l.display);
     }
 
-    const primaryId = leaderEntity.get(PRIMARY_LEADER)!;
+    const primaryId = clubEntity.get(parts(PRIMARY_LEADER).club.toLowerCase())!;
     const companyId = await entity(COMPANY.name, "company", primaryId);
-    for (const l of pokercity) {
-      await client.query(
-        `INSERT INTO company_leaders (company_entity_id, leader_entity_id, is_primary, note)
-         VALUES ($1, $2, $3, $4)`,
-        [
-          companyId,
-          leaderEntity.get(l.raw.toLowerCase()),
-          l.raw.toLowerCase() === PRIMARY_LEADER,
-          "Seeded at launch",
-        ],
-      );
-    }
+    // One row: the casino belongs to the company, and every partner logged in
+    // on that company inherits it. A row per partner would be the old shape,
+    // where each person was an entity.
+    await client.query(
+      `INSERT INTO company_leaders (company_entity_id, leader_entity_id, is_primary, note)
+       VALUES ($1, $2, true, $3)`,
+      [companyId, primaryId, "Seeded at launch"],
+    );
 
     const csId = await entity(`${COMPANY.name} CS`, "cs", companyId);
     for (const cs of CS_USERNAMES) {

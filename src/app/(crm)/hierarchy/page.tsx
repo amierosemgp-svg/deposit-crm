@@ -34,7 +34,7 @@ import {
 
 const ROLE_BADGE: Record<UserRole, { label: string; cls: string }> = {
   super_admin: { label: "Super Admin", cls: "bg-primary/10 text-primary" },
-  company_leader: { label: "Leader", cls: "bg-amber-500/10 text-amber-700 dark:text-amber-300" },
+  company_leader: { label: "Company", cls: "bg-amber-500/10 text-amber-700 dark:text-amber-300" },
   cs_agent: { label: "CS Agent", cls: "bg-blue-500/10 text-blue-700 dark:text-blue-300" },
   viewer: { label: "Viewer", cls: "bg-zinc-500/10 text-zinc-600 dark:text-zinc-400" },
 };
@@ -99,9 +99,15 @@ type UserDialogState = {
   isMain: boolean;
 } | null;
 
+/**
+ * The levels, in the words the operator uses. A "leader" entity is the company
+ * that owns casinos — AB (Abdullah Club) — and its partners are logins on it;
+ * a "company" entity is one casino, Pokercity. The column names keep the old
+ * words because the database does; only the screen changes.
+ */
 const ENTITY_TYPE_LABEL: Record<"leader" | "company" | "cs", string> = {
-  leader: "Leader",
-  company: "Company",
+  leader: "Company",
+  company: "Casino",
   cs: "CS Desk",
 };
 

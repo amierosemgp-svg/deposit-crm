@@ -56,7 +56,7 @@ function ScopeDivider() {
 
 const ROLE_LABELS: Record<UserRole, string> = {
   super_admin: "Super Admin",
-  company_leader: "Leader",
+  company_leader: "Company",
   cs_agent: "CS Agent",
   viewer: "Viewer",
 };
@@ -102,13 +102,27 @@ export function TopNav() {
     return entities.find((e) => e.entity_type === "main_company");
   }, [entities, me]);
 
-  // "View as leader" — only the main-company super admin sees this. It scopes
+  // "View as company" — only the main-company super admin sees this. It scopes
   // the whole CRM to a leader's companies and narrows the company dropdown.
   const leaders = useMemo(
     () => entities.filter((e) => e.entity_type === "leader"),
     [entities],
   );
   const showLeaderSelect = me?.role === "super_admin" && leaders.length > 0;
+
+  /**
+   * The company a leader signs in as — AB, not one of its casinos.
+   *
+   * A super admin picks a company from the dropdown beside this; a leader has
+   * exactly one and cannot change it, so it reads as a label rather than a
+   * control. Without it the header showed a leader nothing but the group name,
+   * and the casino dropdown alone doesn't say whose casinos they are.
+   */
+  const ownCompany = useMemo(() => {
+    if (me?.role !== "company_leader") return null;
+    const own = entities.find((e) => e.entity_id === me.entity_id);
+    return own?.entity_type === "leader" ? own : null;
+  }, [entities, me]);
   const visibleCompanies = useMemo(
     () =>
       selectedLeaderId === null
@@ -132,10 +146,10 @@ export function TopNav() {
   const companyLabel =
     selectedCompanyId === null
       ? selectedLeaderId === null
-        ? "All Companies"
-        : "All (this leader)"
+        ? "All Casinos"
+        : "All (this company)"
       : companies.find((c) => c.company_id === selectedCompanyId)
-          ?.company_name ?? "All Companies";
+          ?.company_name ?? "All Casinos";
 
   const badgeCount = pendingIncoming.length;
 
@@ -192,7 +206,7 @@ export function TopNav() {
                   setSelectedLeaderId(!v || v === "all" ? null : Number(v))
                 }
                 items={[
-                  { value: "all", label: "All Leaders" },
+                  { value: "all", label: "All Companies" },
                   ...leaders.map((l) => ({
                     value: String(l.entity_id),
                     label: l.name,
@@ -200,10 +214,10 @@ export function TopNav() {
                 ]}
               >
                 <SelectTrigger className={cn(SCOPE_TRIGGER, "font-semibold")}>
-                  <SelectValue placeholder="All Leaders" />
+                  <SelectValue placeholder="All Companies" />
                 </SelectTrigger>
                 <SelectContent {...SCOPE_CONTENT_PROPS}>
-                  <SelectItem value="all">All Leaders</SelectItem>
+                  <SelectItem value="all">All Companies</SelectItem>
                   {leaders.map((l) => (
                     <SelectItem key={l.entity_id} value={String(l.entity_id)}>
                       {l.name}
@@ -215,7 +229,19 @@ export function TopNav() {
             </>
           )}
 
-          {(companies.length > 1 || selectedLeaderId !== null) && (
+          {ownCompany && (
+            <span
+              className={cn(
+                SCOPE_TRIGGER.replace("cursor-pointer ", ""),
+                "flex items-center font-semibold",
+              )}
+              title={`Signed in on ${ownCompany.name}`}
+            >
+              {ownCompany.name}
+            </span>
+          )}
+
+          {(companies.length > 1 || selectedLeaderId !== null || !!ownCompany) && (
             <>
               <Select
                 value={companyValue}
@@ -224,13 +250,13 @@ export function TopNav() {
                 }
               >
                 <SelectTrigger className={SCOPE_TRIGGER}>
-                  <SelectValue placeholder="All Companies">
+                  <SelectValue placeholder="All Casinos">
                     {companyLabel}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent {...SCOPE_CONTENT_PROPS}>
                   <SelectItem value="all">
-                    {selectedLeaderId === null ? "All Companies" : "All (this leader)"}
+                    {selectedLeaderId === null ? "All Casinos" : "All (this company)"}
                   </SelectItem>
                   {visibleCompanies.map((c) => (
                     <SelectItem key={c.company_id} value={String(c.company_id)}>

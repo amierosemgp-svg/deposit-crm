@@ -924,9 +924,9 @@ export default function TransactionsPage() {
         assign,
         date,
         time,
-        from: { label: "From Leader", width: 160, entry: true, required: true, options: LEADER_SUGGESTIONS, placeholder: "from leader" },
+        from: { label: "From Company", width: 160, entry: true, required: true, options: LEADER_SUGGESTIONS, placeholder: "from leader" },
         fromaccount: { label: "From Account", width: 190, entry: true, options: END_SUGGESTIONS, placeholder: "bank account / Cash" },
-        to: { label: "To Leader", width: 160, entry: true, required: true, options: LEADER_SUGGESTIONS, placeholder: "to leader" },
+        to: { label: "To Company", width: 160, entry: true, required: true, options: LEADER_SUGGESTIONS, placeholder: "to leader" },
         toaccount: { label: "To Account", width: 190, entry: true, options: END_SUGGESTIONS, placeholder: "bank account / Cash" },
         amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "1000" },
         note: { label: "Note", width: 260, entry: true, placeholder: "what it settles (optional)" },
@@ -2257,12 +2257,42 @@ export default function TransactionsPage() {
       ASSIGNABLE_TABS.has(t) ? (COL[t] as Record<string, number | undefined>).assign : undefined,
     [ASSIGNABLE_TABS],
   );
+  /**
+   * Who holds a saved row, if anyone. Only the sheets that carry a claim.
+   */
+  const ownerOf = useCallback(
+    (rowIndex: number): number | null | undefined => {
+      const id = Number(rows[rowIndex]?.id);
+      if (tab === "deposit") return depositById.get(id)?.assigned_to_user_id ?? null;
+      if (tab === "withdrawal") return withdrawalById.get(id)?.assigned_to_user_id ?? null;
+      if (tab === "transfer")
+        return gameTransfers.find((t) => t.transfer_id === id)?.assigned_to_user_id ?? null;
+      return undefined;                   // this sheet has no claims
+    },
+    [tab, rows, depositById, withdrawalById, gameTransfers],
+  );
+
   const committedEditable = useCallback(
     (rowIndex: number, colIndex: number): boolean => {
       if (isViewer) return false;
-      // Assign to me: yes claims the row, no releases it — on any saved row of
-      // a sheet that has claims (the server refuses someone else's claim).
-      if (colIndex === assignColOf(tab)) return true;
+
+      /**
+       * A row is edited by whoever holds it.
+       *
+       * Two people working the same deposit is how a top-up gets done twice,
+       * so a claim is the lock: take the row first, and until you do, it is
+       * read-only. The claim cell itself is the way in and the way out — it
+       * opens on an unheld row (to take it) and on your own (to release it),
+       * and never on a colleague's, which the server refuses anyway.
+       */
+      const owner = ownerOf(rowIndex);
+      if (owner !== undefined) {
+        const mine = owner !== null && owner === me?.user_id;
+        if (colIndex === assignColOf(tab)) return owner === null || mine;
+        if (!mine) return false;
+      } else if (colIndex === assignColOf(tab)) {
+        return true;
+      }
       if (tab === "deposit") {
         if (!DEPOSIT_EDITABLE_COLS.has(colIndex)) return false;
         const dep = depositById.get(Number(rows[rowIndex]?.id));
@@ -2289,6 +2319,8 @@ export default function TransactionsPage() {
     [
       tab,
       isViewer,
+      me,
+      ownerOf,
       DEPOSIT_EDITABLE_COLS,
       DEPOSIT_EDITABLE_STATUS,
       WITHDRAWAL_EDITABLE_COLS,
@@ -3316,11 +3348,11 @@ export default function TransactionsPage() {
     { key: "rebate", label: "Rebate" },
     { key: "freecredit", label: "Free Credit" },
     { key: "transfer", label: "Game Transfer" },
-    { key: "leaderwithdrawal", label: "Leader Withdrawal" },
+    { key: "leaderwithdrawal", label: "Company Withdrawal" },
     // Leader settlements stay super-admin, as on their own page. Expenses are
     // open to everyone now, but only for bank charges — the desk records those
     // because they move a bank balance nobody else is watching.
-    ...(isAdmin ? [{ key: "leadertransfer" as const, label: "Leader Transfer" }] : []),
+    ...(isAdmin ? [{ key: "leadertransfer" as const, label: "Company Transfer" }] : []),
     { key: "expense" as const, label: isAdmin ? "Expenses" : "Bank Charges" },
   ];
 

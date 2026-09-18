@@ -72,6 +72,25 @@ export async function PATCH(
       );
     }
 
+
+    /**
+     * A row is corrected by whoever holds it.
+     *
+     * The sheet only offers the cells to the holder, but that is the UI's
+     * courtesy, not a rule — two desks editing the same row is how a figure
+     * gets corrected twice in opposite directions. An unheld row stays open:
+     * the bot and the admin flows patch those, and nobody is racing for it.
+     */
+    if (
+      row.assigned_to_user_id !== null &&
+      row.assigned_to_user_id !== user.user_id
+    ) {
+      return jsonError(
+        "That row is assigned to someone else — they have to release it first",
+        409,
+      );
+    }
+
     const parsed = patchSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
       return jsonError(parsed.error.issues[0]?.message ?? "Invalid payload");
