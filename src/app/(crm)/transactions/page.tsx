@@ -106,7 +106,7 @@ const COLUMN_KEYS = {
   ],
   withdrawal: [
     "assign", "member", "product", "username", "amount", "bank", "account",
-    "holder", "mode", "status", "date", "time", "remark2",
+    "holder", "paidfrom", "mode", "status", "date", "time", "remark2",
   ],
   freecredit: [
     "assign", "member", "product", "username", "amount", "mode", "remark",
@@ -779,6 +779,25 @@ export default function TransactionsPage() {
     ],
     [bankAccounts, entityName],
   );
+  /**
+   * Our own bank accounts, for the cells that name one: which account took a
+   * deposit, which one pays a withdrawal out.
+   *
+   * Not settings.banks — that is a catalogue of 25 bank *names*, which is what
+   * the Bank cell used to offer. A name cannot be credited or debited; three
+   * of this company's accounts are CIMB.
+   */
+  const OUR_ACCOUNTS = useMemo<SheetSuggestion[]>(
+    () =>
+      bankAccounts
+        .filter((a) => a.status === "active" && companyInScope(a.entity_id))
+        .map((a) => ({
+          value: a.label || `${a.bank_name} ${a.account_number}`,
+          hint: `${a.bank_name} · ${fmtAmount(a.current_balance)}`,
+        })),
+    [bankAccounts, companyInScope],
+  );
+
   const LEADER_SUGGESTIONS = useMemo<SheetSuggestion[]>(
     () =>
       entities
@@ -842,7 +861,7 @@ export default function TransactionsPage() {
         // alike. Never an entry cell: a total someone can type is a total that
         // can disagree with the figures it is made of.
         total: { label: "Total", width: 100, align: "right", numeric: true },
-        bank: { label: "Bank", width: 110, entry: true, required: true, options: banks, placeholder: "bank" },
+        bank: { label: "Bank", width: 130, entry: true, required: true, options: OUR_ACCOUNTS, placeholder: "our account" },
         mode,
         status,
         date,
@@ -862,6 +881,16 @@ export default function TransactionsPage() {
         // holder, so it's read off the player's saved accounts — derived,
         // and there to be checked against the payout before it's sent.
         holder: { label: "Account Holder", width: 160 },
+        // Which of OUR accounts the money leaves. The three columns before it
+        // are the player's — where the payout goes — and none of them says
+        // what to deduct, so a paid withdrawal moved no balance at all.
+        paidfrom: {
+          label: "Paid From",
+          width: 150,
+          entry: true,
+          options: OUR_ACCOUNTS,
+          placeholder: "our account",
+        },
         mode,
         status,
         date,
@@ -949,7 +978,7 @@ export default function TransactionsPage() {
         notes: { label: "Notes", width: 240, entry: true, placeholder: "notes (optional)" },
       }),
     };
-  }, [games, banks, companies, isAdmin, memberSuggestions, MODE_SUGGESTIONS, ASSIGN_SUGGESTIONS, ACCOUNT_SUGGESTIONS, LEADER_SUGGESTIONS, END_SUGGESTIONS, PAID_FROM_SUGGESTIONS]);
+  }, [games, banks, companies, isAdmin, OUR_ACCOUNTS, memberSuggestions, MODE_SUGGESTIONS, ASSIGN_SUGGESTIONS, ACCOUNT_SUGGESTIONS, LEADER_SUGGESTIONS, END_SUGGESTIONS, PAID_FROM_SUGGESTIONS]);
 
   const columns = columnsByTab[tab];
 
@@ -1036,6 +1065,15 @@ export default function TransactionsPage() {
    * back off the player. The account number identifies it; the bank name is
    * the fallback for rows entered before the number was recorded.
    */
+  /** One of our accounts by id, for showing which one a saved row used. */
+  const ourAccountById = useCallback(
+    (accountId?: number | null) =>
+      accountId == null
+        ? undefined
+        : bankAccounts.find((a) => a.account_id === accountId),
+    [bankAccounts],
+  );
+
   const payoutAccountOf = useCallback(
     (player: Player | undefined, bankName?: string | null, accountNumber?: string | null) => {
       const accounts = player?.bank_accounts ?? [];
@@ -1268,7 +1306,7 @@ export default function TransactionsPage() {
             bonuspct: pct ? `${pct}%` : "—",
             bonus: d.bonus_amount ? fmtAmount(d.bonus_amount) : "—",
             total: fmtAmount(d.total_amount),
-            bank: d.bank_name,
+            bank: ourAccountById(d.received_into_account_id)?.label ?? d.bank_name,
             mode: modeCell(d.skip_bot),
             status: DEPOSIT_STATUS_LABEL[d.status],
             // Bot-matched rows carry the bank's own timestamp; a sheet-entered
@@ -1323,6 +1361,7 @@ export default function TransactionsPage() {
             account: w.bank_account_number ?? "",
             holder:
               payoutAccountOf(p, w.bank_name, w.bank_account_number)?.account_holder ?? "",
+            paidfrom: ourAccountById(w.paid_from_account_id)?.label ?? "",
             mode: modeCell(w.skip_bot),
             status: WITHDRAWAL_STATUS_LABEL[w.status],
             date: sheetDate(w.created_at),
@@ -1793,6 +1832,14 @@ export default function TransactionsPage() {
       const amt = parseAmount(amount);
       if (amt === null || amt <= 0) return { ok: false, error: `Bad amount "${amount}"` };
       if (!bank.trim()) return { ok: false, error: "Bank is required" };
+      // The cell names one of our accounts. Resolving it here is what lets the
+      // completion credit a balance rather than just record a bank's name.
+      const into = accountByLabel.get(bank.trim().toLowerCase());
+      if (!into)
+        return {
+          ok: false,
+          error: `"${bank.trim()}" is not one of our accounts — pick one from the list`,
+        };
       let selected_game: string | undefined;
       if (product.trim()) {
         const g = gameByName.get(product.trim().toLowerCase());
@@ -1808,7 +1855,8 @@ export default function TransactionsPage() {
         payload: {
           player_id: player.player_id,
           amount: amt,
-          bank_name: bank.trim(),
+          bank_name: into.bank_name,
+          received_into_account_id: into.account_id,
           // Entered from the workbook = the money is already in the bank, so it
           // goes straight to the CS queue instead of waiting for a bank match.
           status: "pending",
@@ -1822,7 +1870,7 @@ export default function TransactionsPage() {
         },
       };
     },
-    [playerByCode, gameByName],
+    [playerByCode, gameByName, accountByLabel],
   );
 
   const parseWithdrawalDraft = useCallback(
@@ -1847,12 +1895,20 @@ export default function TransactionsPage() {
         return { ok: false, error: `Bad amount "${amount}" (number or ALL)` };
       const mode = parseMode(d[c.mode]);
       if (!mode.ok) return mode;
+      const paidCell = (d[c.paidfrom] ?? "").trim();
+      const paidFrom = paidCell ? accountByLabel.get(paidCell.toLowerCase()) : undefined;
+      if (paidCell && !paidFrom)
+        return {
+          ok: false,
+          error: `"${paidCell}" is not one of our accounts — pick one from the list`,
+        };
       return {
         ok: true,
         payload: {
           player_id: player.player_id,
           game_name: g,
           skip_bot: mode.skip_bot,
+          ...(paidFrom ? { paid_from_account_id: paidFrom.account_id } : {}),
           ...(username.trim() ? { game_username: username.trim() } : {}),
           ...(all ? { withdraw_all: true } : { requested_amount: amt }),
           ...(bank.trim() ? { bank_name: bank.trim() } : {}),
@@ -1861,7 +1917,7 @@ export default function TransactionsPage() {
         },
       };
     },
-    [playerByCode, gameByName],
+    [playerByCode, gameByName, accountByLabel],
   );
 
   const parseFreeCreditDraft = useCallback(

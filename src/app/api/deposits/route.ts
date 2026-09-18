@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { deposits, players, transactions } from "@/db/schema";
+import { bankAccounts, deposits, players, transactions } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import { canOverrideEligibility, resolveBonusForDeposit } from "@/lib/bonus";
@@ -24,6 +24,9 @@ const createSchema = z.object({
   bonus_percentage: z.number().min(0).max(200).optional(),
   // Leaders/admins only: force a bonus the player isn't entitled to, on record.
   bonus_override_reason: z.string().max(200).optional(),
+  // Which of our accounts took the money. Without it a deposit is a bank name
+  // and nothing more — the balance it landed in can never be credited.
+  received_into_account_id: z.number().int().positive().optional(),
   receipt_url: z.string().url().optional(),
   notes: z.string().optional(),
   // Fully manual: no agent bank-match or top-up — CS approves → completes it.
@@ -55,6 +58,17 @@ export async function POST(request: Request) {
       !user.companyIds.includes(player.company_entity_id)
     ) {
       throw new AuthError(403, "Player is outside your company scope");
+    }
+
+    if (body.received_into_account_id !== undefined) {
+      const [account] = await db
+        .select()
+        .from(bankAccounts)
+        .where(eq(bankAccounts.account_id, body.received_into_account_id));
+      if (!account) return jsonError("Bank account not found", 404);
+      if (account.entity_id !== player.company_entity_id) {
+        throw new AuthError(403, "That account belongs to another company");
+      }
     }
 
     const bonus = await resolveBonusForDeposit({
@@ -116,6 +130,7 @@ export async function POST(request: Request) {
           company_entity_id: player.company_entity_id,
           deposit_amount: body.amount,
           bank_name: body.bank_name,
+          received_into_account_id: body.received_into_account_id ?? null,
           selected_game: body.selected_game,
           selected_game_username: body.selected_game_username,
           ...bonus.fields,

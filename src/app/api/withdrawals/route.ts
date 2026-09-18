@@ -18,6 +18,9 @@ const createSchema = z.object({
   game_username: z.string().max(120).optional(),
   bank_name: z.string().optional(),
   bank_account_number: z.string().optional(),
+  // Which of OUR accounts pays it out. The bank_* fields above are the
+  // player's; without this there is nothing to deduct when it is marked paid.
+  paid_from_account_id: z.number().int().positive().optional(),
   // Fully manual: the agent never auto-pulls/pays this — CS handles it.
   skip_bot: z.boolean().optional(),
   // Claim it under the caller's name as it's created (the sheet's "Assign to
@@ -114,6 +117,7 @@ export async function POST(request: Request) {
           game_username: body.game_username,
           bank_name: body.bank_name,
           bank_account_number: body.bank_account_number,
+          paid_from_account_id: body.paid_from_account_id ?? null,
           source: "manual",
           skip_bot: skipBot,
           handled_by_user_id: user.user_id,

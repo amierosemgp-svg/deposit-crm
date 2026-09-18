@@ -9,6 +9,7 @@ import {
 } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
+import { paysWithdrawals } from "@/lib/types";
 
 const paidSchema = z.object({
   paid_from_account_id: z.number().int().positive().optional(),
@@ -17,7 +18,7 @@ const paidSchema = z.object({
 
 /**
  * POST /api/withdrawals/:id/paid — CS confirms the manual bank payout.
- * Optionally deducts the payout from a withdrawal-role company account.
+ * Deducts the payout from the company account that pays it.
  */
 export async function POST(
   request: Request,
@@ -56,14 +57,23 @@ export async function POST(
         throw new AuthError(403, "Withdrawal is outside your company scope");
       }
 
-      if (body.paid_from_account_id) {
+      /**
+       * The account named when the row was entered, unless this request names
+       * another. CS says where the money leaves at entry now, so marking it
+       * paid no longer has to ask again — and a payout that skips the question
+       * is a payout that never moves a balance.
+       */
+      const payFrom = body.paid_from_account_id ?? row.paid_from_account_id;
+      if (payFrom) {
         const [account] = await txn
           .select()
           .from(bankAccounts)
-          .where(eq(bankAccounts.account_id, body.paid_from_account_id))
+          .where(eq(bankAccounts.account_id, payFrom))
           .for("update");
         if (!account) throw new AuthError(404, "Payout account not found");
-        if (account.role !== "withdrawal") {
+        // A hybrid account pays out too — asking the question rather than
+        // comparing to a literal is why paysWithdrawals exists.
+        if (!paysWithdrawals(account.role)) {
           throw new AuthError(422, "Payouts must come from a withdrawal-role account");
         }
         if (account.current_balance < row.credit_pulled_amount) {
@@ -84,7 +94,7 @@ export async function POST(
         .update(withdrawals)
         .set({
           status: "paid",
-          paid_from_account_id: body.paid_from_account_id,
+          paid_from_account_id: payFrom,
           proof_url: body.proof_url,
           paid_at: nowIso,
           updated_at: nowIso,
@@ -109,7 +119,7 @@ export async function POST(
         user_id: user.user_id,
         details: {
           action: "paid",
-          paid_from_account_id: body.paid_from_account_id ?? null,
+          paid_from_account_id: payFrom ?? null,
         },
       });
 

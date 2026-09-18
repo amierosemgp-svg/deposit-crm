@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { bankAccounts, players, transactions, withdrawals } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
 import { BotError, botErrorResponse, jsonError, withdrawalJson } from "@/lib/bot-crud";
+import { paysWithdrawals } from "@/lib/types";
 
 const paidSchema = z.object({
   paid_from_account_id: z.number().int().positive().optional(),
@@ -12,7 +13,7 @@ const paidSchema = z.object({
 
 /**
  * POST /api/bot/withdrawals/:id/paid — mark the payout done.
- * Optionally deducts the amount from a withdrawal-role company account.
+ * Deducts the amount from the company account that pays it.
  */
 export async function POST(
   request: Request,
@@ -50,7 +51,9 @@ export async function POST(
           .where(eq(bankAccounts.account_id, body.paid_from_account_id))
           .for("update");
         if (!account) throw new BotError(404, "Payout account not found");
-        if (account.role !== "withdrawal") {
+        // A hybrid account pays out too — asking the question rather than
+        // comparing to a literal is why paysWithdrawals exists.
+        if (!paysWithdrawals(account.role)) {
           throw new BotError(422, "Payouts must come from a withdrawal-role account");
         }
         if (account.current_balance < row.credit_pulled_amount) {

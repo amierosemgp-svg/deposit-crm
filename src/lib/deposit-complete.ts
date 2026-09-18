@@ -7,6 +7,7 @@ import {
   CREDIT_CONFLICT_TARGET,
   resolveGameLogin,
 } from "@/lib/game-credits";
+import { moveBankBalance } from "@/lib/bank-balance";
 import { moveKioskCredit } from "@/lib/kiosk-credit";
 import { maybeCreateReferralBonus } from "@/lib/referral";
 
@@ -34,6 +35,25 @@ export async function completeManualDeposit(
   const nowIso = input.nowIso ?? new Date().toISOString();
   if (!row.player_id || !row.selected_game) {
     throw new Error("completeManualDeposit needs a player and a game");
+  }
+
+  /**
+   * The bank that took the money goes up by what the player actually paid.
+   *
+   * Only the deposit, never the total: the bonus is house credit granted at
+   * the kiosk, and no ringgit of it passes through a bank. Until this existed
+   * a bank balance could only ever fall — withdrawals, expenses and cash-outs
+   * all debited it and nothing credited it — so a day of trading left the
+   * recorded figure short by everything the desk took in.
+   *
+   * Skipped when the row never named an account, which is every row imported
+   * from a trading sheet: those balances came from the sheet's own dashboard.
+   */
+  if (row.received_into_account_id !== null) {
+    await moveBankBalance(txn, {
+      accountId: row.received_into_account_id,
+      delta: row.deposit_amount,
+    });
   }
 
   // The float pays for the top-up. Silently skipped when the company keeps no
@@ -192,6 +212,7 @@ export async function rebookCompletedDeposit(
     { playerId: number; gameName: string; login: string; delta: number }
   >();
   const totals = new Map<number, number>();
+  const banks = new Map<number, number>();
 
   const addKiosk = (companyEntityId: number | null, gameName: string | null, delta: number) => {
     if (companyEntityId === null || !gameName || delta === 0) return;
@@ -212,6 +233,10 @@ export async function rebookCompletedDeposit(
     at.delta += delta;
     wallet.set(key, at);
   };
+  const addBank = (accountId: number | null, delta: number) => {
+    if (accountId === null || delta === 0) return;
+    banks.set(accountId, (banks.get(accountId) ?? 0) + delta);
+  };
   const addTotal = (playerId: number | null, delta: number) => {
     if (playerId === null || delta === 0) return;
     totals.set(playerId, (totals.get(playerId) ?? 0) + delta);
@@ -226,10 +251,12 @@ export async function rebookCompletedDeposit(
   addKiosk(before.company_entity_id, beforeGame, before.total_amount);
   addWallet(before.player_id, beforeGame, beforeLogin, -before.total_amount);
   addTotal(before.player_id, -before.deposit_amount);
+  addBank(before.received_into_account_id, -before.deposit_amount);
   // …in with the new.
   addKiosk(after.company_entity_id, afterGame, -after.total_amount);
   addWallet(after.player_id, afterGame, afterLogin, after.total_amount);
   addTotal(after.player_id, after.deposit_amount);
+  addBank(after.received_into_account_id, after.deposit_amount);
 
   for (const k of kiosk.values()) {
     await moveKioskCredit(txn, {
@@ -249,6 +276,10 @@ export async function rebookCompletedDeposit(
       nowIso,
     });
     if (balance < 0) negativeWallets.push({ game: w.gameName, login: w.login, balance });
+  }
+
+  for (const [accountId, delta] of banks) {
+    await moveBankBalance(txn, { accountId, delta });
   }
 
   for (const [playerId, delta] of totals) {
