@@ -1,17 +1,33 @@
-import { desc, eq } from "drizzle-orm";
+import { desc, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { entities, leaderTransfers, transactions } from "@/db/schema";
+import { bankAccounts, entities, leaderTransfers, transactions } from "@/db/schema";
 import { AuthError, authErrorResponse, requireUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
+import { InsufficientBankBalanceError, moveBankBalance } from "@/lib/bank-balance";
 import { logActivity } from "@/lib/activity-log";
 
-const createSchema = z.object({
-  from_leader_entity_id: z.number().int().positive(),
-  to_leader_entity_id: z.number().int().positive(),
-  amount: z.number().positive(),
-  note: z.string().max(300).optional(),
-});
+const createSchema = z
+  .object({
+    from_leader_entity_id: z.number().int().positive(),
+    to_leader_entity_id: z.number().int().positive(),
+    amount: z.number().positive(),
+    note: z.string().max(300).optional(),
+    // Where the money came from and went. Omit both ends of a side to leave it
+    // unrecorded, as every row written before these columns existed.
+    from_account_id: z.number().int().positive().nullable().optional(),
+    to_account_id: z.number().int().positive().nullable().optional(),
+    from_cash: z.boolean().optional(),
+    to_cash: z.boolean().optional(),
+  })
+  .refine((v) => !(v.from_cash && v.from_account_id), {
+    message: "The sending end is a bank account or cash, not both",
+    path: ["from_account_id"],
+  })
+  .refine((v) => !(v.to_cash && v.to_account_id), {
+    message: "The receiving end is a bank account or cash, not both",
+    path: ["to_account_id"],
+  });
 
 /**
  * GET /api/leader-transfers — the settlement ledger between leaders.
@@ -29,13 +45,14 @@ export async function GET() {
       .limit(2000);
     return Response.json({ leader_transfers: rows });
   } catch (e) {
+    if (e instanceof InsufficientBankBalanceError) return jsonError(e.message, 422);
     return (
       authErrorResponse(e) ?? (console.error(e), jsonError("Server error", 500))
     );
   }
 }
 
-/** POST /api/leader-transfers — record a transfer from one leader to another. */
+/** POST /api/leader-transfers — record a transfer between leaders, or one leader's own accounts. */
 export async function POST(request: Request) {
   try {
     const user = await requireUser();
@@ -44,13 +61,42 @@ export async function POST(request: Request) {
     if (!parsed.success) return jsonError("Invalid payload");
     const body = parsed.data;
 
+    /**
+     * One leader can move money to themselves — bank to cash, cash to bank,
+     * one account to another. That is a real thing they do and it belongs in
+     * the same ledger as a settlement between two leaders.
+     *
+     * What is still refused is a row that moves nothing: the same leader with
+     * the same end on both sides, or with neither end named, which records a
+     * sum leaving and arriving in the same place. Between two leaders, unnamed
+     * ends stay allowed — that is the "not recorded" state every row written
+     * before the columns existed is in.
+     */
     if (body.from_leader_entity_id === body.to_leader_entity_id) {
-      return jsonError("From and to leader must differ");
+      const sameAccount =
+        body.from_account_id != null && body.from_account_id === body.to_account_id;
+      const bothCash = !!body.from_cash && !!body.to_cash;
+      const neither =
+        body.from_account_id == null &&
+        body.to_account_id == null &&
+        !body.from_cash &&
+        !body.to_cash;
+      if (sameAccount || bothCash || neither) {
+        return jsonError(
+          "A leader moving money to themselves needs two different ends — " +
+            "one account to another, or between an account and cash",
+        );
+      }
     }
 
     // Both ends must be actual leader entities.
     const ends = await db
-      .select({ id: entities.entity_id, type: entities.entity_type, name: entities.name })
+      .select({
+        id: entities.entity_id,
+        type: entities.entity_type,
+        name: entities.name,
+        parent: entities.parent_entity_id,
+      })
       .from(entities);
     const byId = new Map(ends.map((e) => [e.id, e]));
     const from = byId.get(body.from_leader_entity_id);
@@ -58,6 +104,56 @@ export async function POST(request: Request) {
     if (!from || from.type !== "leader") return jsonError("From is not a leader");
     if (!to || to.type !== "leader") return jsonError("To is not a leader");
 
+    /**
+     * A named account has to belong to the leader on that side of the transfer.
+     *
+     * Accounts hang off a leader or off one of its companies, so the check is
+     * "the account's entity is the leader, or its parent is" — without it the
+     * sheet would happily record one leader paying out of another's Maybank.
+     */
+    const ownedBy = (leaderId: number, entityId: number) =>
+      entityId === leaderId ||
+      ends.some((e) => e.id === entityId && e.parent === leaderId);
+
+    const accountIds = [body.from_account_id, body.to_account_id].filter(
+      (id): id is number => typeof id === "number",
+    );
+    const accounts = accountIds.length
+      ? await db
+          .select({ id: bankAccounts.account_id, entity_id: bankAccounts.entity_id, label: bankAccounts.label })
+          .from(bankAccounts)
+          .where(inArray(bankAccounts.account_id, accountIds))
+      : [];
+    const accountById = new Map(accounts.map((a) => [a.id, a]));
+
+    for (const [side, accountId, leaderId] of [
+      ["Sending", body.from_account_id, body.from_leader_entity_id],
+      ["Receiving", body.to_account_id, body.to_leader_entity_id],
+    ] as const) {
+      if (typeof accountId !== "number") continue;
+      const account = accountById.get(accountId);
+      if (!account) return jsonError(`${side} bank account not found`, 404);
+      if (!ownedBy(leaderId, account.entity_id)) {
+        return jsonError(
+          `${side} bank account does not belong to ${side === "Sending" ? from.name : to.name}`,
+        );
+      }
+    }
+
+    /**
+     * A named account moves; cash doesn't.
+     *
+     * These rows used to record where money went without moving anything, on
+     * the grounds that a settlement between leaders is their business. But the
+     * moment a row names one of our accounts, it is making a claim about that
+     * account's balance — a leader paying RM 1,000 of their own cash into the
+     * company Maybank means the Maybank has RM 1,000 more, and the CRM saying
+     * otherwise is just wrong. Cash ends move nothing because cash is not a
+     * balance the CRM keeps; it is what the row is telling us about.
+     *
+     * Note this is the same money a Bank Transfer would move if the pair were
+     * also recorded there — record each movement once.
+     */
     const created = await db.transaction(async (txn) => {
       const [row] = await txn
         .insert(leaderTransfers)
@@ -65,10 +161,28 @@ export async function POST(request: Request) {
           from_leader_entity_id: body.from_leader_entity_id,
           to_leader_entity_id: body.to_leader_entity_id,
           amount: body.amount,
+          from_account_id: body.from_account_id ?? null,
+          to_account_id: body.to_account_id ?? null,
+          from_cash: body.from_cash ?? false,
+          to_cash: body.to_cash ?? false,
           note: body.note ?? null,
           created_by_user_id: user.user_id,
         })
         .returning();
+
+      const balances: Record<string, number> = {};
+      if (body.from_account_id != null) {
+        balances.from_balance_after = await moveBankBalance(txn, {
+          accountId: body.from_account_id,
+          delta: -body.amount,
+        });
+      }
+      if (body.to_account_id != null) {
+        balances.to_balance_after = await moveBankBalance(txn, {
+          accountId: body.to_account_id,
+          delta: body.amount,
+        });
+      }
 
       // One audit row for the unified history + the transaction filter. Kept as
       // its own type (never "expense"), scoped to the sending leader.
@@ -83,7 +197,14 @@ export async function POST(request: Request) {
           from_leader: from.name,
           to_leader_entity_id: body.to_leader_entity_id,
           to_leader: to.name,
+          from: body.from_cash
+            ? "cash"
+            : (accountById.get(body.from_account_id ?? -1)?.label ?? null),
+          to: body.to_cash
+            ? "cash"
+            : (accountById.get(body.to_account_id ?? -1)?.label ?? null),
           note: body.note ?? null,
+          ...balances,
         },
       });
 
@@ -102,6 +223,7 @@ export async function POST(request: Request) {
 
     return Response.json({ leader_transfer: created }, { status: 201 });
   } catch (e) {
+    if (e instanceof InsufficientBankBalanceError) return jsonError(e.message, 422);
     return (
       authErrorResponse(e) ?? (console.error(e), jsonError("Server error", 500))
     );

@@ -24,14 +24,25 @@ type EntityRow = typeof entities.$inferSelect;
 
 /**
  * Who may edit a node — the mirror of the POST rules in ../route.ts:
- * super_admin anywhere; a company_leader only within their own subtree
- * (their leader entity, its companies, and those companies' CS desks).
+ * super_admin anywhere *in their own organisation*; a company_leader only
+ * within their own subtree (their leader entity, its companies, and those
+ * companies' CS desks).
  */
 function assertCanEdit(user: AuthedUser, entity: EntityRow) {
   if (user.role === "cs_agent") {
     throw new AuthError(403, "CS agents cannot modify the hierarchy");
   }
-  if (user.role === "super_admin") return;
+  if (user.role === "super_admin") {
+    // "Anywhere" used to mean the whole database. A super admin owns one main
+    // company; another organisation's tree is not theirs to rename or retire.
+    if (
+      user.ownedEntityIds === null ||
+      user.ownedEntityIds.includes(entity.entity_id)
+    ) {
+      return;
+    }
+    throw new AuthError(403, "Entity belongs to another organisation");
+  }
   if (entity.entity_id === user.entity_id) return;
   if (
     entity.entity_type === "company" &&

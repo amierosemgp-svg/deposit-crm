@@ -24,9 +24,9 @@ import { formatShortDateTime } from "@/lib/format";
 import type { Entity, EntityType, Me } from "@/lib/types";
 
 const TYPE_LABEL: Record<EntityType, string> = {
-  main_company: "Main Company",
-  leader: "Leader",
-  company: "Company",
+  main_company: "Group",
+  leader: "Company",
+  company: "Casino",
   cs: "CS Desk",
 };
 
@@ -157,7 +157,7 @@ function EditForm({ entity, editable }: { entity: Entity; editable: boolean }) {
             </Label>
             <p className="text-xs text-muted-foreground">
               {isMain
-                ? "The main company is always active."
+                ? "The group is always active."
                 : "Entities are never deleted — deactivate one to retire it while its players, accounts and history stay intact. Child entities keep their own status."}
             </p>
           </div>

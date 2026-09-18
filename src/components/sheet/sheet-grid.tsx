@@ -690,6 +690,7 @@ export function SheetGrid({
   onDraftsChange,
   draftStatus,
   onCommit,
+  flushRef,
   readOnly = false,
   /** Changing this key re-scrolls to the entry area and selects its first cell. */
   focusKey,
@@ -706,6 +707,18 @@ export function SheetGrid({
   onDraftsChange: (next: string[][]) => void;
   draftStatus: (draft: string[], index: number) => DraftStatus;
   onCommit: () => void;
+  /**
+   * Handed a function that commits whatever cell is mid-edit, and returns what
+   * it wrote so a save firing in the same tick can see it.
+   *
+   * Clicking Save blurs the editor, which commits. The keyboard shortcut does
+   * not: it is caught on window in capture, so the editor never sees the key,
+   * and a row saved straight after typing its last cell went in without that
+   * cell — "Bad amount """ on a row with an amount typed into it.
+   */
+  flushRef?: React.MutableRefObject<
+    null | (() => { draftIndex: number; col: number; value: string } | null)
+  >;
   readOnly?: boolean;
   focusKey?: string;
   /**
@@ -1192,6 +1205,21 @@ export function SheetGrid({
     [editing, readOnly, sel, draftStart, drafts, nCols, onDraftsChange, flash],
   );
 
+  // Kept current with the edit in flight, so the page's save shortcut can
+  // land the cell being typed before it reads the drafts.
+  useEffect(() => {
+    if (!flushRef) return;
+    flushRef.current = () => {
+      if (!editing) return null;
+      const { r, c, value } = editing;
+      commitEdit("none");
+      return r >= draftStart ? { draftIndex: r - draftStart, col: c, value } : null;
+    };
+    return () => {
+      flushRef.current = null;
+    };
+  }, [flushRef, editing, commitEdit, draftStart]);
+
   // ---- keyboard ----
 
   const handleKeyDown = useCallback(
@@ -1474,6 +1502,7 @@ export function SheetGrid({
           the same whether the selection sits in saved rows or entry rows. */}
       <div
         ref={containerRef}
+        data-sheet-grid=""
         tabIndex={0}
         onKeyDown={handleKeyDown}
         onCopy={handleCopy}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   Loader2,
@@ -29,7 +29,7 @@ import {
 import { useStore } from "@/lib/store";
 import { formatRM } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { EXPENSE_CATEGORIES, type ExpenseCategory } from "@/lib/types";
+import { EXPENSE_CATEGORIES, type Expense, type ExpenseCategory } from "@/lib/types";
 
 const CATEGORY_META: Record<ExpenseCategory, { label: string; cls: string }> = {
   salary: { label: "Salary", cls: "bg-blue-500/10 text-blue-700 dark:text-blue-300" },
@@ -39,6 +39,7 @@ const CATEGORY_META: Record<ExpenseCategory, { label: string; cls: string }> = {
   utilities: { label: "Utilities", cls: "bg-cyan-500/10 text-cyan-700" },
   equipment: { label: "Equipment", cls: "bg-slate-500/10 text-slate-700 dark:text-slate-300" },
   marketing: { label: "Marketing", cls: "bg-rose-500/10 text-rose-700 dark:text-rose-300" },
+  bank_charge: { label: "Bank Charge", cls: "bg-orange-500/10 text-orange-700 dark:text-orange-300" },
   other: { label: "Other", cls: "bg-zinc-500/10 text-zinc-700 dark:text-zinc-300" },
 };
 
@@ -57,6 +58,7 @@ export default function ExpensesPage() {
   const hydrated = useStore((s) => s.hydrated);
   const userName = useStore((s) => s.userName);
   const entityName = useStore((s) => s.entityName);
+  const bankAccounts = useStore((s) => s.bankAccounts);
   const deleteExpense = useStore((s) => s.deleteExpense);
   const companies = useStore((s) => s.companies)();
 
@@ -69,6 +71,21 @@ export default function ExpensesPage() {
   const [deletingId, setDeletingId] = useState<number | null>(null);
 
   const isAdmin = me?.role === "super_admin";
+
+  /** "Maybank ·1234", "Leader One — cash", or an em dash when unrecorded. */
+  const paidFromLabel = useCallback(
+    (e: Expense) => {
+      if (e.paid_from_account_id != null) {
+        const a = bankAccounts.find((x) => x.account_id === e.paid_from_account_id);
+        return a ? (a.label ?? `${a.bank_name} ${a.account_number}`) : `#${e.paid_from_account_id}`;
+      }
+      if (e.paid_from_cash_entity_id != null) {
+        return `${entityName(e.paid_from_cash_entity_id)} — cash`;
+      }
+      return "—";
+    },
+    [bankAccounts, entityName],
+  );
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -261,6 +278,8 @@ export default function ExpensesPage() {
               <Input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
+                data-page-search
+                title="Press ⌘F / Ctrl+F (or /) to jump here"
                 placeholder="Description, notes…"
                 className="h-8 pl-8"
               />
@@ -299,6 +318,7 @@ export default function ExpensesPage() {
                 <th className="px-3 py-2.5 text-left font-medium">Category</th>
                 <th className="px-3 py-2.5 text-left font-medium">Description</th>
                 <th className="px-3 py-2.5 text-left font-medium">Company</th>
+                <th className="px-3 py-2.5 text-left font-medium">Paid from</th>
                 <th className="px-3 py-2.5 text-left font-medium whitespace-nowrap">Recorded by</th>
                 <th className="px-3 py-2.5 text-right font-medium">Amount</th>
                 <th className="px-3 py-2.5 text-right font-medium">Actions</th>
@@ -333,6 +353,9 @@ export default function ExpensesPage() {
                       ? entityName(e.company_entity_id)
                       : "—"}
                   </td>
+                  <td className="px-3 py-2.5 whitespace-nowrap text-muted-foreground">
+                    {paidFromLabel(e)}
+                  </td>
                   <td className="px-3 py-2.5 text-[12px]">
                     {userName(e.recorded_by_user_id)}
                   </td>
@@ -360,7 +383,7 @@ export default function ExpensesPage() {
               {filtered.length === 0 && (
                 <tr>
                   <td
-                    colSpan={7}
+                    colSpan={8}
                     className="px-3 py-12 text-center text-xs text-muted-foreground"
                   >
                     {!hydrated ? (
@@ -405,12 +428,36 @@ function AddExpenseDialog({
 }) {
   const createExpense = useStore((s) => s.createExpense);
   const companies = useStore((s) => s.companies)();
+  const bankAccounts = useStore((s) => s.bankAccounts);
+  const entities = useStore((s) => s.entities);
+
+  /**
+   * One list, two kinds of source. "acct:<id>" is one of our bank accounts;
+   * "cash:<leaderId>" is that leader's own money. Encoding the kind in the
+   * value keeps it a single dropdown — CS picks where it came from without
+   * first having to say what sort of thing that is.
+   */
+  const paidFromOptions = useMemo(
+    () => [
+      ...bankAccounts
+        .filter((a) => a.status === "active")
+        .map((a) => ({
+          value: `acct:${a.account_id}`,
+          label: a.label ?? `${a.bank_name} ${a.account_number}`,
+        })),
+      ...entities
+        .filter((e) => e.entity_type === "leader" && e.status === "active")
+        .map((e) => ({ value: `cash:${e.entity_id}`, label: `${e.name} — cash` })),
+    ],
+    [bankAccounts, entities],
+  );
 
   const [date, setDate] = useState(todayStr());
   const [category, setCategory] = useState<string>("");
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState("");
   const [companyId, setCompanyId] = useState<string>("none");
+  const [paidFrom, setPaidFrom] = useState<string>("none");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -428,6 +475,7 @@ function AddExpenseDialog({
     setDescription("");
     setAmount("");
     setCompanyId("none");
+    setPaidFrom("none");
     setNotes("");
     setSubmitting(false);
   }
@@ -442,6 +490,12 @@ function AddExpenseDialog({
       description: description.trim(),
       amount: amt,
       company_entity_id: companyId === "none" ? null : Number(companyId),
+      paid_from_account_id: paidFrom.startsWith("acct:")
+        ? Number(paidFrom.slice(5))
+        : null,
+      paid_from_cash_entity_id: paidFrom.startsWith("cash:")
+        ? Number(paidFrom.slice(5))
+        : null,
       notes: notes.trim() || undefined,
     });
     setSubmitting(false);
@@ -570,6 +624,34 @@ function AddExpenseDialog({
                 </SelectContent>
               </Select>
             </div>
+          </div>
+
+          {/* Optional: an older expense nobody can place is better left blank
+              than attributed to the wrong account. */}
+          <div className="space-y-1.5">
+            <Label>Paid from (optional)</Label>
+            <Select
+              value={paidFrom}
+              onValueChange={(v) => setPaidFrom(v ?? "none")}
+              items={[
+                { value: "none", label: "— Not recorded —" },
+                ...paidFromOptions,
+              ]}
+            >
+              <SelectTrigger className="h-8 w-full cursor-pointer">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none" className="cursor-pointer">
+                  — Not recorded —
+                </SelectItem>
+                {paidFromOptions.map((o) => (
+                  <SelectItem key={o.value} value={o.value} className="cursor-pointer">
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           <div className="space-y-1.5">

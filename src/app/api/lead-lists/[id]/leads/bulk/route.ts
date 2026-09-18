@@ -11,7 +11,10 @@ const schema = z.object({
   rows: z
     .array(
       z.object({
-        contact_number: z.string().min(3).max(40),
+        // Optional: a bought list is often names only. A lead with no number
+        // can't be matched to an existing person, so it becomes a fresh one
+        // flagged for review (see findOrCreatePerson).
+        contact_number: z.string().min(3).max(40).optional(),
         full_name: z.string().min(1).max(120),
         telegram_username: z.string().max(80).optional(),
       }),
@@ -37,7 +40,7 @@ export async function POST(
     }
     const listId = Number((await params).id);
     const parsed = schema.safeParse(await request.json().catch(() => null));
-    if (!parsed.success) return jsonError("Provide rows: [{ contact_number, full_name }]");
+    if (!parsed.success) return jsonError("Provide rows: [{ full_name, contact_number? }]");
     const { rows } = parsed.data;
 
     const result = await db.transaction(async (txn) => {

@@ -14,6 +14,8 @@ export type ActivityCategory =
   | "api_key"
   | "settings"
   | "expense"
+  /** A saved deposit or withdrawal corrected after the fact. */
+  | "transaction"
   | "other";
 
 export type FieldChange = { field: string; from: unknown; to: unknown };
@@ -161,4 +163,64 @@ export async function companyOfEntity(
   if (entity.entity_type === "company") return entity.entity_id;
   if (entity.entity_type === "cs") return entity.parent_entity_id;
   return null;
+}
+
+/**
+ * Column names as the desk says them. The audit log keeps the real field
+ * names — it is read by whoever is reconstructing what happened — but the
+ * worksheet cell is read by CS mid-shift, and "deposit_amount" is not a thing
+ * anybody says out loud.
+ */
+const FIELD_LABELS: Record<string, string> = {
+  deposit_amount: "amount",
+  requested_amount: "amount",
+  credit_pulled_amount: "pulled",
+  bonus_amount: "bonus",
+  bonus_percentage: "bonus %",
+  selected_game: "game",
+  game_name: "game",
+  selected_game_username: "login",
+  game_username: "login",
+  bank_name: "bank",
+  bank_account_number: "account",
+  deposit_date: "date",
+  player_username: "member",
+};
+
+/** How many corrections a row's note keeps before the oldest drops off. */
+const EDIT_NOTE_KEEP = 3;
+
+/**
+ * The line the worksheet shows in Remark: who corrected the row, and what to.
+ *
+ * "Ah Meng: amount 500 → 50" — the person first, because that is what is being
+ * asked when someone reads it. Prepended to whatever was already there and
+ * trimmed to the last few, so a row corrected twice still shows both and a row
+ * corrected twenty times doesn't become a wall.
+ *
+ * Deliberately the person's real name, falling back to the username: "who
+ * edited this" is answered by a name the desk recognises, not an id.
+ */
+export function appendEditNote(
+  existing: string | null | undefined,
+  actor: Pick<AuthedUser, "user_id" | "username"> & { full_name?: string | null },
+  changes: FieldChange[],
+): string {
+  const who = actor.full_name?.trim() || actor.username;
+  const when = new Date().toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    timeZone: "Asia/Kuala_Lumpur",
+  });
+  const said = changes.map((c) => ({
+    ...c,
+    field: FIELD_LABELS[c.field] ?? c.field,
+  }));
+  const entry = `${who} ${when}: ${describeChanges(said)}`;
+  const kept = (existing ?? "")
+    .split(" · ")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, EDIT_NOTE_KEEP - 1);
+  return [entry, ...kept].join(" · ");
 }

@@ -33,6 +33,10 @@ type LeaderTransfer = {
   from_leader_entity_id: number;
   to_leader_entity_id: number;
   amount: number;
+  from_account_id: number | null;
+  to_account_id: number | null;
+  from_cash: boolean;
+  to_cash: boolean;
   note: string | null;
   created_by_user_id: number;
   created_at: string;
@@ -43,6 +47,17 @@ export default function LeaderTransfersPage() {
   const entities = useStore((s) => s.entities);
   const entityName = useStore((s) => s.entityName);
   const userName = useStore((s) => s.userName);
+  const bankAccounts = useStore((s) => s.bankAccounts);
+
+  const accountLabel = useCallback(
+    (id: number | null, cash: boolean) => {
+      if (cash) return "Cash";
+      if (id == null) return "—";
+      const a = bankAccounts.find((x) => x.account_id === id);
+      return a ? (a.label ?? `${a.bank_name} ${a.account_number}`) : `#${id}`;
+    },
+    [bankAccounts],
+  );
 
   const leaders = useMemo(
     () => entities.filter((e) => e.entity_type === "leader" && e.status === "active"),
@@ -120,12 +135,13 @@ export default function LeaderTransfersPage() {
         <div>
           <h1 className="text-2xl font-semibold">Leader Transfers</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Settlements between leaders — kept separate from expenses.
+            Settlements between leaders, and a leader&apos;s own moves between bank
+            and cash — kept separate from expenses.
           </p>
         </div>
         <Button
           onClick={() => setOpen(true)}
-          disabled={leaders.length < 2}
+          disabled={leaders.length < 1}
           className="cursor-pointer gap-1.5"
         >
           <Plus className="h-4 w-4" />
@@ -180,6 +196,8 @@ export default function LeaderTransfersPage() {
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
+              data-page-search
+              title="Press ⌘F / Ctrl+F (or /) to jump here"
               placeholder="Search leader or note…"
               className="h-8 w-56 pl-7 text-[13px]"
             />
@@ -191,7 +209,9 @@ export default function LeaderTransfersPage() {
               <tr className="border-b border-border text-left text-[11px] uppercase tracking-wide text-muted-foreground">
                 <th className="px-4 py-2 font-medium">Date</th>
                 <th className="px-4 py-2 font-medium">From</th>
+                <th className="px-4 py-2 font-medium">Out of</th>
                 <th className="px-4 py-2 font-medium">To</th>
+                <th className="px-4 py-2 font-medium">Into</th>
                 <th className="px-4 py-2 text-right font-medium">Amount</th>
                 <th className="px-4 py-2 font-medium">Note</th>
                 <th className="px-4 py-2 font-medium">By</th>
@@ -206,11 +226,17 @@ export default function LeaderTransfersPage() {
                   <td className="whitespace-nowrap px-4 py-2">
                     {entityName(r.from_leader_entity_id)}
                   </td>
+                  <td className="whitespace-nowrap px-4 py-2 text-muted-foreground">
+                    {accountLabel(r.from_account_id, r.from_cash)}
+                  </td>
                   <td className="whitespace-nowrap px-4 py-2">
                     <span className="inline-flex items-center gap-1.5">
                       <ArrowRight className="h-3 w-3 text-muted-foreground" />
                       {entityName(r.to_leader_entity_id)}
                     </span>
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-2 text-muted-foreground">
+                    {accountLabel(r.to_account_id, r.to_cash)}
                   </td>
                   <td className="whitespace-nowrap px-4 py-2 text-right font-medium tabular-nums">
                     {formatRM(r.amount)}
@@ -225,7 +251,7 @@ export default function LeaderTransfersPage() {
               ))}
               {loaded && filtered.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-4 py-10 text-center text-sm text-muted-foreground">
+                  <td colSpan={8} className="px-4 py-10 text-center text-sm text-muted-foreground">
                     {rows.length === 0
                       ? "No leader transfers yet."
                       : "No transfers match your search."}
@@ -251,6 +277,9 @@ export default function LeaderTransfersPage() {
   );
 }
 
+/** The value an "out of" / "into" picker carries: "cash", "" or an account id. */
+const CASH_END = "cash";
+
 function NewTransferDialog({
   leaders,
   onClose,
@@ -260,14 +289,48 @@ function NewTransferDialog({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const bankAccounts = useStore((s) => s.bankAccounts);
+  const entities = useStore((s) => s.entities);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  // "" = not recorded, "cash" = physical cash, otherwise a bank account id.
+  const [fromEnd, setFromEnd] = useState("");
+  const [toEnd, setToEnd] = useState("");
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
 
+  /**
+   * Accounts belonging to a leader, or to one of its companies — the same rule
+   * the server enforces, so the dropdown can't offer something the POST will
+   * refuse.
+   */
+  const accountsFor = useCallback(
+    (leaderId: string) => {
+      const id = Number(leaderId);
+      if (!id) return [];
+      const owned = new Set<number>([id]);
+      for (const e of entities) if (e.parent_entity_id === id) owned.add(e.entity_id);
+      return bankAccounts.filter((a) => a.status === "active" && owned.has(a.entity_id));
+    },
+    [bankAccounts, entities],
+  );
+
+  /** The end, as the API wants it. */
+  const endFields = (value: string, side: "from" | "to") => {
+    if (value === CASH_END) return { [`${side}_cash`]: true };
+    if (value) return { [`${side}_account_id`]: Number(value) };
+    return {};
+  };
+
   const amt = Number(amount.replace(/[,\s]/g, ""));
-  const valid = from && to && from !== to && Number.isFinite(amt) && amt > 0;
+  /**
+   * A leader can move money to themselves — between two of their own accounts,
+   * or between an account and cash. Only a row whose two ends are the same
+   * place moves nothing, and that is what's refused.
+   */
+  const sameEnd = from === to && (fromEnd === toEnd || (!fromEnd && !toEnd));
+  const valid = !!from && !!to && !sameEnd && Number.isFinite(amt) && amt > 0;
 
   async function submit() {
     if (!valid || busy) return;
@@ -280,6 +343,8 @@ function NewTransferDialog({
           from_leader_entity_id: Number(from),
           to_leader_entity_id: Number(to),
           amount: amt,
+          ...endFields(fromEnd, "from"),
+          ...endFields(toEnd, "to"),
           note: note.trim() || undefined,
         }),
       });
@@ -305,13 +370,20 @@ function NewTransferDialog({
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label>From leader</Label>
-              <Select value={from || null} onValueChange={(v) => setFrom(v ?? "")}>
+              <Select
+                value={from || null}
+                onValueChange={(v) => {
+                  setFrom(v ?? "");
+                  // The chosen account belonged to the old leader.
+                  if (fromEnd !== CASH_END) setFromEnd("");
+                }}
+              >
                 <SelectTrigger className="h-9 w-full cursor-pointer">
                   <SelectValue placeholder="Sender" />
                 </SelectTrigger>
                 <SelectContent>
                   {leaders.map((l) => (
-                    <SelectItem key={l.id} value={String(l.id)} disabled={String(l.id) === to}>
+                    <SelectItem key={l.id} value={String(l.id)}>
                       {l.name}
                     </SelectItem>
                   ))}
@@ -320,14 +392,58 @@ function NewTransferDialog({
             </div>
             <div className="space-y-1.5">
               <Label>To leader</Label>
-              <Select value={to || null} onValueChange={(v) => setTo(v ?? "")}>
+              <Select
+                value={to || null}
+                onValueChange={(v) => {
+                  setTo(v ?? "");
+                  if (toEnd !== CASH_END) setToEnd("");
+                }}
+              >
                 <SelectTrigger className="h-9 w-full cursor-pointer">
                   <SelectValue placeholder="Recipient" />
                 </SelectTrigger>
                 <SelectContent>
                   {leaders.map((l) => (
-                    <SelectItem key={l.id} value={String(l.id)} disabled={String(l.id) === from}>
+                    <SelectItem key={l.id} value={String(l.id)}>
                       {l.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Where the money physically moved. Optional: an older settlement
+                nobody can place is better left blank than guessed at. */}
+            <div className="space-y-1.5">
+              <Label>Out of</Label>
+              <Select
+                value={fromEnd || null}
+                onValueChange={(v) => setFromEnd(v ?? "")}
+              >
+                <SelectTrigger className="h-9 w-full cursor-pointer">
+                  <SelectValue placeholder="Bank account / Cash" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={CASH_END}>Cash</SelectItem>
+                  {accountsFor(from).map((a) => (
+                    <SelectItem key={a.account_id} value={String(a.account_id)}>
+                      {a.label ?? `${a.bank_name} ${a.account_number}`}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Into</Label>
+              <Select value={toEnd || null} onValueChange={(v) => setToEnd(v ?? "")}>
+                <SelectTrigger className="h-9 w-full cursor-pointer">
+                  <SelectValue placeholder="Bank account / Cash" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={CASH_END}>Cash</SelectItem>
+                  {accountsFor(to).map((a) => (
+                    <SelectItem key={a.account_id} value={String(a.account_id)}>
+                      {a.label ?? `${a.bank_name} ${a.account_number}`}
                     </SelectItem>
                   ))}
                 </SelectContent>

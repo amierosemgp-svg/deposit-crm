@@ -1,6 +1,7 @@
 import { Sidebar } from "@/components/layout/sidebar";
 import { TopNav } from "@/components/layout/topnav";
 import { PageContainer } from "@/components/layout/page-container";
+import { PageSearchShortcut } from "@/components/layout/page-search-shortcut";
 import { PlayerProfileProvider } from "@/components/player-name-link";
 import { ClientOnly } from "@/components/client-only";
 import { StoreHydrator } from "@/components/store-hydrator";
@@ -44,6 +45,8 @@ export default function CrmLayout({
         <BotLiveFeed />
         {/* Ctrl+Alt+Delete — the admin's emergency kill switch. */}
         <KillSwitchListener />
+        {/* "/" jumps to whatever search box this page has. */}
+        <PageSearchShortcut />
       </ClientOnly>
     </PlayerProfileProvider>
   );

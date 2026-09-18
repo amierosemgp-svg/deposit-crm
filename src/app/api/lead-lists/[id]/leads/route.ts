@@ -8,7 +8,9 @@ import { findOrCreatePerson } from "@/lib/people";
 import { formatCode } from "@/lib/lead-lists";
 
 const schema = z.object({
-  contact_number: z.string().min(3).max(40),
+  // Optional — a lead with no number on file still belongs in the list; it
+  // just can't be matched to an existing person, so it's flagged for review.
+  contact_number: z.string().min(3).max(40).optional(),
   full_name: z.string().min(1).max(120),
   telegram_username: z.string().max(80).optional(),
 });
@@ -29,7 +31,7 @@ export async function POST(
     }
     const listId = Number((await params).id);
     const parsed = schema.safeParse(await request.json().catch(() => null));
-    if (!parsed.success) return jsonError("Provide contact_number and full_name");
+    if (!parsed.success) return jsonError("Provide full_name (contact_number optional)");
     const body = parsed.data;
 
     const result = await db.transaction(async (txn) => {

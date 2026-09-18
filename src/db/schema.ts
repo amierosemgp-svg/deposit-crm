@@ -31,6 +31,23 @@ export const userRoleEnum = pgEnum("user_role", [
 
 export const activeStatusEnum = pgEnum("active_status", ["active", "inactive"]);
 
+/**
+ * A browser that has signed in. "pending" is the default a new one lands on:
+ * it is recorded and usable while the device policy is off, and refused once
+ * an admin turns enforcement on — nothing is locked out by adding the table.
+ */
+export const deviceStatusEnum = pgEnum("device_status", [
+  "pending",
+  "approved",
+  "blocked",
+]);
+
+/** What a one-time code was issued for. */
+export const authChallengePurposeEnum = pgEnum("auth_challenge_purpose", [
+  "login",
+  "telegram_link",
+]);
+
 export const playerStatusEnum = pgEnum("player_status", ["active", "suspended"]);
 
 /** Who created a transaction: the agent (auto-detected) or a person (manual). */
@@ -53,6 +70,10 @@ export const botStateEnum = pgEnum("bot_state", [
 export const bankAccountRoleEnum = pgEnum("bank_account_role", [
   "deposit",
   "withdrawal",
+  // One account doing both jobs — common where a house runs a single account.
+  // Ask takesDeposits() / paysWithdrawals() rather than comparing to a
+  // literal, or "both" silently drops out of one side.
+  "both",
 ]);
 
 export const bankTransferStatusEnum = pgEnum("bank_transfer_status", [
@@ -197,6 +218,9 @@ export const auditTypeEnum = pgEnum("audit_type", [
   "leader_transfer",
   // Cash a leader took out of a company bank account by hand.
   "bank_cash_out",
+  // An operational cost paid out of a company bank account — bank charges,
+  // rent, a subscription. The ledger line behind that balance moving.
+  "expense",
 ]);
 
 // ---------- Core hierarchy ----------
@@ -224,10 +248,94 @@ export const users = pgTable("users", {
     .references(() => entities.entity_id),
   status: activeStatusEnum("status").notNull().default("active"),
   last_login_at: timestamp("last_login_at", { withTimezone: true, mode: "string" }),
+  /**
+   * Where the login code is sent. Set by enrolment — the user opens the bot
+   * from Settings and it reports the chat back — never typed by hand, because
+   * nobody knows their own chat id.
+   */
+  telegram_chat_id: varchar("telegram_chat_id", { length: 40 }),
+  telegram_username: varchar("telegram_username", { length: 80 }),
+  /**
+   * Ask for a Telegram code after the password. Can only be on once a chat is
+   * linked; unlinking Telegram turns it off, so a user can't lock themselves
+   * out of an account whose second factor has nowhere to arrive.
+   */
+  two_factor_enabled: boolean("two_factor_enabled").notNull().default(false),
+  /**
+   * IPs and CIDR ranges this user may sign in from. Empty = anywhere, which
+   * is the default, so the column changes nothing until someone fills it.
+   */
+  ip_allowlist: jsonb("ip_allowlist").$type<string[]>().notNull().default([]),
   created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
     .notNull()
     .defaultNow(),
   updated_at: timestamp("updated_at", { withTimezone: true, mode: "string" })
+    .notNull()
+    .defaultNow(),
+});
+
+/**
+ * A browser that has signed in to an account.
+ *
+ * The nearest thing the web gives us to "this machine": a random id minted on
+ * first sign-in and kept in a long-lived signed cookie. It is not a MAC
+ * address and can't be — a page cannot read one — so it identifies a browser
+ * profile, not hardware. Clearing cookies or a new browser is a new device,
+ * which is the point: it shows up for approval.
+ */
+export const userDevices = pgTable(
+  "user_devices",
+  {
+    device_id: serial("device_id").primaryKey(),
+    user_id: integer("user_id")
+      .notNull()
+      .references(() => users.user_id),
+    /** The opaque id carried in the device cookie. */
+    fingerprint: varchar("fingerprint", { length: 64 }).notNull(),
+    /** What the user calls it ("Front desk PC"); defaults to the browser/OS. */
+    label: varchar("label", { length: 80 }),
+    user_agent: varchar("user_agent", { length: 300 }),
+    last_ip: varchar("last_ip", { length: 60 }),
+    status: deviceStatusEnum("status").notNull().default("pending"),
+    approved_by_user_id: integer("approved_by_user_id").references(
+      () => users.user_id,
+    ),
+    approved_at: timestamp("approved_at", { withTimezone: true, mode: "string" }),
+    first_seen_at: timestamp("first_seen_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+    last_seen_at: timestamp("last_seen_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [unique("user_devices_user_fingerprint").on(t.user_id, t.fingerprint)],
+);
+
+/**
+ * A one-time code in flight — a login waiting on its Telegram code, or an
+ * enrolment waiting for the user to open the bot.
+ *
+ * Only the hash is stored, the same reasoning as a password: a leaked table
+ * shouldn't hand over live codes. A row is consumed on first correct use and
+ * dies either way at `expires_at`; `attempts` caps guessing.
+ */
+export const authChallenges = pgTable("auth_challenges", {
+  challenge_id: serial("challenge_id").primaryKey(),
+  user_id: integer("user_id")
+    .notNull()
+    .references(() => users.user_id),
+  purpose: authChallengePurposeEnum("purpose").notNull(),
+  /** sha256 of the code. Null for an enrolment, whose token is the id below. */
+  code_hash: varchar("code_hash", { length: 64 }),
+  /** The deep-link token for a telegram_link challenge. */
+  link_token: varchar("link_token", { length: 64 }),
+  attempts: integer("attempts").notNull().default(0),
+  /** Which browser asked, so the session lands on the device that logged in. */
+  device_fingerprint: varchar("device_fingerprint", { length: 64 }),
+  ip: varchar("ip", { length: 60 }),
+  expires_at: timestamp("expires_at", { withTimezone: true, mode: "string" }).notNull(),
+  consumed_at: timestamp("consumed_at", { withTimezone: true, mode: "string" }),
+  created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
     .notNull()
     .defaultNow(),
 });
@@ -433,6 +541,53 @@ export const memberGameAccounts = pgTable(
     // The same login can't be linked twice on one member.
     unique("member_game_login_key").on(t.member_id, t.game_name, t.game_username),
   ],
+);
+
+/**
+ * Which leaders run a company, and when they did.
+ *
+ * entities.parent_entity_id gives a company one leader forever, which the
+ * business outgrows in three ways: a company run jointly, a leader downgraded
+ * and their companies handed on, two leaders merged.
+ *
+ * The dangerous one was the hand-off. No money row stores a leader — deposits,
+ * withdrawals, expenses and transactions carry only company_entity_id — so the
+ * leader was derived by walking the tree at read time, and moving a company
+ * silently rewrote history. Ownership is dated here instead: a change closes
+ * one row and opens another, and "who ran this company in August" survives any
+ * number of moves.
+ *
+ * Not a revenue split. Two leaders on one company both manage it; the money
+ * still belongs to the company and reports group by company. A share column
+ * would go here if that ever changes — the dating is already right for it.
+ */
+export const companyLeaders = pgTable(
+  "company_leaders",
+  {
+    id: serial("id").primaryKey(),
+    company_entity_id: integer("company_entity_id")
+      .notNull()
+      .references(() => entities.entity_id),
+    leader_entity_id: integer("leader_entity_id")
+      .notNull()
+      .references(() => entities.entity_id),
+    valid_from: timestamp("valid_from", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+    /** Null is the ownership in force now. */
+    valid_to: timestamp("valid_to", { withTimezone: true, mode: "string" }),
+    /**
+     * The leader this company draws under in the hierarchy. Exactly one live
+     * row per company carries it, so the tree still has a spine to hang on;
+     * `entities.parent_entity_id` is kept in step with it.
+     */
+    is_primary: boolean("is_primary").notNull().default(false),
+    note: text("note"),
+    created_by_user_id: integer("created_by_user_id").references(() => users.user_id),
+    created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
 );
 
 // ---------- Money ----------
@@ -655,11 +810,12 @@ export const deposits = pgTable("deposits", {
   // first (or only) account for the game — the pre-multi-account default.
   selected_game_username: varchar("selected_game_username", { length: 120 }),
   status: depositStatusEnum("status").notNull().default("pending"),
-  // Agent-detected bank credits default to "agent"; CRM-entered deposits set "manual".
-  source: transactionSourceEnum("source").notNull().default("bot"),
+  // The agent states "bot" on its own inserts; everything else is a person.
+  source: transactionSourceEnum("source").notNull().default("manual"),
   // When true the deposit is fully manual: the agent never matches or tops it up;
-  // a human approves → processing → completes (or rejects) it.
-  skip_bot: boolean("skip_bot").notNull().default(false),
+  // a human approves → processing → completes (or rejects) it. Defaults on —
+  // the agent takes work only where someone has opted into it.
+  skip_bot: boolean("skip_bot").notNull().default(true),
   matched_at: timestamp("matched_at", { withTimezone: true, mode: "string" }),
   /**
    * When the deposit stopped waiting on a human — the moment it was approved
@@ -686,6 +842,10 @@ export const deposits = pgTable("deposits", {
   assigned_at: timestamp("assigned_at", { withTimezone: true, mode: "string" }),
   game_topup_reference: varchar("game_topup_reference", { length: 80 }),
   receipt_url: text("receipt_url"),
+  // A one-line trail of corrections made after the row was saved, newest
+  // first — what the worksheet shows in Remark. The full diff is in
+  // activity_log; this is the part that fits in a cell.
+  edit_note: text("edit_note"),
   created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
     .notNull()
     .defaultNow(),
@@ -725,8 +885,8 @@ export const withdrawals = pgTable("withdrawals", {
     .default(0),
   status: withdrawalStatusEnum("status").notNull().default("requested"),
   // When true the agent never auto-pulls/pays this withdrawal; CS handles it
-  // manually (pull → paid) and can reject it.
-  skip_bot: boolean("skip_bot").notNull().default(false),
+  // manually (pull → paid) and can reject it. Defaults on, as on deposits.
+  skip_bot: boolean("skip_bot").notNull().default(true),
   // CS-entered requests default to "manual"; agent-created requests set "agent".
   source: transactionSourceEnum("source").notNull().default("manual"),
   handled_by_user_id: integer("handled_by_user_id").references(() => users.user_id),
@@ -741,6 +901,8 @@ export const withdrawals = pgTable("withdrawals", {
     () => bankAccounts.account_id,
   ),
   proof_url: text("proof_url"),
+  // See deposits.edit_note.
+  edit_note: text("edit_note"),
   paid_at: timestamp("paid_at", { withTimezone: true, mode: "string" }),
   created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
     .notNull()
@@ -1007,6 +1169,10 @@ export const gameTransfers = pgTable("game_transfers", {
     scale: 2,
     mode: "number",
   }).notNull(),
+  // true = CS moved the credit in the back-office themselves; false = the
+  // agent did it. Null on rows written before the column existed, which the
+  // sheet shows as blank rather than guessing — see the 2026-09-17 migration.
+  skip_bot: boolean("skip_bot"),
   // "Move the whole source wallet." game_credits is a cache that lags the
   // provider, so resolving "all" to a number at request time posts a stale
   // figure — the flag travels to the agent instead, which reads the real
@@ -1127,6 +1293,7 @@ export const expenseCategoryEnum = pgEnum("expense_category", [
   "utilities",
   "equipment",
   "marketing",
+  "bank_charge",
   "other",
 ]);
 
@@ -1139,6 +1306,23 @@ export const expenses = pgTable("expenses", {
   description: varchar("description", { length: 200 }).notNull(),
   amount: numeric("amount", { precision: 14, scale: 2, mode: "number" }).notNull(),
   company_entity_id: integer("company_entity_id").references(
+    () => entities.entity_id,
+  ),
+  /**
+   * What the money came out of: one of our bank accounts, or a leader's own
+   * cash. Exactly one, or neither for a row nobody recorded it on.
+   *
+   * Cash names the leader because an expense has no leader column of its own,
+   * and "paid in cash" without saying whose cannot be settled later.
+   *
+   * Recording this moves no balance. An expense that should also show against
+   * a bank account is entered as a bank cash-out; booking it here as well
+   * would debit the same money twice.
+   */
+  paid_from_account_id: integer("paid_from_account_id").references(
+    () => bankAccounts.account_id,
+  ),
+  paid_from_cash_entity_id: integer("paid_from_cash_entity_id").references(
     () => entities.entity_id,
   ),
   recorded_by_user_id: integer("recorded_by_user_id")
@@ -1167,6 +1351,21 @@ export const leaderTransfers = pgTable("leader_transfers", {
     .notNull()
     .references(() => entities.entity_id),
   amount: numeric("amount", { precision: 14, scale: 2, mode: "number" }).notNull(),
+  /**
+   * Where the money physically came from, and where it landed. Each end is
+   * one of three states, kept distinguishable on purpose:
+   *   account set → that bank account
+   *   cash true   → physical cash, no account involved
+   *   neither     → not recorded (every row written before the columns existed)
+   *
+   * Recording these moves no balance. A settlement out of a bank account that
+   * should also show against that account is entered as a bank cash-out —
+   * booking it here as well would debit the same money twice.
+   */
+  from_account_id: integer("from_account_id").references(() => bankAccounts.account_id),
+  to_account_id: integer("to_account_id").references(() => bankAccounts.account_id),
+  from_cash: boolean("from_cash").notNull().default(false),
+  to_cash: boolean("to_cash").notNull().default(false),
   // What the settlement is for — free text, shown in the list and report.
   note: text("note"),
   created_by_user_id: integer("created_by_user_id")
@@ -1304,6 +1503,8 @@ export const activityCategoryEnum = pgEnum("activity_category", [
   "api_key",
   "settings",
   "expense",
+  // A saved deposit or withdrawal corrected after the fact.
+  "transaction",
   "other",
 ]);
 

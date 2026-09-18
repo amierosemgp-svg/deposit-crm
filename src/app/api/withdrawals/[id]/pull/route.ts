@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { gameCredits, players, transactions, withdrawals } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { creditWhere, resolveGameLogin } from "@/lib/game-credits";
+import { moveKioskCredit } from "@/lib/kiosk-credit";
 import { jsonError } from "@/lib/api-helpers";
 
 /**
@@ -79,6 +80,16 @@ export async function POST(
           last_updated_at: nowIso,
         })
         .where(creditWhere(row.player_id, row.game_name, login));
+
+
+      // The credit is back in the kiosk the moment it leaves the player's
+      // wallet, so the company's float goes up here — not at payment, which
+      // moves cash out of a bank and never touches a kiosk.
+      await moveKioskCredit(txn, {
+        companyEntityId: player?.company_entity_id ?? null,
+        gameName: row.game_name,
+        delta: pulled,
+      });
 
       const [updated] = await txn
         .update(withdrawals)

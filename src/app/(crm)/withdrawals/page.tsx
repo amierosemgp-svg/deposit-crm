@@ -47,6 +47,7 @@ import {
   ConfirmActionDialog,
   type SummaryRow,
 } from "@/components/confirm-action-dialog";
+import { paysWithdrawals } from "@/lib/types";
 
 const STATUS_FILTERS: { value: string; tab: string }[] = [
   { value: "requested", tab: "Requested" },
@@ -96,7 +97,9 @@ export default function WithdrawalsPage() {
   const [newAll, setNewAll] = useState(false);
   const [newBankName, setNewBankName] = useState("");
   const [newBankAccount, setNewBankAccount] = useState("");
-  const [newSkipBot, setNewSkipBot] = useState(false);
+  // Checked by default, matching the server: new withdrawals are handled by
+  // hand unless someone opts this one into the agent.
+  const [newSkipBot, setNewSkipBot] = useState(true);
   const [playerPickerOpen, setPlayerPickerOpen] = useState(false);
   const [newSubmitting, setNewSubmitting] = useState(false);
 
@@ -182,7 +185,7 @@ export default function WithdrawalsPage() {
   );
 
   const payoutAccounts = bankAccounts.filter(
-    (a) => a.role === "withdrawal" && a.status === "active",
+    (a) => paysWithdrawals(a.role) && a.status === "active",
   );
 
   const newPlayer = newPlayerId ? playerById(Number(newPlayerId)) : undefined;
@@ -444,6 +447,8 @@ export default function WithdrawalsPage() {
             <Input
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
+              data-page-search
+              title="Press ⌘F / Ctrl+F (or /) to jump here"
               placeholder="Search player, game, bank, amount…"
               className="h-8 w-[240px] pl-8"
             />

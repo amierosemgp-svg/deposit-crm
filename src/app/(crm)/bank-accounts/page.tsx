@@ -55,6 +55,15 @@ function countdownTo(expiresAt: string, now: number) {
 }
 
 function RoleBadge({ role }: { role: BankAccount["role"] }) {
+  // A hybrid account is both things at once, so it gets its own badge rather
+  // than being filed under whichever half the code happened to check first.
+  if (role === "both") {
+    return (
+      <span className="inline-flex items-center rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[10px] font-medium text-violet-700 dark:text-violet-300 whitespace-nowrap">
+        Deposit &amp; Withdrawal
+      </span>
+    );
+  }
   return role === "deposit" ? (
     <span className="inline-flex items-center rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300 whitespace-nowrap">
       Deposit · Collection

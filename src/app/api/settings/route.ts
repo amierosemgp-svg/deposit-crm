@@ -24,6 +24,13 @@ const schema = z.object({
       monthly: z.object({ day: z.number().int().min(1).max(31), time: TIME }),
     })
     .optional(),
+  /**
+   * Whether an unapproved browser may sign in. "off" records devices and
+   * refuses none — the default, and what an existing database has. Approve
+   * the team's real machines first, then switch this on; the other order
+   * locks out the whole desk at once.
+   */
+  device_policy: z.enum(["off", "enforce"]).optional(),
 });
 
 const KEYS = [
@@ -32,6 +39,7 @@ const KEYS = [
   "games",
   "banks",
   "rebate_cutoffs",
+  "device_policy",
 ] as const;
 
 /** PATCH /api/settings — super_admin edits system configuration. */

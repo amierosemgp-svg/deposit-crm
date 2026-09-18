@@ -2,8 +2,10 @@
 
 import { create } from "zustand";
 import type {
+  CompanyLeader,
   ApiKeyRow,
   BankAccount,
+  BankAccountRole,
   BankTransfer,
   BonusOption,
   BonusPlan,
@@ -34,7 +36,12 @@ export type Notification = {
   createdAt: number;
 };
 
-export type MutationResult = { ok: boolean; error?: string };
+export type MutationResult = {
+  ok: boolean;
+  error?: string;
+  /** Saved, but something about it needs saying — see the deposit PATCH. */
+  warning?: string;
+};
 
 async function api<T = unknown>(
   path: string,
@@ -66,6 +73,7 @@ async function api<T = unknown>(
 type StateResponse = {
   me: Me;
   entities: Entity[];
+  companyLeaders: CompanyLeader[];
   users: User[];
   /** Absent when the roster we already hold is current — see playersVersion. */
   players?: Player[];
@@ -92,6 +100,8 @@ type Store = {
   hydrated: boolean;
   me: Me | null;
   entities: Entity[];
+  /** Who currently runs each company — a company may have more than one. */
+  companyLeaders: CompanyLeader[];
   users: User[];
   players: Player[];
   deposits: Deposit[];
@@ -165,7 +175,14 @@ type Store = {
     patch: Partial<
       Pick<
         Deposit,
-        "bonus_percentage" | "bonus_plan_id" | "selected_game" | "player_id"
+        | "bonus_percentage"
+        | "bonus_plan_id"
+        | "selected_game"
+        | "selected_game_username"
+        | "player_id"
+        | "deposit_amount"
+        | "bank_name"
+        | "deposit_date"
       >
     > & { bonus_override_reason?: string },
   ) => Promise<MutationResult>;
@@ -285,7 +302,7 @@ type Store = {
   ) => Promise<MutationResult>;
   addBankAccount: (input: {
     entity_id: number;
-    role: "deposit" | "withdrawal";
+    role: BankAccountRole;
     bank_name: string;
     account_number: string;
     account_holder: string;
@@ -370,6 +387,9 @@ type Store = {
     amount: number;
     company_entity_id?: number | null;
     notes?: string;
+    /** Paid out of a bank account, or out of a leader's cash. Never both. */
+    paid_from_account_id?: number | null;
+    paid_from_cash_entity_id?: number | null;
   }) => Promise<MutationResult>;
   deleteExpense: (expenseId: number) => Promise<MutationResult>;
   addEntity: (input: {
@@ -383,8 +403,9 @@ type Store = {
   ) => Promise<MutationResult>;
   addUser: (input: {
     username: string;
-    email: string;
-    full_name: string;
+    /** Both omitted for a main-company account; the server derives them. */
+    email?: string;
+    full_name?: string;
     password: string;
     role: "company_leader" | "cs_agent" | "viewer";
     entity_id: number;
@@ -432,6 +453,7 @@ type Store = {
     games?: string[];
     rebate_cutoffs?: ServerSettings["rebate_cutoffs"];
     banks?: string[];
+    device_policy?: ServerSettings["device_policy"];
   }) => Promise<MutationResult>;
 
   uploadFile: (file: File) => Promise<{ ok: boolean; url?: string; error?: string }>;
@@ -463,6 +485,7 @@ export const useStore = create<Store>((set, get) => {
     hydrated: false,
     me: null,
     entities: [],
+    companyLeaders: [],
     users: [],
     players: [],
     deposits: [],
@@ -665,7 +688,7 @@ export const useStore = create<Store>((set, get) => {
           return next;
         }),
       });
-      const res = await api<{ deposit: Deposit }>(`/api/deposits/${depositId}`, {
+      const res = await api<{ deposit: Deposit; warning?: string }>(`/api/deposits/${depositId}`, {
         method: "PATCH",
         body: JSON.stringify(patch),
       });
@@ -684,7 +707,7 @@ export const useStore = create<Store>((set, get) => {
           ),
         });
       }
-      return { ok: true };
+      return { ok: true, ...(res.data?.warning ? { warning: res.data.warning } : {}) };
     },
 
     approveDeposit: async (depositId) => {

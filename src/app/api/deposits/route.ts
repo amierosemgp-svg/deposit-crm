@@ -5,6 +5,8 @@ import { deposits, players, transactions } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import { canOverrideEligibility, resolveBonusForDeposit } from "@/lib/bonus";
+import { completeManualDeposit } from "@/lib/deposit-complete";
+import { InsufficientKioskCreditError } from "@/lib/kiosk-credit";
 
 const createSchema = z.object({
   player_id: z.number().int().positive(),
@@ -71,64 +73,140 @@ export async function POST(request: Request) {
     });
     if (!bonus.ok) return jsonError(bonus.reason, bonus.status);
 
-    // A skip-agent deposit has no agent bank-match step, so it always starts at
-    // "pending" (ready for manual approval), never "pending_match".
-    const status = body.skip_bot ? "pending" : body.status;
-    const nowIso = new Date().toISOString();
-    const [created] = await db
-      .insert(deposits)
-      .values({
-        transaction_ref: `CRM-${Date.now()}`,
-        deposit_date: nowIso,
-        player_id: player.player_id,
-        player_username: player.username,
-        company_entity_id: player.company_entity_id,
-        deposit_amount: body.amount,
-        bank_name: body.bank_name,
-        selected_game: body.selected_game,
-        selected_game_username: body.selected_game_username,
-        ...bonus.fields,
-        status,
-        source: "manual",
-        skip_bot: body.skip_bot ?? false,
-        receipt_url: body.receipt_url,
-        handled_by_user_id: user.user_id,
-        ...(body.assign_to_me
-          ? { assigned_to_user_id: user.user_id, assigned_at: nowIso }
-          : {}),
-        created_at: nowIso,
-        updated_at: nowIso,
-      })
-      .returning();
+    // A skip-agent deposit has no agent bank-match step, so it never starts at
+    // "pending_match".
+    const skipBot = body.skip_bot ?? true;
 
-    await db.insert(transactions).values({
-      player_id: player.player_id,
-      entity_id: player.company_entity_id,
-      type: "deposit",
-      amount: body.amount,
-      reference_id: created.deposit_id,
-      user_id: user.user_id,
-      details: {
-        source: "manual",
-        action: "intent_created",
-        status,
-        skip_bot: body.skip_bot ?? false,
-        ...(bonus.plan
-          ? {
-              bonus: bonus.plan.name,
-              bonus_plan_id: bonus.plan.plan_id,
-              bonus_amount: bonus.fields.bonus_amount,
-              // Present only when a leader/admin forced an ineligible bonus —
-              // this is the line an audit reads back.
-              ...(bonus.fields.bonus_override_reason
-                ? { bonus_override_reason: bonus.fields.bonus_override_reason }
-                : {}),
-            }
-          : {}),
-      },
+    /**
+     * A manual deposit is done the moment it is written.
+     *
+     * Approve and complete were both steps for dispatching work to the agent
+     * and then hearing back. With no agent in the loop they were two clicks
+     * that said nothing the human hadn't already said by typing the row: CS
+     * types it *because* the money arrived and the kiosk top-up is done. So
+     * the row is approved and completed in one go, and the booking — the
+     * player's game credit, the company's kiosk float, total_deposits — lands
+     * here rather than waiting for a click that only ever confirmed the past.
+     *
+     * A deposit with no game chosen can't be topped up anywhere, so it still
+     * waits at "pending" exactly as POST /:id/approve would refuse it.
+     */
+    const autoComplete = skipBot && !!body.selected_game;
+    const status = autoComplete
+      ? ("processing" as const)
+      : skipBot
+        ? ("pending" as const)
+        : body.status;
+    const nowIso = new Date().toISOString();
+
+    /**
+     * One transaction: the row, its ledger lines and — for a manual deposit —
+     * the booking that completes it. A row that exists in "completed" while
+     * the credit it promises was never written would be the worst of the three
+     * outcomes, so they stand or fall together.
+     */
+    const { deposit, warning } = await db.transaction(async (txn) => {
+      const [created] = await txn
+        .insert(deposits)
+        .values({
+          transaction_ref: `CRM-${Date.now()}`,
+          deposit_date: nowIso,
+          player_id: player.player_id,
+          player_username: player.username,
+          company_entity_id: player.company_entity_id,
+          deposit_amount: body.amount,
+          bank_name: body.bank_name,
+          selected_game: body.selected_game,
+          selected_game_username: body.selected_game_username,
+          ...bonus.fields,
+          status,
+          source: "manual",
+          skip_bot: skipBot,
+          receipt_url: body.receipt_url,
+          handled_by_user_id: user.user_id,
+          ...(autoComplete ? { approved_at: nowIso } : {}),
+          ...(body.assign_to_me
+            ? { assigned_to_user_id: user.user_id, assigned_at: nowIso }
+            : {}),
+          created_at: nowIso,
+          updated_at: nowIso,
+        })
+        .returning();
+
+      await txn.insert(transactions).values({
+        player_id: player.player_id,
+        entity_id: player.company_entity_id,
+        type: "deposit",
+        amount: body.amount,
+        reference_id: created.deposit_id,
+        user_id: user.user_id,
+        details: {
+          source: "manual",
+          action: "intent_created",
+          status,
+          skip_bot: skipBot,
+          ...(bonus.plan
+            ? {
+                bonus: bonus.plan.name,
+                bonus_plan_id: bonus.plan.plan_id,
+                bonus_amount: bonus.fields.bonus_amount,
+                // Present only when a leader/admin forced an ineligible bonus
+                // — this is the line an audit reads back.
+                ...(bonus.fields.bonus_override_reason
+                  ? { bonus_override_reason: bonus.fields.bonus_override_reason }
+                  : {}),
+              }
+            : {}),
+        },
+      });
+
+      if (!autoComplete) return { deposit: created, warning: null as string | null };
+
+      // The approval, as its own ledger line — the same row POST /:id/approve
+      // writes, so the history reads like any other deposit's.
+      await txn.insert(transactions).values({
+        player_id: player.player_id,
+        entity_id: player.company_entity_id,
+        type: "deposit",
+        amount: created.total_amount,
+        game_name: created.selected_game,
+        reference_id: created.deposit_id,
+        user_id: user.user_id,
+        details: {
+          action: "approved_dispatched",
+          source: "manual",
+          auto: true,
+          bonus_percentage: created.bonus_percentage,
+        },
+      });
+
+      try {
+        const done = await completeManualDeposit(txn, {
+          row: created,
+          userId: user.user_id,
+          nowIso,
+        });
+        return { deposit: done, warning: null as string | null };
+      } catch (e) {
+        /**
+         * The one failure worth absorbing: the kiosk float can't cover the
+         * top-up. The money still arrived in the bank, so refusing to record
+         * the deposit would be the wrong answer — it stays where it used to
+         * stop, "processing", and CS completes it once the float is topped up.
+         *
+         * Safe to swallow inside the transaction because this is thrown from
+         * TypeScript before any statement fails: nothing has aborted, so the
+         * inserts above still commit. Anything else is a real error and rolls
+         * the whole row back.
+         */
+        if (e instanceof InsufficientKioskCreditError) {
+          return { deposit: created, warning: e.message };
+        }
+        throw e;
+      }
     });
 
-    return Response.json({ deposit: created }, { status: 201 });
+    return Response.json({ deposit, ...(warning ? { warning } : {}) }, { status: 201 });
   } catch (e) {
     return (
       authErrorResponse(e) ?? (console.error(e), jsonError("Server error", 500))

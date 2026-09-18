@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/select";
 import { toast } from "sonner";
 import { Upload, Users } from "lucide-react";
+import { parseLeads } from "@/lib/lead-lists";
 
 type LeadListOption = { list_id: number; name: string; prefix: string };
 
@@ -21,42 +22,6 @@ type Props = {
   lists: LeadListOption[];
   onImported?: () => void;
 };
-
-type ParsedRow = {
-  line: number;
-  phone: string;
-  name: string;
-  telegram?: string;
-  error?: string;
-};
-
-/**
- * Split a pasted/CSV block into lead rows. One lead per line:
- * phone, name[, telegram]. Commas or tabs separate columns; a header line
- * naming "phone" is dropped.
- */
-function parseLeads(text: string): ParsedRow[] {
-  const lines = text.split(/\r?\n/).map((l) => l.trim());
-  const out: ParsedRow[] = [];
-  lines.forEach((raw, i) => {
-    if (!raw) return;
-    const cols = raw.split(/[\t,]/).map((c) => c.trim());
-    if (i === 0 && /phone|contact|number/i.test(cols[0]) && /name/i.test(cols[1] ?? "")) {
-      return; // header row
-    }
-    const [phone, name, telegram] = cols;
-    if (!phone || !name) {
-      out.push({ line: i + 1, phone: phone ?? "", name: name ?? "", error: "Needs phone and name" });
-      return;
-    }
-    if (phone.replace(/\D/g, "").length < 3) {
-      out.push({ line: i + 1, phone, name, error: "Phone looks invalid" });
-      return;
-    }
-    out.push({ line: i + 1, phone, name, telegram: telegram || undefined });
-  });
-  return out;
-}
 
 export function ImportLeadsModal({ open, onOpenChange, lists, onImported }: Props) {
   const [listId, setListId] = useState("");
@@ -68,6 +33,8 @@ export function ImportLeadsModal({ open, onOpenChange, lists, onImported }: Prop
   const parsed = useMemo(() => parseLeads(text), [text]);
   const valid = parsed.filter((r) => !r.error);
   const errors = parsed.filter((r) => r.error);
+  // Imported fine, but unidentifiable later — worth saying out loud.
+  const noPhone = valid.filter((r) => !r.phone).length;
   const targetList = lists.find((l) => String(l.list_id) === listId);
 
   function reset() {
@@ -94,7 +61,7 @@ export function ImportLeadsModal({ open, onOpenChange, lists, onImported }: Prop
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           rows: valid.map((r) => ({
-            contact_number: r.phone,
+            ...(r.phone ? { contact_number: r.phone } : {}),
             full_name: r.name,
             ...(r.telegram ? { telegram_username: r.telegram } : {}),
           })),
@@ -138,7 +105,8 @@ export function ImportLeadsModal({ open, onOpenChange, lists, onImported }: Prop
           <div>
             <h2 className="text-sm font-semibold">Import leads</h2>
             <p className="text-[11px] text-muted-foreground">
-              Paste from your sheet — one lead per line: phone, name, Telegram (optional)
+              Paste from your sheet — one lead per line: phone, name, Telegram.
+              Only the name is required.
             </p>
           </div>
         </div>
@@ -189,15 +157,23 @@ export function ImportLeadsModal({ open, onOpenChange, lists, onImported }: Prop
           <textarea
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder={"0191234567, Ali bin Ahmad\n0197654321, Siti, @sitihandle"}
+            placeholder={
+              "0191234567, Ali bin Ahmad\n0197654321, Siti, @sitihandle\nLee Chee Meng"
+            }
             className="h-40 w-full resize-none rounded-md border border-input bg-background p-2.5 font-mono text-[12px] outline-none focus:border-ring focus:ring-2 focus:ring-ring/30"
           />
 
           {parsed.length > 0 && (
-            <div className="flex items-center gap-3 text-[12px]">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px]">
               <span className="font-medium text-emerald-700 dark:text-emerald-400">
                 {valid.length} ready
               </span>
+              {noPhone > 0 && (
+                <span className="text-muted-foreground">
+                  {noPhone} without a phone — flagged for review, since there&apos;s
+                  no number to match them on later
+                </span>
+              )}
               {errors.length > 0 && (
                 <span className="text-amber-700 dark:text-amber-400">
                   {errors.length} skipped —{" "}

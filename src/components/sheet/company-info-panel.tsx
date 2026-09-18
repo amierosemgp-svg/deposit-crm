@@ -3,7 +3,9 @@
 /**
  * The block the client keeps at the top of every sheet in their workbook:
  * bank balances, game/kiosk credits, and the running month totals — always
- * visible while rows scroll underneath.
+ * visible while rows scroll underneath. Each collection account also carries
+ * the number of deposits it took over the period, so the balance is read
+ * next to the traffic behind it.
  *
  * Presented as the dashboard's cards (same Card chrome, uppercase muted
  * titles, figure + bordered account list) so the sheet page and the dashboard
@@ -20,27 +22,89 @@ import { botForName } from "@/lib/bot-category";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Banknote, Coins, Landmark, Wallet } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { takesDeposits, paysWithdrawals } from "@/lib/types";
+
+/**
+ * The order the client's own workbook lists kiosks in.
+ *
+ * Deliberately fixed rather than alphabetical or by id: the desk reads this
+ * card against a spreadsheet they have used for years, and a row in a
+ * different place is a row they have to hunt for.
+ *
+ * Each entry holds every spelling that means the same kiosk, because the
+ * sheet and the CRM don't always agree (Joker123 / Joker, LuckyPalace /
+ * LPE88). Matching ignores case and punctuation. A kiosk matching nothing
+ * here still shows — it sorts to the bottom, alphabetically — so a spelling
+ * nobody anticipated is visible and easy to fix rather than silently gone.
+ */
+const KIOSK_ORDER: readonly (readonly string[])[] = [
+  ["rollex", "rollex11"],
+  ["scr888"],
+  ["suncity"],
+  ["luckypalace", "lpe88"],
+  ["3win8"],
+  ["ace333"],
+  ["mega888"],
+  ["sky777"],
+  ["joker123", "joker"],
+  ["xe88"],
+  ["scr918kiss", "918kiss"],
+  ["ac", "allcity"],
+  ["918kaya", "kaya"],
+  ["pussy888"],
+  ["4d"],
+];
+
+/** "Joker 123" and "joker123" are the same kiosk. */
+function kioskKey(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+const KIOSK_RANK = new Map<string, number>(
+  KIOSK_ORDER.flatMap((names, i) => names.map((n) => [n, i] as const)),
+);
+
+/** Where a kiosk sits in the workbook's order; unknown ones go last. */
+function kioskRank(gameName: string): number {
+  return KIOSK_RANK.get(kioskKey(gameName)) ?? Number.MAX_SAFE_INTEGER;
+}
 
 function InfoCard({
   title,
+  hint,
   icon: Icon,
   total,
   rows,
   totalClassName,
 }: {
   title: string;
+  /** Small note beside the title — what period the row counts cover. */
+  hint?: string;
   icon: React.ComponentType<{ className?: string }>;
   total: number;
-  rows: { label: string; value: number; dim?: boolean; online?: boolean }[];
+  rows: {
+    label: string;
+    value: number;
+    dim?: boolean;
+    online?: boolean;
+    /** Transactions in the period, shown next to the name ("10 dep"). */
+    count?: number;
+    countSuffix?: string;
+  }[];
   totalClassName?: string;
 }) {
   return (
     <Card size="sm" className="gap-1.5">
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-0">
-        <CardTitle className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-          {title}
+        <CardTitle className="flex min-w-0 items-baseline gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+          <span className="truncate">{title}</span>
+          {hint && (
+            <span className="shrink-0 normal-case tracking-normal text-muted-foreground/70">
+              {hint}
+            </span>
+          )}
         </CardTitle>
-        <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+        <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
       </CardHeader>
       <CardContent className="px-3">
         <div className={cn("text-sm font-semibold tabular-nums", totalClassName)}>
@@ -68,6 +132,11 @@ function InfoCard({
                 <span className={cn("truncate", r.dim && "text-muted-foreground")}>
                   {r.label}
                 </span>
+                {r.count !== undefined && (
+                  <span className="shrink-0 rounded-full bg-muted px-1.5 text-[10px] font-medium tabular-nums text-muted-foreground">
+                    {r.count} {r.countSuffix ?? ""}
+                  </span>
+                )}
               </span>
               <span
                 className={cn(
@@ -100,27 +169,72 @@ export function CompanyInfoPanel({ range }: { range: DateRange }) {
   const inMonth = (iso: string) => inRange(iso, range);
 
   const scope = useMemo(() => {
-    const banksDeposit = bankAccounts
-      .filter((a) => a.status === "active" && a.role === "deposit" && companyInScope(a.entity_id))
-      .map((a) => ({
-        label: a.label || `${a.bank_name}`,
-        value: a.current_balance,
-        online: isBotOnline(botForName(botHealth, a.bank_name)?.last_heartbeat_at),
-      }));
+    const depositAccounts = bankAccounts.filter(
+      (a) => a.status === "active" && takesDeposits(a.role) && companyInScope(a.entity_id),
+    );
+
+    /**
+     * How many deposits each collection account took in over the period —
+     * "Maybank 10, CIMB 15" — so the balance is read next to the traffic that
+     * produced it, and a quiet bank is obvious at a glance.
+     *
+     * A deposit names its account outright when the agent matched one. The
+     * older rows only carry a bank name, so those fall back to the single
+     * in-scope account of that bank; when two accounts share a bank name
+     * there's no way to tell them apart, and the row is left uncounted rather
+     * than counted twice.
+     */
+    const accountById = new Map(depositAccounts.map((a) => [a.account_id, a]));
+    const soleAccountOfBank = new Map<string, number | null>();
+    for (const a of depositAccounts) {
+      const key = a.bank_name.toLowerCase();
+      // Second account on the same bank ⇒ ambiguous, so record null.
+      soleAccountOfBank.set(key, soleAccountOfBank.has(key) ? null : a.account_id);
+    }
+    const depositCount = new Map<number, number>();
+
+    /**
+     * A hybrid account is listed on both cards, because it really is available
+     * for both — but it is the same money twice, so it says so. Without the
+     * mark, reading the two totals as a sum would count it once too often.
+     */
+    const roleMark = (a: { role: string }) => (a.role === "both" ? " · both" : "");
+
+    const banksDeposit = depositAccounts.map((a) => ({
+      label: (a.label || `${a.bank_name}`) + roleMark(a),
+      value: a.current_balance,
+      online: isBotOnline(botForName(botHealth, a.bank_name)?.last_heartbeat_at),
+      accountId: a.account_id,
+    }));
     const banksWithdrawal = bankAccounts
-      .filter((a) => a.status === "active" && a.role === "withdrawal" && companyInScope(a.entity_id))
+      .filter((a) => a.status === "active" && paysWithdrawals(a.role) && companyInScope(a.entity_id))
       .map((a) => ({
-        label: a.label || `${a.bank_name}`,
+        label: (a.label || `${a.bank_name}`) + roleMark(a),
         value: a.current_balance,
         online: isBotOnline(botForName(botHealth, a.bank_name)?.last_heartbeat_at),
       }));
-    const games = boAccounts
-      .filter((b) => b.status === "active" && companyInScope(b.company_entity_id))
+    const activeKiosks = boAccounts.filter(
+      (b) => b.status === "active" && companyInScope(b.company_entity_id),
+    );
+    // Rows are named after the game, so they read like the workbook. When a
+    // game runs more than one back-office the name alone doesn't say which,
+    // and only those rows carry their account label as well.
+    const kiosksPerGame = new Map<string, number>();
+    for (const b of activeKiosks) {
+      const key = kioskKey(b.game_name);
+      kiosksPerGame.set(key, (kiosksPerGame.get(key) ?? 0) + 1);
+    }
+    const games = activeKiosks
       .map((b) => ({
-        label: b.bo_label || b.game_name,
+        label:
+          (kiosksPerGame.get(kioskKey(b.game_name)) ?? 0) > 1 && b.bo_label
+            ? `${b.game_name} · ${b.bo_label}`
+            : b.game_name,
         value: b.current_credit,
         online: isBotOnline(botForName(botHealth, b.game_name)?.last_heartbeat_at),
-      }));
+        rank: kioskRank(b.game_name),
+      }))
+      .sort((a, b) => a.rank - b.rank || a.label.localeCompare(b.label));
 
     let depTotal = 0;
     let depBonus = 0;
@@ -132,6 +246,14 @@ export function CompanyInfoPanel({ range }: { range: DateRange }) {
       depTotal += d.deposit_amount;
       depBonus += d.bonus_amount;
       depCount++;
+
+      const matched =
+        d.received_into_account_id != null && accountById.has(d.received_into_account_id)
+          ? d.received_into_account_id
+          : (soleAccountOfBank.get(d.bank_name?.toLowerCase() ?? "") ?? null);
+      if (matched != null) {
+        depositCount.set(matched, (depositCount.get(matched) ?? 0) + 1);
+      }
     }
     // Withdrawals carry no company of their own — scope through the player.
     const playerCompany = new Map(players.map((p) => [p.player_id, p.company_entity_id]));
@@ -144,7 +266,20 @@ export function CompanyInfoPanel({ range }: { range: DateRange }) {
       wdTotal += w.status === "paid" ? w.credit_pulled_amount || w.requested_amount : w.requested_amount;
       wdCount++;
     }
-    return { banksDeposit, banksWithdrawal, games, depTotal, depBonus, depCount, wdTotal, wdCount };
+    return {
+      banksDeposit: banksDeposit.map(({ accountId, ...row }) => ({
+        ...row,
+        count: depositCount.get(accountId) ?? 0,
+        countSuffix: "dep",
+      })),
+      banksWithdrawal,
+      games,
+      depTotal,
+      depBonus,
+      depCount,
+      wdTotal,
+      wdCount,
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bankAccounts, boAccounts, botHealth, deposits, withdrawals, players, range, selectedCompanyId, companyInScope]);
 
@@ -157,6 +292,7 @@ export function CompanyInfoPanel({ range }: { range: DateRange }) {
     <div className="grid shrink-0 grid-cols-2 gap-3 xl:grid-cols-4">
       <InfoCard
         title="Bank · Deposit"
+        hint={`${monthLabel} count`}
         icon={Landmark}
         total={sum(scope.banksDeposit)}
         rows={scope.banksDeposit}

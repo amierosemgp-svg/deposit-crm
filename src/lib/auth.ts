@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "@/db";
-import { entities, users } from "@/db/schema";
+import { companyLeaders, entities, users } from "@/db/schema";
 import { DuplicateGameAccountError } from "./game-name";
 import {
   SESSION_COOKIE,
@@ -15,7 +15,13 @@ import { getSessionEpoch } from "@/lib/kill-switch";
 export type { SessionPayload };
 
 export type AuthedUser = SessionPayload & {
-  /** Company entity IDs this user may see. null = unrestricted (super_admin / viewer). */
+  /**
+   * Company entity IDs this user may see.
+   *
+   * `null` means unrestricted. Nothing produces it any more — every role is
+   * scoped to its own organisation (see resolveScope) — but the branches that
+   * handle it are left in place as a safe default rather than removed.
+   */
   companyIds: number[] | null;
   /** Entity IDs (companies + leader itself) whose bank accounts this user manages. */
   ownedEntityIds: number[] | null;
@@ -47,20 +53,73 @@ export async function getSession(): Promise<SessionPayload | null> {
 
 /**
  * Resolve the entity-visibility scope for a session user.
- * - super_admin / viewer → everything (null)
- * - company_leader → all company entities under their leader entity
+ * - super_admin / viewer → their own main company and everything under it
+ * - company_leader → every company they currently run (company_leaders)
  * - cs_agent → the single company their cs entity belongs to
+ *
+ * A super admin is the super admin *of one organisation*, not of the database.
+ * This used to hand them `null` — unrestricted — which was indistinguishable
+ * from correct while exactly one main company existed. The moment a second one
+ * did, every super admin and viewer could read and edit the other's players,
+ * deposits, bank accounts and entity tree. Scope now walks up to the main
+ * company the account belongs to and stops there.
  */
 export async function resolveScope(session: SessionPayload): Promise<AuthedUser> {
   if (session.role === "super_admin" || session.role === "viewer") {
-    return { ...session, companyIds: null, ownedEntityIds: null };
+    const all = await db
+      .select({
+        id: entities.entity_id,
+        parent: entities.parent_entity_id,
+        type: entities.entity_type,
+      })
+      .from(entities);
+    const byId = new Map(all.map((e) => [e.id, e]));
+
+    // Up to the root of this account's own tree. The bound stops a parent
+    // cycle from hanging the request; a broken chain falls back to the
+    // account's own entity, which scopes to nothing rather than to everything.
+    let root = byId.get(session.entity_id);
+    for (let hops = 0; root?.parent && hops < 20; hops++) {
+      root = byId.get(root.parent) ?? root;
+    }
+    const rootId = root?.id ?? session.entity_id;
+
+    // Down again: every descendant of that root.
+    const subtree = new Set<number>([rootId]);
+    for (let grew = true; grew; ) {
+      grew = false;
+      for (const e of all) {
+        if (e.parent && subtree.has(e.parent) && !subtree.has(e.id)) {
+          subtree.add(e.id);
+          grew = true;
+        }
+      }
+    }
+
+    return {
+      ...session,
+      companyIds: all
+        .filter((e) => e.type === "company" && subtree.has(e.id))
+        .map((e) => e.id),
+      ownedEntityIds: [...subtree],
+    };
   }
   if (session.role === "company_leader") {
+    // Every company they run *now*, which is no longer the same question as
+    // "every company sitting under them in the tree": a company can be run by
+    // two leaders, and ownership moves without the tree being rewritten.
+    // Reports that look backwards ask companyLeaders for the date in question
+    // instead — see lib/company-leaders.ts.
     const companies = await db
-      .select({ id: entities.entity_id })
-      .from(entities)
-      .where(eq(entities.parent_entity_id, session.entity_id));
-    const companyIds = companies.map((c) => c.id);
+      .select({ id: companyLeaders.company_entity_id })
+      .from(companyLeaders)
+      .where(
+        and(
+          eq(companyLeaders.leader_entity_id, session.entity_id),
+          isNull(companyLeaders.valid_to),
+        ),
+      );
+    const companyIds = [...new Set(companies.map((c) => c.id))];
     return {
       ...session,
       companyIds,

@@ -13,7 +13,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useStore } from "@/lib/store";
+import { useStore, type MutationResult } from "@/lib/store";
 import { formatClock, formatRelative, formatRM } from "@/lib/format";
 import { extractSenderName } from "@/lib/bank-remark";
 import { usePlayerProfile } from "@/components/player-name-link";
@@ -102,11 +102,11 @@ type TabKey =
 const COLUMN_KEYS = {
   deposit: [
     "assign", "member", "product", "username", "amount", "bonuspct", "bonus",
-    "bank", "status", "date", "time", "remark", "bankdesc",
+    "total", "bank", "mode", "status", "date", "time", "remark", "bankdesc",
   ],
   withdrawal: [
     "assign", "member", "product", "username", "amount", "bank", "account",
-    "status", "date", "time", "remark2",
+    "holder", "mode", "status", "date", "time", "remark2",
   ],
   freecredit: [
     "assign", "member", "product", "username", "amount", "mode", "remark",
@@ -114,9 +114,9 @@ const COLUMN_KEYS = {
   ],
   transfer: [
     "assign", "member", "from", "username", "to", "to_username", "amount",
-    "status", "date", "time", "note",
+    "mode", "status", "date", "time", "note",
   ],
-  expense: ["assign", "date", "category", "description", "amount", "company", "notes"],
+  expense: ["assign", "date", "category", "description", "amount", "company", "paidfrom", "notes"],
   // Cash a leader took out of a company bank account (see Bank Accounts).
   leaderwithdrawal: ["assign", "date", "time", "account", "amount", "takenby", "notes", "status"],
   // Generated rebate payouts, every plan together — read-only, paid from here.
@@ -125,7 +125,7 @@ const COLUMN_KEYS = {
     "withdrawals", "loss", "pct", "amount", "status", "paidby", "paidat",
   ],
   // Settlements between leaders (super-admin only).
-  leadertransfer: ["assign", "date", "time", "from", "to", "amount", "note"],
+  leadertransfer: ["assign", "date", "time", "from", "fromaccount", "to", "toaccount", "amount", "note"],
 } as const satisfies Record<TabKey, readonly string[]>;
 
 type ColKey<T extends TabKey> = (typeof COLUMN_KEYS)[T][number];
@@ -141,6 +141,31 @@ const COL = Object.fromEntries(
 /** Cells in a sheet's column order from a record keyed by column. */
 function toCells<T extends TabKey>(tab: T, rec: Partial<Record<ColKey<T>, string>>): string[] {
   return (COLUMN_KEYS[tab] as readonly ColKey<T>[]).map((k) => rec[k] ?? "");
+}
+
+/**
+ * The Mode cell, both ways.
+ *
+ * One axis: was the work done by hand in the back-office, or by the agent?
+ * Blank on entry means manual, matching every server default while the desk
+ * runs everything itself. Blank on a saved row means the row predates the
+ * column and nobody recorded which it was — an honest gap rather than a
+ * guessed "Manual".
+ */
+function parseMode(
+  cell: string | undefined,
+): { ok: true; skip_bot: boolean } | { ok: false; error: string } {
+  const m = (cell ?? "").trim().toLowerCase();
+  if (!m || ["manual", "cs", "hand"].includes(m)) return { ok: true, skip_bot: true };
+  if (["auto", "bot", "agent"].includes(m)) return { ok: true, skip_bot: false };
+  return {
+    ok: false,
+    error: `Mode must be "manual" or "auto", not "${(cell ?? "").trim()}"`,
+  };
+}
+
+function modeCell(skipBot: boolean | null | undefined): string {
+  return skipBot == null ? "" : skipBot ? "Manual" : "Auto";
 }
 
 /**
@@ -168,6 +193,11 @@ type LeaderTransferRow = {
   from_leader_entity_id: number;
   to_leader_entity_id: number;
   amount: number;
+  /** Where the money came from / went: an account, cash, or unrecorded. */
+  from_account_id: number | null;
+  to_account_id: number | null;
+  from_cash: boolean;
+  to_cash: boolean;
   note: string | null;
   created_by_user_id: number;
   created_at: string;
@@ -191,6 +221,16 @@ function parseSheetTime(raw: string): [number, number] | null {
   if (h > 23 || mi > 59) return null;
   return [h, mi];
 }
+
+/** What one company may still give away this month; null = uncapped. */
+type FreeCreditAllowance = {
+  company_entity_id: number;
+  month: string;
+  deposits: number;
+  issued: number;
+  allowance: number | null;
+  left: number | null;
+};
 
 /** One Free Credit ledger row, as GET /api/free-credits returns it. */
 type FreeCredit = {
@@ -318,18 +358,26 @@ function gameUsername(p: Player | undefined, game: string | null | undefined): s
   return p.game_accounts[0]?.game_username ?? "";
 }
 
-async function post(path: string, body: unknown): Promise<{ ok: boolean; error?: string }> {
+async function post(
+  path: string,
+  body: unknown,
+): Promise<{ ok: boolean; error?: string; warning?: string }> {
   try {
     const res = await fetch(path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
+    const d = (await res.json().catch(() => null)) as
+      | { error?: string; warning?: string }
+      | null;
     if (!res.ok) {
-      const d = (await res.json().catch(() => null)) as { error?: string } | null;
       return { ok: false, error: d?.error ?? `Request failed (${res.status})` };
     }
-    return { ok: true };
+    // Saved, but it couldn't finish — a manual deposit whose kiosk float was
+    // short stops at "processing". Worth saying out loud: the row is there,
+    // the top-up is not.
+    return { ok: true, ...(d?.warning ? { warning: d.warning } : {}) };
   } catch {
     return { ok: false, error: "Network error" };
   }
@@ -384,20 +432,29 @@ function padDrafts(drafts: string[][], tab: TabKey): string[][] {
 }
 
 /**
- * Deposit drafts derive their Bonus cell: amount x bonus %. Recomputed on
- * every draft change so it tracks both inputs and clears when either goes.
+ * Deposit drafts derive two cells: Bonus (amount x bonus %) and Total (what
+ * actually reaches the player's game — amount plus whatever bonus there is).
+ *
+ * Recomputed on every draft change so both track their inputs and clear when
+ * the amount goes. Total shows as soon as an amount is typed, with or without
+ * a bonus, because a deposit with no bonus still has a total and CS should not
+ * have to know which case they are in.
+ *
  * (For a rebate plan the true basis is the period loss, not the deposit — the
- * server computes the real figure at save; this cell is the entry-time view.)
+ * server computes the real figure at save; these cells are the entry-time view.)
  */
-function computeDepositBonus(drafts: string[][]): string[][] {
+function computeDepositDerived(drafts: string[][]): string[][] {
   const c = COL.deposit;
   return drafts.map((row) => {
     const amt = parseAmount(row[c.amount] ?? "");
     const pct = parseBonusPct(row[c.bonuspct] ?? "");
-    const bonus = amt && pct ? fmtAmount((amt * pct) / 100) : "";
-    if ((row[c.bonus] ?? "") === bonus) return row;
+    const bonusValue = amt && pct ? +((amt * pct) / 100).toFixed(2) : 0;
+    const bonus = amt && pct ? fmtAmount(bonusValue) : "";
+    const total = amt ? fmtAmount(amt + bonusValue) : "";
+    if ((row[c.bonus] ?? "") === bonus && (row[c.total] ?? "") === total) return row;
     const out = [...row];
     out[c.bonus] = bonus;
+    out[c.total] = total;
     return out;
   });
 }
@@ -463,8 +520,18 @@ const ENTRY_HINT: Record<TabKey, string> = {
   leaderwithdrawal:
     "Entry: Date · Time · Bank Account · Amount · Taken By · Notes — cash a leader took out at the bank; the account is debited on save",
   rebate: "Generated on the Rebates page — select rows here to pay, skip or unskip them",
-  leadertransfer: "Entry: From Leader · To Leader · Amount · Note — a settlement between leaders",
+  leadertransfer:
+    "Entry: From Leader · To Leader · Amount — name the bank account each end used, or Cash",
 };
+
+/** Either end of a leader settlement when no bank account was involved. */
+const CASH = "Cash";
+
+/** How a leader's own cash is written in the Expense sheet: "Leader One cash". */
+const CASH_SUFFIX = "cash";
+
+/** Stable empty map, so the alias memo below doesn't re-run every render. */
+const EMPTY_ALIASES: Record<string, string> = {};
 
 export default function TransactionsPage() {
   const deposits = useStore((s) => s.deposits);
@@ -505,6 +572,7 @@ export default function TransactionsPage() {
 
   const games = gamesFn();
   const banks = banksFn();
+  const gameAliases = useStore((s) => s.settings.game_aliases) ?? EMPTY_ALIASES;
   const companies = companiesFn();
   const isViewer = me?.role === "viewer";
   const isAdmin = me?.role === "super_admin";
@@ -520,6 +588,22 @@ export default function TransactionsPage() {
       setFreeCredits(data.free_credits ?? []);
     } catch {
       // Poll/refresh will retry; the tab just shows what it last had.
+    }
+  }, []);
+  // Headroom left under the monthly free-credit cap, per company. Same
+  // arithmetic the save enforces, so the sheet can't promise room that the
+  // save then refuses.
+  const [fcAllowance, setFcAllowance] = useState<FreeCreditAllowance[]>([]);
+  const [fcCapPct, setFcCapPct] = useState(0);
+  const loadAllowance = useCallback(async () => {
+    try {
+      const res = await fetch("/api/free-credits/allowance");
+      if (!res.ok) return;
+      const data = (await res.json()) as { allowances?: FreeCreditAllowance[]; pct?: number };
+      setFcAllowance(data.allowances ?? []);
+      setFcCapPct(data.pct ?? 0);
+    } catch {
+      // transient — the pill just keeps its last figure
     }
   }, []);
   // Leader cash-outs, rebate payouts and leader settlements live outside
@@ -559,8 +643,15 @@ export default function TransactionsPage() {
     }
   }, [isAdmin]);
   const loadLedgers = useCallback(
-    () => Promise.all([loadFreeCredits(), loadCashOuts(), loadRebatePayouts(), loadLeaderTransfers()]),
-    [loadFreeCredits, loadCashOuts, loadRebatePayouts, loadLeaderTransfers],
+    () =>
+      Promise.all([
+        loadFreeCredits(),
+        loadAllowance(),
+        loadCashOuts(),
+        loadRebatePayouts(),
+        loadLeaderTransfers(),
+      ]),
+    [loadFreeCredits, loadAllowance, loadCashOuts, loadRebatePayouts, loadLeaderTransfers],
   );
   useEffect(() => {
     // Fetch-on-mount; the setState happens after the await, not synchronously.
@@ -634,8 +725,8 @@ export default function TransactionsPage() {
 
   const MODE_SUGGESTIONS = useMemo(
     () => [
-      { value: "bot", hint: "agent tops up the game" },
-      { value: "manual", hint: "CS already credited it in the back-office" },
+      { value: "manual", hint: "CS does it in the back-office (default)" },
+      { value: "auto", hint: "hand it to the agent" },
     ],
     [],
   );
@@ -658,6 +749,35 @@ export default function TransactionsPage() {
         })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [bankAccounts, entityName, selectedCompanyId, selectedLeaderId],
+  );
+  /** What an expense came out of: one of our accounts, or a leader's cash. */
+  const PAID_FROM_SUGGESTIONS = useMemo<SheetSuggestion[]>(
+    () => [
+      ...bankAccounts
+        .filter((a) => a.status === "active")
+        .map((a) => ({
+          value: a.label ?? `${a.bank_name} ${a.account_number}`,
+          hint: `${entityName(a.entity_id)} · ${fmtAmount(a.current_balance)}`,
+        })),
+      ...entities
+        .filter((e) => e.entity_type === "leader" && e.status === "active")
+        .map((e) => ({ value: `${e.name} ${CASH_SUFFIX}`, hint: "the leader's own cash" })),
+    ],
+    [bankAccounts, entities, entityName],
+  );
+
+  /** Either end of a leader settlement: one of our accounts, or cash. */
+  const END_SUGGESTIONS = useMemo<SheetSuggestion[]>(
+    () => [
+      { value: CASH, hint: "changed hands as cash — no account involved" },
+      ...bankAccounts
+        .filter((a) => a.status === "active")
+        .map((a) => ({
+          value: a.label ?? `${a.bank_name} ${a.account_number}`,
+          hint: `${entityName(a.entity_id)} · ${fmtAmount(a.current_balance)}`,
+        })),
+    ],
+    [bankAccounts, entityName],
   );
   const LEADER_SUGGESTIONS = useMemo<SheetSuggestion[]>(
     () =>
@@ -688,6 +808,13 @@ export default function TransactionsPage() {
     type Def = Omit<SheetColumn, "key">;
     const member: Def = { label: "Member Code", width: 110, entry: true, required: true, options: memberSuggestions, placeholder: "member code" };
     const username: Def = { label: "Username", width: 130, entry: true, placeholder: "game login" };
+    /**
+     * Who did the work: CS in the back-office, or the agent. Entered as well
+     * as shown, so the row that switches a job to the agent is the same cell
+     * that reports which one ran it — everything defaults to manual while the
+     * desk is running by hand.
+     */
+    const mode: Def = { label: "Mode", width: 84, entry: true, options: MODE_SUGGESTIONS, placeholder: "manual" };
     const date: Def = { label: "Date", width: 82, align: "center" };
     const time: Def = { label: "Time", width: 56, align: "center" };
     const status: Def = { label: "Status", width: 116 };
@@ -711,7 +838,12 @@ export default function TransactionsPage() {
         amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "100" },
         bonuspct: { label: "Bonus %", width: 76, align: "right", numeric: true, entry: true, placeholder: "10", dropdown: true },
         bonus: { label: "Bonus", width: 90, align: "right", numeric: true },
+        // Derived from the two cells before it, on saved rows and while typing
+        // alike. Never an entry cell: a total someone can type is a total that
+        // can disagree with the figures it is made of.
+        total: { label: "Total", width: 100, align: "right", numeric: true },
         bank: { label: "Bank", width: 110, entry: true, required: true, options: banks, placeholder: "bank" },
+        mode,
         status,
         date,
         time,
@@ -724,8 +856,13 @@ export default function TransactionsPage() {
         product: { label: "Product", width: 110, entry: true, required: true, options: games, placeholder: "game" },
         username,
         amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "100 / ALL" },
-        bank: { label: "Bank", width: 110, entry: true, options: banks, placeholder: "bank" },
-        account: { label: "Bank Account", width: 150, entry: true, placeholder: "account no." },
+        bank: { label: "Bank", width: 110, entry: true, options: banks, dropdown: true, placeholder: "bank" },
+        account: { label: "Bank Account", width: 150, entry: true, dropdown: true, placeholder: "account no." },
+        // Whose account the money is going to. Withdrawals don't store a
+        // holder, so it's read off the player's saved accounts — derived,
+        // and there to be checked against the payout before it's sent.
+        holder: { label: "Account Holder", width: 160 },
+        mode,
         status,
         date,
         time,
@@ -737,7 +874,7 @@ export default function TransactionsPage() {
         product: { label: "Product", width: 110, entry: true, required: true, options: games, placeholder: "game" },
         username,
         amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "50" },
-        mode: { label: "Mode", width: 90, entry: true, options: MODE_SUGGESTIONS, placeholder: "bot / manual" },
+        mode,
         remark: { label: "Remark", width: 220, entry: true, placeholder: "reason (optional)" },
         status,
         date,
@@ -751,6 +888,7 @@ export default function TransactionsPage() {
         to: { label: "To Game", width: 110, entry: true, required: true, options: games, placeholder: "to game" },
         to_username: { label: "To Username", width: 130, entry: true, placeholder: "to login" },
         amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "100 / ALL" },
+        mode,
         status,
         date,
         time,
@@ -786,26 +924,41 @@ export default function TransactionsPage() {
         assign,
         date,
         time,
-        from: { label: "From Leader", width: 160, entry: true, required: true, options: LEADER_SUGGESTIONS, placeholder: "from leader" },
-        to: { label: "To Leader", width: 160, entry: true, required: true, options: LEADER_SUGGESTIONS, placeholder: "to leader" },
+        from: { label: "From Company", width: 160, entry: true, required: true, options: LEADER_SUGGESTIONS, placeholder: "from leader" },
+        fromaccount: { label: "From Account", width: 190, entry: true, options: END_SUGGESTIONS, placeholder: "bank account / Cash" },
+        to: { label: "To Company", width: 160, entry: true, required: true, options: LEADER_SUGGESTIONS, placeholder: "to leader" },
+        toaccount: { label: "To Account", width: 190, entry: true, options: END_SUGGESTIONS, placeholder: "bank account / Cash" },
         amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "1000" },
         note: { label: "Note", width: 260, entry: true, placeholder: "what it settles (optional)" },
       }),
       expense: order("expense", {
         assign,
         date: { label: "Date", width: 92, align: "center", entry: true, required: true, placeholder: "31/8/2026" },
-        category: { label: "Category", width: 110, entry: true, required: true, options: [...EXPENSE_CATEGORIES], placeholder: "category" },
+        category: {
+          label: "Category",
+          width: 110,
+          entry: true,
+          required: true,
+          options: isAdmin ? [...EXPENSE_CATEGORIES] : ["bank_charge"],
+          placeholder: isAdmin ? "category" : "bank_charge",
+        },
         description: { label: "Description", width: 260, entry: true, required: true, placeholder: "what it's for" },
         amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "100" },
         company: { label: "Company", width: 150, entry: true, options: companies.map((c) => c.company_name), placeholder: "company" },
+        paidfrom: { label: "Paid From", width: 190, entry: true, options: PAID_FROM_SUGGESTIONS, placeholder: "bank account / leader cash" },
         notes: { label: "Notes", width: 240, entry: true, placeholder: "notes (optional)" },
       }),
     };
-  }, [games, banks, companies, memberSuggestions, MODE_SUGGESTIONS, ASSIGN_SUGGESTIONS, ACCOUNT_SUGGESTIONS, LEADER_SUGGESTIONS]);
+  }, [games, banks, companies, isAdmin, memberSuggestions, MODE_SUGGESTIONS, ASSIGN_SUGGESTIONS, ACCOUNT_SUGGESTIONS, LEADER_SUGGESTIONS, END_SUGGESTIONS, PAID_FROM_SUGGESTIONS]);
 
   const columns = columnsByTab[tab];
 
   // ---- drafts, one set per tab so switching loses nothing ----
+
+  /** Commits the cell being typed, so ⌘S doesn't save the row without it. */
+  const flushEdit = useRef<
+    null | (() => { draftIndex: number; col: number; value: string } | null)
+  >(null);
 
   const [draftsByTab, setDraftsByTab] = useState<Record<TabKey, string[][]>>(() => ({
     deposit: padDrafts([], "deposit"),
@@ -821,6 +974,7 @@ export default function TransactionsPage() {
   const [commitErrors, setCommitErrors] = useState<Map<string, string>>(new Map());
 
   const drafts = draftsByTab[tab];
+  const draftsRaw = drafts;
 
   // ---- lookups ----
 
@@ -830,11 +984,25 @@ export default function TransactionsPage() {
     return m;
   }, [players]);
 
+  /**
+   * Product name → catalogue name, including the operator's own spellings.
+   *
+   * Aliases are folded in after the catalogue, so a real game can never be
+   * shadowed by an alias pointing somewhere else, and an alias whose target
+   * has been removed from the catalogue is ignored rather than writing a name
+   * nothing else knows.
+   */
   const gameByName = useMemo(() => {
     const m = new Map<string, string>();
     for (const g of games) m.set(g.toLowerCase(), g);
+    for (const [alias, target] of Object.entries(gameAliases)) {
+      const key = alias.trim().toLowerCase();
+      if (!key || m.has(key)) continue;
+      const canonical = games.find((g) => g.toLowerCase() === target.toLowerCase());
+      if (canonical) m.set(key, canonical);
+    }
     return m;
-  }, [games]);
+  }, [games, gameAliases]);
 
   const companyByName = useMemo(() => {
     const m = new Map<string, number>();
@@ -861,6 +1029,27 @@ export default function TransactionsPage() {
   }, [deposits]);
 
   /**
+   * The player's saved bank account a payout is going to.
+   *
+   * A withdrawal stores only a bank name and an account number, so the holder
+   * — the name CS checks against before releasing money — has to be matched
+   * back off the player. The account number identifies it; the bank name is
+   * the fallback for rows entered before the number was recorded.
+   */
+  const payoutAccountOf = useCallback(
+    (player: Player | undefined, bankName?: string | null, accountNumber?: string | null) => {
+      const accounts = player?.bank_accounts ?? [];
+      const num = accountNumber?.trim();
+      const bank = bankName?.trim().toLowerCase();
+      return (
+        (num ? accounts.find((b) => b.account_number.trim() === num) : undefined) ??
+        (bank ? accounts.find((b) => b.bank_name.trim().toLowerCase() === bank) : undefined)
+      );
+    },
+    [],
+  );
+
+  /**
    * When a row's Member Code changes and resolves, pre-fill the rest of the
    * row from the player record — their last added game and its username, their
    * saved bank for a payout, their name. Only empty cells are filled, so a
@@ -877,21 +1066,119 @@ export default function TransactionsPage() {
         const pl = member ? playerByCode.get(member) : undefined;
         if (!pl) return row;
         const out = [...row];
-        // A game cell that just changed pulls in the player's login for that
-        // game, if its login cell is still blank — the same fill-only-empty
-        // rule as the member auto-fill below, so a typed login always wins.
+        /**
+         * The login cell follows the game cell.
+         *
+         * Filling only an empty login was not enough: switching Mega888 to
+         * 918Kiss left the Mega login sitting beside the new game, which reads
+         * as an account the player does not have and books the transaction
+         * against the wrong one. A login the sheet itself filled for the game
+         * that was just replaced is stale, not typed, so it gets replaced too
+         * — and cleared outright when the player holds no account on the new
+         * game, since a wrong login is worse than an empty one. Anything CS
+         * actually typed still wins.
+         */
         let touched = false;
         for (const pair of LOGIN_PAIRS[tab]) {
           const game = out[pair.gameCol]?.trim().toLowerCase() ?? "";
           const prevGame = prev[i]?.[pair.gameCol]?.trim().toLowerCase() ?? "";
-          if (!game || game === prevGame || out[pair.userCol]?.trim()) continue;
-          const acct = (pl.game_accounts ?? []).find((a) => a.game_name.toLowerCase() === game);
-          if (acct) {
-            out[pair.userCol] = acct.game_username;
+          if (game === prevGame) continue; // the game cell didn't move
+          const accounts = pl.game_accounts ?? [];
+          const login = out[pair.userCol]?.trim() ?? "";
+          const isOf = (g: string) =>
+            !!g &&
+            accounts.some(
+              (a) =>
+                a.game_name.toLowerCase() === g &&
+                a.game_username.toLowerCase() === login.toLowerCase(),
+            );
+          // Keep a login the player really holds on the new game, and keep
+          // anything typed that the record doesn't recognise at all.
+          if (login && (isOf(game) || !isOf(prevGame))) continue;
+          const acct = accounts.find((a) => a.game_name.toLowerCase() === game);
+          const next = acct?.game_username ?? "";
+          if (next !== (out[pair.userCol] ?? "")) {
+            out[pair.userCol] = next;
+            touched = true;
+          }
+        }
+        /**
+         * Keep the payout cells telling one story.
+         *
+         * Holder is derived, never typed, so it re-reads off the player's
+         * saved accounts whenever the bank or the number changes — it can't
+         * sit stale beside a different account. And the two identifying cells
+         * follow each other: a number identifies an account outright, so the
+         * bank follows it; a bank with a single account on file brings its
+         * number along. The row must never name one bank and another bank's
+         * account — that is a payment to the wrong place.
+         */
+        if (tab === "withdrawal") {
+          const c = COL.withdrawal;
+          const bankNow = out[c.bank]?.trim() ?? "";
+          const acctNow = out[c.account]?.trim() ?? "";
+          const bankBefore = prev[i]?.[c.bank]?.trim() ?? "";
+          const acctBefore = prev[i]?.[c.account]?.trim() ?? "";
+          const accounts = pl.bank_accounts ?? [];
+
+          if (acctNow !== acctBefore) {
+            const match = accounts.find((b) => b.account_number.trim() === acctNow);
+            if (match) {
+              out[c.bank] = match.bank_name;
+              out[c.holder] = match.account_holder;
+            } else {
+              // A number that isn't on file — a one-off payout. Nothing to
+              // vouch for the holder, so say nothing rather than guess.
+              out[c.holder] = "";
+            }
+            touched = true;
+          } else if (bankNow !== bankBefore) {
+            const atBank = accounts.filter(
+              (b) => b.bank_name.trim().toLowerCase() === bankNow.toLowerCase(),
+            );
+            if (atBank.length === 1) {
+              out[c.account] = atBank[0].account_number;
+              out[c.holder] = atBank[0].account_holder;
+            } else {
+              // Several accounts at that bank, or none on file: the number is
+              // CS's to pick, and it's left alone rather than guessed at.
+              out[c.holder] =
+                atBank.find((b) => b.account_number.trim() === acctNow)?.account_holder ?? "";
+            }
             touched = true;
           }
         }
         if (member === prevMember) return touched ? out : row;
+        /**
+         * Same rule when the member cell changes: a game and login the sheet
+         * filled in for the member who was there a moment ago belong to that
+         * member, and left standing they would book this row against another
+         * player's account. Cleared here so the fill below re-reads them off
+         * the member who is actually in the cell now; a pair the new member
+         * also holds, or one CS typed that no record knows, is left alone.
+         */
+        const prevPl = prevMember ? playerByCode.get(prevMember) : undefined;
+        if (prevPl && prevPl.player_id !== pl.player_id) {
+          const held = (
+            who: typeof pl,
+            game: string,
+            login: string,
+          ) =>
+            (who.game_accounts ?? []).some(
+              (a) =>
+                a.game_name.toLowerCase() === game.toLowerCase() &&
+                a.game_username.toLowerCase() === login.toLowerCase(),
+            );
+          for (const pair of LOGIN_PAIRS[tab]) {
+            const game = out[pair.gameCol]?.trim() ?? "";
+            const login = out[pair.userCol]?.trim() ?? "";
+            if (!game && !login) continue;
+            if (held(pl, game, login)) continue; // the new member holds it too
+            if (!held(prevPl, game, login)) continue; // typed, not filled
+            out[pair.gameCol] = "";
+            out[pair.userCol] = "";
+          }
+        }
         const fill = (idx: number, val: string | undefined | null) => {
           if (val && !out[idx]?.trim()) out[idx] = val;
         };
@@ -914,6 +1201,7 @@ export default function TransactionsPage() {
           fill(c.product, lastGame?.game_name);
           fill(c.bank, lastBank?.bank_name);
           fill(c.account, lastBank?.account_number);
+          fill(c.holder, lastBank?.account_holder);
           fill(c.remark2, pl.full_name);
         } else if (tab === "freecredit") {
           const c = COL.freecredit;
@@ -934,7 +1222,7 @@ export default function TransactionsPage() {
     (next: string[][]) =>
       setDraftsByTab((prev) => {
         let processed = enrichMemberChanges(prev[tab], next);
-        if (tab === "deposit") processed = computeDepositBonus(processed);
+        if (tab === "deposit") processed = computeDepositDerived(processed);
         return { ...prev, [tab]: padDrafts(processed, tab) };
       }),
     [tab, enrichMemberChanges],
@@ -979,17 +1267,26 @@ export default function TransactionsPage() {
             amount: fmtAmount(d.deposit_amount),
             bonuspct: pct ? `${pct}%` : "—",
             bonus: d.bonus_amount ? fmtAmount(d.bonus_amount) : "—",
+            total: fmtAmount(d.total_amount),
             bank: d.bank_name,
+            mode: modeCell(d.skip_bot),
             status: DEPOSIT_STATUS_LABEL[d.status],
             // Bot-matched rows carry the bank's own timestamp; a sheet-entered
             // row only knows its date.
             date: sheetDate(d.deposit_date),
             time: d.deposit_time_known ? formatClock(d.deposit_date) : "",
-            remark:
+            // Who the money is from, and — once someone has corrected the
+            // row — who changed what. The correction goes first: it is the
+            // thing being looked for when a figure is questioned.
+            remark: [
+              d.edit_note,
               p?.full_name ??
-              extractSenderName(d.bank_description) ??
-              d.bank_account_holder ??
-              "",
+                extractSenderName(d.bank_description) ??
+                d.bank_account_holder ??
+                "",
+            ]
+              .filter(Boolean)
+              .join(" · "),
             bankdesc: d.bank_description ?? "",
           }),
         };
@@ -1024,16 +1321,19 @@ export default function TransactionsPage() {
             amount: w.withdraw_all && !amount ? "ALL" : fmtAmount(amount),
             bank: w.bank_name ?? "",
             account: w.bank_account_number ?? "",
+            holder:
+              payoutAccountOf(p, w.bank_name, w.bank_account_number)?.account_holder ?? "",
+            mode: modeCell(w.skip_bot),
             status: WITHDRAWAL_STATUS_LABEL[w.status],
             date: sheetDate(w.created_at),
             time: formatClock(w.created_at),
-            remark2: p?.full_name ?? "",
+            remark2: [w.edit_note, p?.full_name ?? ""].filter(Boolean).join(" · "),
           }),
         };
       })
       .filter((r) => matchesSearch(r.cells));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [withdrawals, playerById, range, statusFilters, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId]);
+  }, [withdrawals, playerById, range, statusFilters, matchesSearch, assignCell, payoutAccountOf, selectedCompanyId, selectedLeaderId]);
 
   const freeCreditRows = useMemo<SheetRow[]>(() => {
     // Live status for agent-queued rows comes off the referenced transfer.
@@ -1110,6 +1410,7 @@ export default function TransactionsPage() {
             to: t.to_game,
             to_username: t.to_game_username ?? gameUsername(p, t.to_game),
             amount: t.transfer_all && !t.transfer_amount ? "ALL" : fmtAmount(t.transfer_amount),
+            mode: modeCell(t.skip_bot),
             status: TRANSFER_STATUS_LABEL[t.status],
             date: sheetDate(t.created_at),
             time: formatClock(t.created_at),
@@ -1120,6 +1421,17 @@ export default function TransactionsPage() {
       .filter((r) => matchesSearch(r.cells));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gameTransfers, playerById, range, statusFilters, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId]);
+
+  /** How an end reads back: the account's label, "Cash", or an em dash. */
+  const transferEndLabel = useCallback(
+    (accountId: number | null | undefined, cash: boolean | undefined) => {
+      if (cash) return CASH;
+      if (accountId == null) return "—";
+      const a = bankAccounts.find((x) => x.account_id === accountId);
+      return a ? (a.label ?? `${a.bank_name} ${a.account_number}`) : `#${accountId}`;
+    },
+    [bankAccounts],
+  );
 
   const expenseRows = useMemo<SheetRow[]>(() => {
     return expenses
@@ -1136,12 +1448,18 @@ export default function TransactionsPage() {
           description: e.description,
           amount: fmtAmount(e.amount),
           company: e.company_entity_id ? (companyNameById.get(e.company_entity_id) ?? "") : "",
+          paidfrom:
+            e.paid_from_account_id != null
+              ? transferEndLabel(e.paid_from_account_id, false)
+              : e.paid_from_cash_entity_id != null
+                ? `${entityName(e.paid_from_cash_entity_id)} ${CASH_SUFFIX}`
+                : "",
           notes: e.notes ?? "",
         }),
       }))
       .filter((r) => matchesSearch(r.cells));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expenses, companyNameById, range, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId]);
+  }, [expenses, companyNameById, range, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId, transferEndLabel, entityName]);
 
   const accountById = useMemo(
     () => new Map(bankAccounts.map((a) => [a.account_id, a])),
@@ -1232,13 +1550,15 @@ export default function TransactionsPage() {
           date: sheetDate(t.created_at),
           time: formatClock(t.created_at),
           from: entityName(t.from_leader_entity_id),
+          fromaccount: transferEndLabel(t.from_account_id, t.from_cash),
           to: entityName(t.to_leader_entity_id),
+          toaccount: transferEndLabel(t.to_account_id, t.to_cash),
           amount: fmtAmount(t.amount),
           note: t.note ?? "",
         }),
       }))
       .filter((r) => matchesSearch(r.cells));
-  }, [leaderTransfers, range, matchesSearch, assignCell, entityName]);
+  }, [leaderTransfers, range, matchesSearch, assignCell, entityName, transferEndLabel]);
 
   const rowsByTab: Record<TabKey, SheetRow[]> = {
     deposit: depositRows,
@@ -1361,6 +1681,32 @@ export default function TransactionsPage() {
         row && memberCol !== undefined
           ? playerByCode.get(row[memberCol]?.trim().toLowerCase() ?? "")
           : undefined;
+      /**
+       * Game cells: the games this player actually holds an account on, so CS
+       * picks from the four the member has rather than scrolling every kiosk
+       * the house runs and choosing one the transaction can't land in.
+       *
+       * Falls back to the column's full list when the row has no player yet,
+       * or the player has nothing linked — an empty dropdown would be a dead
+       * end, and the list is a suggestion, not a restriction: a typed game
+       * still goes through.
+       */
+      const gameCols = new Set(LOGIN_PAIRS[tab].map((pair) => pair.gameCol));
+      if (gameCols.has(colIndex)) {
+        const pl = memberOf(d);
+        const accounts = pl?.game_accounts ?? [];
+        if (!accounts.length) return undefined;
+        const byGame = new Map<string, string[]>();
+        for (const a of accounts) {
+          const list = byGame.get(a.game_name) ?? [];
+          list.push(a.game_username);
+          byGame.set(a.game_name, list);
+        }
+        return [...byGame].map(([game, logins]) => ({
+          value: game,
+          hint: logins.length > 1 ? `${logins.length} logins` : logins[0],
+        }));
+      }
       if (loginCfg) {
         const pl = memberOf(d);
         const gameCell = d?.[loginCfg.gameCol]?.trim().toLowerCase() ?? "";
@@ -1370,6 +1716,35 @@ export default function TransactionsPage() {
         );
         if (logins.length <= 1) return undefined; // one login: nothing to pick
         return logins.map((a) => ({ value: a.game_username, hint: a.game_name }));
+      }
+      /**
+       * Payout bank cells: the player's own saved accounts, holder and all —
+       * so CS pays the account on file instead of retyping one off a chat,
+       * and can see which of several it is. Falls through to the column's
+       * plain bank list when the row has no player yet, or the player has
+       * nothing on file.
+       */
+      if (
+        tab === "withdrawal" &&
+        (colIndex === COL.withdrawal.bank || colIndex === COL.withdrawal.account)
+      ) {
+        const pl = memberOf(d);
+        const accounts = pl?.bank_accounts ?? [];
+        if (!accounts.length) return undefined;
+        const isBankCell = colIndex === COL.withdrawal.bank;
+        // On the account cell, a bank already chosen narrows the list to it.
+        const bankCell = d?.[COL.withdrawal.bank]?.trim().toLowerCase() ?? "";
+        const shown =
+          !isBankCell && bankCell
+            ? accounts.filter((b) => b.bank_name.trim().toLowerCase() === bankCell)
+            : accounts;
+        const list = shown.length ? shown : accounts;
+        return list.map((b) => ({
+          value: isBankCell ? b.bank_name : b.account_number,
+          title: isBankCell ? b.bank_name : b.account_number,
+          detail: b.account_holder,
+          figure: isBankCell ? b.account_number : b.bank_name,
+        }));
       }
       if (tab !== "deposit" || colIndex !== COL.deposit.bonuspct) return undefined;
       const pl = memberOf(d);
@@ -1426,6 +1801,8 @@ export default function TransactionsPage() {
       }
       const pct = parseBonusPct(bonuspct);
       if (pct === null) return { ok: false, error: `Bad bonus % "${bonuspct}"` };
+      const mode = parseMode(d[c.mode]);
+      if (!mode.ok) return mode;
       return {
         ok: true,
         payload: {
@@ -1440,6 +1817,7 @@ export default function TransactionsPage() {
             ? { selected_game_username: username.trim() }
             : {}),
           ...(pct ? { bonus_percentage: pct } : {}),
+          skip_bot: mode.skip_bot,
           ...(assign ? { assign_to_me: true } : {}),
         },
       };
@@ -1467,11 +1845,14 @@ export default function TransactionsPage() {
       const amt = all ? null : parseAmount(amount);
       if (!all && (amt === null || amt <= 0))
         return { ok: false, error: `Bad amount "${amount}" (number or ALL)` };
+      const mode = parseMode(d[c.mode]);
+      if (!mode.ok) return mode;
       return {
         ok: true,
         payload: {
           player_id: player.player_id,
           game_name: g,
+          skip_bot: mode.skip_bot,
           ...(username.trim() ? { game_username: username.trim() } : {}),
           ...(all ? { withdraw_all: true } : { requested_amount: amt }),
           ...(bank.trim() ? { bank_name: bank.trim() } : {}),
@@ -1507,11 +1888,9 @@ export default function TransactionsPage() {
         return { ok: false, error: `${player.username} has no ${g} account linked` };
       const amt = parseAmount(amount);
       if (amt === null || amt <= 0) return { ok: false, error: `Bad amount "${amount}"` };
-      const m = mode.trim().toLowerCase();
-      let skip_bot: boolean;
-      if (!m || ["bot", "agent", "auto"].includes(m)) skip_bot = false;
-      else if (["manual", "cs", "hand"].includes(m)) skip_bot = true;
-      else return { ok: false, error: `Mode must be "bot" or "manual", not "${mode.trim()}"` };
+      const parsedMode = parseMode(mode);
+      if (!parsedMode.ok) return parsedMode;
+      const skip_bot = parsedMode.skip_bot;
       return {
         ok: true,
         payload: {
@@ -1550,12 +1929,15 @@ export default function TransactionsPage() {
       const amt = all ? null : parseAmount(amount);
       if (!all && (amt === null || amt <= 0))
         return { ok: false, error: `Bad amount "${amount}" (number or ALL)` };
+      const mode = parseMode(d[c.mode]);
+      if (!mode.ok) return mode;
       return {
         ok: true,
         payload: {
           player_id: player.player_id,
           from_game: fromGame,
           to_game: toGame,
+          skip_bot: mode.skip_bot,
           ...(username.trim() ? { from_game_username: username.trim() } : {}),
           ...(toUsername.trim() ? { to_game_username: toUsername.trim() } : {}),
           ...(all ? { transfer_all: true } : { amount: amt }),
@@ -1564,6 +1946,37 @@ export default function TransactionsPage() {
       };
     },
     [playerByCode, gameByName],
+  );
+
+  /**
+   * A typed "Paid From": one of our accounts by label, or "<leader> cash".
+   * Blank leaves it unrecorded, as every expense entered before the column.
+   */
+  const resolvePaidFrom = useCallback(
+    (
+      raw: string,
+    ):
+      | { ok: true; account_id?: number; cash_entity_id?: number }
+      | { ok: false } => {
+      const v = raw.trim();
+      if (!v) return { ok: true };
+      const account = bankAccounts.find(
+        (a) =>
+          (a.label ?? "").trim().toLowerCase() === v.toLowerCase() ||
+          `${a.bank_name} ${a.account_number}`.toLowerCase() === v.toLowerCase(),
+      );
+      if (account) return { ok: true, account_id: account.account_id };
+      // "<leader> cash" — the suffix is what marks it as cash rather than an
+      // account, so a leader named after a bank can't be mistaken for one.
+      const lower = v.toLowerCase();
+      if (lower.endsWith(` ${CASH_SUFFIX}`)) {
+        const name = v.slice(0, -(CASH_SUFFIX.length + 1)).trim().toLowerCase();
+        const id = leaderByName.get(name);
+        if (id) return { ok: true, cash_entity_id: id };
+      }
+      return { ok: false };
+    },
+    [bankAccounts, leaderByName],
   );
 
   const parseExpenseDraft = useCallback(
@@ -1584,6 +1997,11 @@ export default function TransactionsPage() {
       const cat = category.trim().toLowerCase().replace(/[\s-]+/g, "_");
       if (!(EXPENSE_CATEGORIES as readonly string[]).includes(cat))
         return { ok: false, error: `Unknown category "${category.trim()}"` };
+      if (!isAdmin && cat !== "bank_charge")
+        return {
+          ok: false,
+          error: `Only admins record ${cat.replace(/_/g, " ")} — you can record bank charges`,
+        };
       if (!description.trim()) return { ok: false, error: "Description is required" };
       const amt = parseAmount(amount);
       if (amt === null || amt <= 0) return { ok: false, error: `Bad amount "${amount}"` };
@@ -1593,6 +2011,13 @@ export default function TransactionsPage() {
         if (!id) return { ok: false, error: `Unknown company "${company.trim()}"` };
         company_entity_id = id;
       }
+      const paidCell = (d[c.paidfrom] ?? "").trim();
+      const paid = resolvePaidFrom(paidCell);
+      if (!paid.ok)
+        return {
+          ok: false,
+          error: `Unknown source "${paidCell}" — pick an account, or "<leader> cash"`,
+        };
       return {
         ok: true,
         payload: {
@@ -1601,11 +2026,15 @@ export default function TransactionsPage() {
           description: description.trim(),
           amount: amt,
           company_entity_id,
+          ...(paid.account_id ? { paid_from_account_id: paid.account_id } : {}),
+          ...(paid.cash_entity_id
+            ? { paid_from_cash_entity_id: paid.cash_entity_id }
+            : {}),
           ...(notes.trim() ? { notes: notes.trim() } : {}),
         },
       };
     },
-    [companyByName],
+    [companyByName, isAdmin, resolvePaidFrom],
   );
 
   const parseLeaderWithdrawalDraft = useCallback(
@@ -1654,6 +2083,26 @@ export default function TransactionsPage() {
     [accountByLabel, leaderByName, companyInScope],
   );
 
+  /**
+   * A typed end: the word "cash", one of our accounts by label, or blank for
+   * an end nobody recorded. Matched on label first, then on "bank number", so
+   * either spelling from the dropdown resolves.
+   */
+  const resolveTransferEnd = useCallback(
+    (raw: string): { ok: true; account_id?: number; cash?: boolean } | { ok: false } => {
+      const v = raw.trim();
+      if (!v) return { ok: true };
+      if (v.toLowerCase() === CASH.toLowerCase()) return { ok: true, cash: true };
+      const hit = bankAccounts.find(
+        (a) =>
+          (a.label ?? "").trim().toLowerCase() === v.toLowerCase() ||
+          `${a.bank_name} ${a.account_number}`.toLowerCase() === v.toLowerCase(),
+      );
+      return hit ? { ok: true, account_id: hit.account_id } : { ok: false };
+    },
+    [bankAccounts],
+  );
+
   const parseLeaderTransferDraft = useCallback(
     (d: string[]): Parsed => {
       const c = COL.leadertransfer;
@@ -1665,21 +2114,46 @@ export default function TransactionsPage() {
       if (!fromId) return { ok: false, error: `Unknown leader "${fromCell}"` };
       const toId = leaderByName.get(toCell.toLowerCase());
       if (!toId) return { ok: false, error: `Unknown leader "${toCell}"` };
-      if (fromId === toId) return { ok: false, error: "From and To are the same leader" };
       const amt = parseAmount(d[c.amount] ?? "");
       if (amt === null || amt <= 0) return { ok: false, error: `Bad amount "${d[c.amount]}"` };
       const note = (d[c.note] ?? "").trim();
+      const fromEndCell = (d[c.fromaccount] ?? "").trim();
+      const toEndCell = (d[c.toaccount] ?? "").trim();
+      const fromEnd = resolveTransferEnd(fromEndCell);
+      if (!fromEnd.ok)
+        return { ok: false, error: `Unknown account "${fromEndCell}" — pick one from the list, or Cash` };
+      const toEnd = resolveTransferEnd(toEndCell);
+      if (!toEnd.ok)
+        return { ok: false, error: `Unknown account "${toEndCell}" — pick one from the list, or Cash` };
+      // One leader moving money to themselves is fine — bank to cash, cash to
+      // bank, one account to another — as long as the two ends differ. Same
+      // leader, same end moves nothing.
+      if (
+        fromId === toId &&
+        ((fromEnd.account_id != null && fromEnd.account_id === toEnd.account_id) ||
+          (fromEnd.cash && toEnd.cash) ||
+          (!fromEndCell && !toEndCell))
+      ) {
+        return {
+          ok: false,
+          error: `${fromCell} to themselves needs two different ends — account to account, or account to Cash`,
+        };
+      }
       return {
         ok: true,
         payload: {
           from_leader_entity_id: fromId,
           to_leader_entity_id: toId,
           amount: amt,
+          ...(fromEnd.account_id ? { from_account_id: fromEnd.account_id } : {}),
+          ...(fromEnd.cash ? { from_cash: true } : {}),
+          ...(toEnd.account_id ? { to_account_id: toEnd.account_id } : {}),
+          ...(toEnd.cash ? { to_cash: true } : {}),
           ...(note ? { note } : {}),
         },
       };
     },
-    [leaderByName],
+    [leaderByName, resolveTransferEnd],
   );
 
   // Rebates aren't typed in — they're generated on the Rebates page.
@@ -1740,7 +2214,40 @@ export default function TransactionsPage() {
 
   /** Columns of a saved deposit row that edit in place, while it still can. */
   const DEPOSIT_EDITABLE_COLS = useMemo(
-    () => new Set([COL.deposit.member, COL.deposit.product, COL.deposit.bonuspct]),
+    () =>
+      new Set([
+        COL.deposit.member,
+        COL.deposit.product,
+        COL.deposit.username,
+        COL.deposit.amount,
+        COL.deposit.bonuspct,
+        COL.deposit.bank,
+      ]),
+    [],
+  );
+  /** The same for a withdrawal, which is only correctable before the pull. */
+  const WITHDRAWAL_EDITABLE_COLS = useMemo(
+    () =>
+      new Set([
+        COL.withdrawal.product,
+        COL.withdrawal.username,
+        COL.withdrawal.amount,
+        COL.withdrawal.bank,
+        COL.withdrawal.account,
+      ]),
+    [],
+  );
+
+  /**
+   * Statuses a deposit can still be corrected in.
+   *
+   * "processing" belongs here: manual deposits are auto-approved on save, so
+   * that is where a freshly typed row lands, and leaving it out made every new
+   * row read-only the moment it was entered. No money has moved in any of
+   * these — it books at completion.
+   */
+  const DEPOSIT_EDITABLE_STATUS = useMemo(
+    () => new Set(["pending_match", "matched", "pending", "approved", "processing"]),
     [],
   );
   /** The saved sheets whose rows carry a claim — their Assign cell edits in place. */
@@ -1750,18 +2257,78 @@ export default function TransactionsPage() {
       ASSIGNABLE_TABS.has(t) ? (COL[t] as Record<string, number | undefined>).assign : undefined,
     [ASSIGNABLE_TABS],
   );
+  /**
+   * Who holds a saved row, if anyone. Only the sheets that carry a claim.
+   */
+  const ownerOf = useCallback(
+    (rowIndex: number): number | null | undefined => {
+      const id = Number(rows[rowIndex]?.id);
+      if (tab === "deposit") return depositById.get(id)?.assigned_to_user_id ?? null;
+      if (tab === "withdrawal") return withdrawalById.get(id)?.assigned_to_user_id ?? null;
+      if (tab === "transfer")
+        return gameTransfers.find((t) => t.transfer_id === id)?.assigned_to_user_id ?? null;
+      return undefined;                   // this sheet has no claims
+    },
+    [tab, rows, depositById, withdrawalById, gameTransfers],
+  );
+
   const committedEditable = useCallback(
     (rowIndex: number, colIndex: number): boolean => {
       if (isViewer) return false;
-      // Assign to me: yes claims the row, no releases it — on any saved row of
-      // a sheet that has claims (the server refuses someone else's claim).
-      if (colIndex === assignColOf(tab)) return true;
-      if (tab !== "deposit") return false;
-      if (!DEPOSIT_EDITABLE_COLS.has(colIndex)) return false;
-      const dep = depositById.get(Number(rows[rowIndex]?.id));
-      return !!dep && ["pending_match", "matched", "pending"].includes(dep.status);
+
+      /**
+       * A row is edited by whoever holds it.
+       *
+       * Two people working the same deposit is how a top-up gets done twice,
+       * so a claim is the lock: take the row first, and until you do, it is
+       * read-only. The claim cell itself is the way in and the way out — it
+       * opens on an unheld row (to take it) and on your own (to release it),
+       * and never on a colleague's, which the server refuses anyway.
+       */
+      const owner = ownerOf(rowIndex);
+      if (owner !== undefined) {
+        const mine = owner !== null && owner === me?.user_id;
+        if (colIndex === assignColOf(tab)) return owner === null || mine;
+        if (!mine) return false;
+      } else if (colIndex === assignColOf(tab)) {
+        return true;
+      }
+      if (tab === "deposit") {
+        if (!DEPOSIT_EDITABLE_COLS.has(colIndex)) return false;
+        const dep = depositById.get(Number(rows[rowIndex]?.id));
+        if (!dep) return false;
+        if (DEPOSIT_EDITABLE_STATUS.has(dep.status)) return true;
+        // A completed row a person entered is still correctable: the server
+        // unwinds the credit it booked and lays down the new one. A row the
+        // agent completed is its own record of what happened at the provider,
+        // so it stays frozen — and so does a failed one, which booked nothing.
+        return dep.status === "completed" && !!dep.skip_bot;
+      }
+      if (tab === "withdrawal") {
+        if (!WITHDRAWAL_EDITABLE_COLS.has(colIndex)) return false;
+        const w = withdrawalById.get(Number(rows[rowIndex]?.id));
+        if (!w) return false;
+        if (w.status === "requested") return true;
+        // A manual row is created already pulled, so it stays correctable —
+        // the server re-books the float and the wallet. The agent's own pulls
+        // stay as the agent reported them, and a paid row has left a bank.
+        return w.status === "credits_pulled" && !!w.skip_bot;
+      }
+      return false;
     },
-    [tab, isViewer, DEPOSIT_EDITABLE_COLS, depositById, rows, assignColOf],
+    [
+      tab,
+      isViewer,
+      me,
+      ownerOf,
+      DEPOSIT_EDITABLE_COLS,
+      DEPOSIT_EDITABLE_STATUS,
+      WITHDRAWAL_EDITABLE_COLS,
+      depositById,
+      withdrawalById,
+      rows,
+      assignColOf,
+    ],
   );
 
   const onCommittedEdit = useCallback(
@@ -1787,9 +2354,65 @@ export default function TransactionsPage() {
         if (!res.ok) toast.error(res.error ?? (want ? "Could not claim the row" : "Could not release the row"));
         return;
       }
+      // ── withdrawals ─────────────────────────────────────────────────────
+      if (tab === "withdrawal") {
+        const w = withdrawalById.get(Number(rows[rowIndex]?.id));
+        if (!w) return;
+        const v = value.trim();
+        const c = COL.withdrawal;
+        let patch: Record<string, unknown> | null = null;
+
+        if (colIndex === c.product) {
+          const g = gameByName.get(v.toLowerCase());
+          if (!g) {
+            toast.error(`Unknown product "${v}" — game not changed`);
+            return;
+          }
+          patch = { game_name: g };
+        } else if (colIndex === c.username) {
+          patch = { game_username: v || null };
+        } else if (colIndex === c.amount) {
+          const amt = parseAmount(v);
+          if (amt === null || amt <= 0) {
+            toast.error(`Bad amount "${v}"`);
+            return;
+          }
+          patch = { requested_amount: amt };
+        } else if (colIndex === c.bank) {
+          patch = { bank_name: v || null };
+        } else if (colIndex === c.account) {
+          patch = { bank_account_number: v || null };
+        }
+        if (!patch) return;
+
+        const res = await fetch(`/api/withdrawals/${w.withdrawal_id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        });
+        const data = (await res.json().catch(() => null)) as { error?: string } | null;
+        if (!res.ok) {
+          toast.error(data?.error ?? "Could not edit the withdrawal");
+          return;
+        }
+        await refresh();
+        return;
+      }
+
+      // ── deposits ────────────────────────────────────────────────────────
       const dep = depositById.get(Number(rows[rowIndex]?.id));
       if (!dep) return;
       const v = value.trim();
+      /**
+       * Correcting a completed row unwinds the credit it booked. When the
+       * player has already spent some of it the wallet lands below zero, and
+       * the server says so — that is the desk's cue to sync the kiosk, so it
+       * gets its own line rather than being folded into a quiet success.
+       */
+      const report = (res: MutationResult, fallback: string) => {
+        if (!res.ok) toast.error(res.error ?? fallback);
+        else if (res.warning) toast.warning(res.warning, { duration: 10_000 });
+      };
       if (colIndex === COL.deposit.member) {
         const pl = playerByCode.get(v.toLowerCase());
         if (!pl) {
@@ -1797,11 +2420,11 @@ export default function TransactionsPage() {
           return;
         }
         const res = await updateDepositDraft(dep.deposit_id, { player_id: pl.player_id });
-        if (!res.ok) toast.error(res.error ?? "Failed to assign player");
+        report(res, "Failed to assign player");
       } else if (colIndex === COL.deposit.product) {
         if (!v) {
           const res = await updateDepositDraft(dep.deposit_id, { selected_game: null });
-          if (!res.ok) toast.error(res.error ?? "Failed to clear game");
+          report(res, "Failed to clear game");
           return;
         }
         const g = gameByName.get(v.toLowerCase());
@@ -1810,7 +2433,7 @@ export default function TransactionsPage() {
           return;
         }
         const res = await updateDepositDraft(dep.deposit_id, { selected_game: g });
-        if (!res.ok) toast.error(res.error ?? "Failed to set game");
+        report(res, "Failed to set game");
       } else if (colIndex === COL.deposit.bonuspct) {
         const pct = parseBonusPct(value);
         if (pct === null) {
@@ -1818,10 +2441,43 @@ export default function TransactionsPage() {
           return;
         }
         const res = await updateDepositDraft(dep.deposit_id, { bonus_percentage: pct });
-        if (!res.ok) toast.error(res.error ?? "Failed to set bonus");
+        report(res, "Failed to set bonus");
+      } else if (colIndex === COL.deposit.username) {
+        const res = await updateDepositDraft(dep.deposit_id, {
+          selected_game_username: v || null,
+        });
+        report(res, "Failed to set the kiosk login");
+      } else if (colIndex === COL.deposit.amount) {
+        const amt = parseAmount(v);
+        if (amt === null || amt <= 0) {
+          toast.error(`Bad amount "${v}"`);
+          return;
+        }
+        // The server re-bases the bonus on the new figure, so a corrected
+        // amount can't leave a bonus struck on the old one.
+        const res = await updateDepositDraft(dep.deposit_id, { deposit_amount: amt });
+        report(res, "Failed to set the amount");
+      } else if (colIndex === COL.deposit.bank) {
+        if (!v) {
+          toast.error("Bank is required");
+          return;
+        }
+        const res = await updateDepositDraft(dep.deposit_id, { bank_name: v });
+        report(res, "Failed to set the bank");
       }
     },
-    [tab, assignColOf, setAssignment, depositById, rows, playerByCode, gameByName, updateDepositDraft],
+    [
+      tab,
+      assignColOf,
+      setAssignment,
+      depositById,
+      withdrawalById,
+      rows,
+      playerByCode,
+      gameByName,
+      updateDepositDraft,
+      refresh,
+    ],
   );
 
   const selectedNumericIds = useMemo(
@@ -2244,7 +2900,16 @@ export default function TransactionsPage() {
       else if (k === "a" && can.assign) run = handleAssignToMe;
       else if (tab === "deposit") {
         if (k === "p" && can.approveMine) run = handleApprove;
-        else if (k === "c" && can.complete) run = handleComplete;
+        // ⌘B, never ⌘C. The clipboard keys belong to the sheet — this screen
+        // exists so people can copy rows straight into Excel, and ⌘C is the
+        // most reflexive keystroke there is. It used to sit here, where it
+        // beat the grid's copy (this listener captures and preventDefaults,
+        // so the browser never issued the copy) and completed the deposits
+        // instead, with no confirmation.
+        //
+        // ⌘B also makes the two flows read the same: ⌘P advances a row —
+        // approve a deposit, pull a withdrawal — and ⌘B finishes it.
+        else if (k === "b" && can.complete) run = handleComplete;
         // ⌘I, not ⌘T — the browser reserves ⌘T / Ctrl+T for "new tab" and the
         // page never receives it.
         else if (k === "i" && can.retryDep) run = handleRetryDeposits;
@@ -2320,6 +2985,23 @@ export default function TransactionsPage() {
 
   const handleCommit = useCallback(async () => {
     if (saving || isViewer) return;
+    /**
+     * Land the cell still under the cursor first.
+     *
+     * The shortcut is caught on window before the editor sees it, so without
+     * this the row is parsed as it was one keystroke ago — which is why typing
+     * an amount and pressing ⌘S reported "Bad amount """. The flush writes it
+     * into the grid's state and hands it back, because that state update won't
+     * be visible to this call.
+     */
+    const pending = flushEdit.current?.() ?? null;
+    const drafts = pending
+      ? draftsRaw.map((d, i) =>
+          i === pending.draftIndex
+            ? d.map((v, c) => (c === pending.col ? pending.value : v))
+            : d,
+        )
+      : draftsRaw;
     const jobs = drafts
       .map((d, i) => ({ d, i, parsed: parseDraft(d) }))
       .filter((j) => !isBlankDraft(tab, j.d) && j.parsed.ok) as Array<{
@@ -2328,7 +3010,16 @@ export default function TransactionsPage() {
       parsed: { ok: true; payload: Record<string, unknown> };
     }>;
     if (!jobs.length) {
-      toast.info("No ready rows to save — fix the rows marked ! first.");
+      // The reason was only ever a tooltip on the ! marker, which is a hard
+      // place to find an answer when the save just refused. Say it outright.
+      const why = drafts
+        .map((d, i) => ({ d, i, parsed: parseDraft(d) }))
+        .filter((j) => !isBlankDraft(tab, j.d) && !j.parsed.ok)
+        .map((j) => `Row ${j.i + 1}: ${(j.parsed as { error?: string }).error ?? "incomplete"}`);
+      toast.error("No rows saved", {
+        description: why.length ? why.slice(0, 3).join("\n") : "Nothing filled in yet.",
+        duration: 15_000,
+      });
       return;
     }
     setSaving(true);
@@ -2337,11 +3028,13 @@ export default function TransactionsPage() {
     const failures = new Map<string, string>(commitErrors);
     // Sequential on purpose: keeps server order = sheet order, and one clear
     // error per row instead of a burst of races.
+    const warnings: string[] = [];
     for (const job of jobs) {
       const res = await post(path, job.parsed.payload);
       if (res.ok) {
         succeeded.add(job.i);
         failures.delete(draftKey(job.d));
+        if (res.warning) warnings.push(res.warning);
       } else {
         failures.set(draftKey(job.d), res.error ?? "Save failed");
       }
@@ -2363,14 +3056,30 @@ export default function TransactionsPage() {
       expense: "expense",
     }[tab];
     if (failed) {
-      toast.error(
-        `${succeeded.size} saved, ${failed} rejected — rejected rows stay below with the reason on the ! marker.`,
-      );
+      // One line per distinct reason — five rows refused for the same reason
+      // is one thing to fix, not five.
+      const reasons = [
+        ...new Set(
+          jobs
+            .filter((j) => !succeeded.has(j.i))
+            .map((j) => failures.get(draftKey(j.d)))
+            .filter((r): r is string => !!r),
+        ),
+      ];
+      toast.error(`${succeeded.size} saved, ${failed} rejected`, {
+        description: reasons.slice(0, 3).join("\n") || "Rejected rows stay below, marked !.",
+        duration: 15_000,
+      });
     } else {
       toast.success(`${succeeded.size} ${noun}${succeeded.size === 1 ? "" : "s"} saved`);
     }
+    // Saved-but-unfinished rows: one warning per distinct reason, so five
+    // deposits short on the same kiosk say it once.
+    for (const w of new Set(warnings)) {
+      toast.warning(`${w} — saved, waiting at Processing.`, { duration: 10_000 });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [saving, isViewer, drafts, parseDraft, tab, commitErrors, draftKey, refresh, loadLedgers]);
+  }, [saving, isViewer, draftsRaw, parseDraft, tab, commitErrors, draftKey, refresh, loadLedgers]);
 
   // Cmd/Ctrl+S saves the ready entry rows from anywhere on the page — and
   // preventDefault stops the browser's own "save this page" dialog.
@@ -2605,21 +3314,46 @@ export default function TransactionsPage() {
     toast.success("Bank crawl requested — the agent picks it up within ~30s");
   }, [requestBankCrawl, selectedCompanyId]);
 
+  /**
+   * The free-credit headroom for whatever the header has scoped to, ready to
+   * show above the sheet. The cap is enforced per company, so several
+   * companies in scope means several separate allowances — totalled for the
+   * figure, listed in the tooltip, because a company can be out of room while
+   * the total still looks healthy.
+   */
+  const fcHeadroom = useMemo(() => {
+    if (fcCapPct <= 0) return null;
+    const rows = fcAllowance.filter(
+      (a) => a.left !== null && companyInScope(a.company_entity_id),
+    );
+    if (!rows.length) return null;
+    const left = rows.reduce((a, r) => a + (r.left ?? 0), 0);
+    const allowance = rows.reduce((a, r) => a + (r.allowance ?? 0), 0);
+    const month = new Date(`${rows[0].month}T00:00:00`).toLocaleString("en-MY", {
+      month: "short",
+    });
+    return {
+      left,
+      allowance,
+      month,
+      // Any single company out of room matters even when the total does not.
+      someExhausted: rows.some((r) => (r.left ?? 0) <= 0),
+      rows,
+    };
+  }, [fcAllowance, fcCapPct, companyInScope]);
+
   const tabs: { key: TabKey; label: string }[] = [
     { key: "deposit", label: "Deposit" },
     { key: "withdrawal", label: "Withdrawal" },
     { key: "rebate", label: "Rebate" },
     { key: "freecredit", label: "Free Credit" },
     { key: "transfer", label: "Game Transfer" },
-    { key: "leaderwithdrawal", label: "Leader Withdrawal" },
-    // Leader settlements and expenses are super-admin only — same rule as
-    // their own pages.
-    ...(isAdmin
-      ? [
-          { key: "leadertransfer" as const, label: "Leader Transfer" },
-          { key: "expense" as const, label: "Expenses" },
-        ]
-      : []),
+    { key: "leaderwithdrawal", label: "Company Withdrawal" },
+    // Leader settlements stay super-admin, as on their own page. Expenses are
+    // open to everyone now, but only for bank charges — the desk records those
+    // because they move a bank balance nobody else is watching.
+    ...(isAdmin ? [{ key: "leadertransfer" as const, label: "Company Transfer" }] : []),
+    { key: "expense" as const, label: isAdmin ? "Expenses" : "Bank Charges" },
   ];
 
   return (
@@ -2660,6 +3394,8 @@ export default function TransactionsPage() {
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
+            data-page-search
+            title="Press ⌘F / Ctrl+F (or /) to jump here"
             placeholder="Search rows…"
             className="h-8 w-52 pl-7 text-[13px]"
           />
@@ -2707,6 +3443,39 @@ export default function TransactionsPage() {
         <span className="text-xs text-muted-foreground">
           {rows.length} row{rows.length === 1 ? "" : "s"}
         </span>
+
+        {/* How much free credit is still giveable this month. The cap has
+            always been enforced on save; shown here it stops CS typing rows
+            that will bounce. */}
+        {tab === "freecredit" && fcHeadroom && (
+          <span
+            title={
+              `Free credit is capped at ${fcCapPct}% of the month's deposits.\n` +
+              `Counts the calendar month, not the date range above.\n\n` +
+              fcHeadroom.rows
+                .map(
+                  (r) =>
+                    `${entityName(r.company_entity_id)}: ${formatRM(r.left ?? 0)} left ` +
+                    `(${formatRM(r.allowance ?? 0)} allowed, ${formatRM(r.issued)} issued)`,
+                )
+                .join("\n")
+            }
+            className={cn(
+              "rounded-full border px-2.5 py-0.5 text-[11px] font-medium tabular-nums",
+              fcHeadroom.left <= 0
+                ? "border-red-600/40 bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300"
+                : fcHeadroom.someExhausted || fcHeadroom.left < fcHeadroom.allowance * 0.2
+                  ? "border-amber-600/40 bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
+                  : "border-emerald-600/40 bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300",
+            )}
+          >
+            {formatRM(fcHeadroom.left)} left of {formatRM(fcHeadroom.allowance)}
+            <span className="ml-1 font-normal opacity-70">
+              · {fcCapPct}% of {fcHeadroom.month} deposits
+              {fcHeadroom.rows.length > 1 ? ` · ${fcHeadroom.rows.length} companies` : ""}
+            </span>
+          </span>
+        )}
 
         <div className="ml-auto flex items-center gap-2">
           {tab === "deposit" && !isViewer && (
@@ -2878,6 +3647,7 @@ export default function TransactionsPage() {
         onDraftsChange={onDraftsChange}
         draftStatus={draftStatus}
         onCommit={handleCommit}
+        flushRef={flushEdit}
         readOnly={isViewer || tab === "rebate"}
         committedEditable={committedEditable}
         onCommittedEdit={onCommittedEdit}
@@ -2965,7 +3735,7 @@ export default function TransactionsPage() {
               >
                 <CheckCircle2 className="h-3 w-3" />
                 Complete
-                <Kbd k={`${MOD_LABEL}C`} />
+                <Kbd k={`${MOD_LABEL}B`} />
               </Button>
             )}
             {can.retryDep && (

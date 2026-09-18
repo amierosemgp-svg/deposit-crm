@@ -23,6 +23,12 @@ export type User = {
   status: "active" | "inactive";
   last_login_at: string | null;
   created_at: string;
+  /** Sign-in asks for a Telegram code after the password. */
+  two_factor_enabled?: boolean;
+  /** The @handle codes are sent to, once enrolled. */
+  telegram_username?: string | null;
+  /** IPs / CIDR ranges this account may sign in from. Empty = anywhere. */
+  ip_allowlist?: string[];
 };
 
 export type Me = User & {
@@ -286,6 +292,8 @@ export type Deposit = {
   /** Which login under selected_game this top-up targets. Null = first account. */
   selected_game_username?: string | null;
   status: DepositStatus;
+  /** Corrections made after saving, newest first — shown in Remark. */
+  edit_note?: string | null;
   source?: TransactionSource;
   skip_bot?: boolean;
   matched_at?: string | null;
@@ -319,6 +327,8 @@ export type Withdrawal = {
   withdraw_all?: boolean;
   credit_pulled_amount: number;
   status: WithdrawalStatus;
+  /** Corrections made after saving, newest first — shown in Remark. */
+  edit_note?: string | null;
   source?: TransactionSource;
   skip_bot?: boolean;
   handled_by_user_id?: number | null;
@@ -367,6 +377,8 @@ export type GameTransfer = {
   /** Move the whole source balance; the agent discovers the real figure. */
   transfer_all: boolean;
   status: GameTransferStatus;
+  /** true = CS moved it by hand, false = the agent did, null = unrecorded. */
+  skip_bot?: boolean | null;
   /** The agent's reason for the outcome — why it failed, when it failed. */
   note: string | null;
   /** 1 on the first try; bumped each time the stuck-transfer sweep restarts it. */
@@ -400,7 +412,27 @@ export type GameCredit = {
   last_updated_at: string;
 };
 
-export type BankAccountRole = "deposit" | "withdrawal";
+export type BankAccountRole = "deposit" | "withdrawal" | "both";
+
+/**
+ * What an account is for, asked as a question rather than compared to a value.
+ *
+ * A hybrid account answers yes to both. Every `role === "deposit"` in the
+ * codebase was a place where "both" would have been silently excluded — from
+ * the bot's collection list, from the payout picker, from the balance cards —
+ * so the comparison lives here once instead of being spelled out at each site.
+ */
+export const takesDeposits = (role: BankAccountRole): boolean =>
+  role === "deposit" || role === "both";
+export const paysWithdrawals = (role: BankAccountRole): boolean =>
+  role === "withdrawal" || role === "both";
+
+/** How the role reads on screen. */
+export const BANK_ROLE_LABEL: Record<BankAccountRole, string> = {
+  deposit: "Deposit",
+  withdrawal: "Withdrawal",
+  both: "Deposit & Withdrawal",
+};
 
 export type BankAccount = {
   account_id: number;
@@ -530,8 +562,23 @@ export const EXPENSE_CATEGORIES = [
   "utilities",
   "equipment",
   "marketing",
+  // Fees the bank takes: transfer charges, maintenance, GST on them. Recorded
+  // like any other expense, and — like any expense paid from an account — it
+  // moves that account's balance.
+  "bank_charge",
   "other",
 ] as const;
+
+/** Who currently runs a company. See lib/company-leaders.ts. */
+export type CompanyLeader = {
+  id: number;
+  company_entity_id: number;
+  leader_entity_id: number;
+  valid_from: string;
+  valid_to: string | null;
+  is_primary: boolean;
+  note: string | null;
+};
 
 export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
 
@@ -542,6 +589,9 @@ export type Expense = {
   description: string;
   amount: number;
   company_entity_id: number | null;
+  /** Paid out of a bank account, or out of a leader's cash. Never both. */
+  paid_from_account_id: number | null;
+  paid_from_cash_entity_id: number | null;
   recorded_by_user_id: number;
   notes?: string | null;
   created_at: string;
@@ -555,6 +605,16 @@ export type ServerSettings = {
    */
   min_withdrawal_amount?: number;
   games?: string[];
+  /**
+   * Other spellings of a game, as the operator writes them on their own
+   * worksheet: {"MG888": "Mega888", "Scr918Kiss": "918Kiss"}.
+   *
+   * The catalogue holds one canonical name per game so the data stays joined
+   * up, but CS types what they have always typed. Without this the worksheet
+   * rejected "MG888" as an unknown product — the name that company had used
+   * every day for a month — and the row could not be saved at all.
+   */
+  game_aliases?: Record<string, string>;
   banks?: string[];
   /** Rebate window boundaries per period, in business time. See lib/rebates. */
   rebate_cutoffs?: {
@@ -562,6 +622,11 @@ export type ServerSettings = {
     weekly: { weekday: number; time: string };
     monthly: { day: number; time: string };
   };
+  /**
+   * Whether an unapproved browser may sign in. Absent or "off" = devices are
+   * recorded but never refused; "enforce" = only approved ones get in.
+   */
+  device_policy?: "off" | "enforce";
   [key: string]: unknown;
 };
 

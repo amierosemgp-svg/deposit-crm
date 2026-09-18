@@ -6,6 +6,7 @@ import {
   bonusPlans,
   botCommands,
   botHealth,
+  companyLeaders,
   deposits,
   expenses,
   gameCredits,
@@ -98,6 +99,26 @@ export async function GET(request: Request) {
     }
 
     const entityTree = await visibleEntityTree(user);
+
+    /**
+     * Who currently runs each visible company. Small — one row per company per
+     * leader — and the hierarchy cannot be drawn without it now that a company
+     * may sit under more than one leader.
+     */
+    const ownership = entityTree.length
+      ? await db
+          .select()
+          .from(companyLeaders)
+          .where(
+            and(
+              isNull(companyLeaders.valid_to),
+              inArray(
+                companyLeaders.company_entity_id,
+                entityTree.map((e) => e.entity_id),
+              ),
+            ),
+          )
+      : [];
     const entityIds = await visibleEntityIds(user);
     const companyIds =
       user.companyIds ??
@@ -243,6 +264,9 @@ export async function GET(request: Request) {
           status: users.status,
           last_login_at: users.last_login_at,
           created_at: users.created_at,
+          two_factor_enabled: users.two_factor_enabled,
+          telegram_username: users.telegram_username,
+          ip_allowlist: users.ip_allowlist,
         })
         .from(users)
         .where(
@@ -327,14 +351,32 @@ export async function GET(request: Request) {
         .orderBy(desc(botCommands.command_id))
         .limit(20),
 
-      // Operational expenses are admin-only.
+      /**
+       * Expenses are the admin's book — salaries, rent, what the business
+       * costs — except for the one kind the desk has to record itself: bank
+       * charges, which move a bank balance and so have to be enterable by
+       * whoever is reconciling it. Everyone else sees those, for their own
+       * companies, and nothing else.
+       */
       user.role === "super_admin"
         ? db
             .select()
             .from(expenses)
             .orderBy(desc(expenses.expense_date))
             .limit(500)
-        : Promise.resolve([]),
+        : user.companyIds?.length
+          ? db
+              .select()
+              .from(expenses)
+              .where(
+                and(
+                  eq(expenses.category, "bank_charge"),
+                  inArray(expenses.company_entity_id, user.companyIds),
+                ),
+              )
+              .orderBy(desc(expenses.expense_date))
+              .limit(500)
+          : Promise.resolve([]),
 
       boIds.length
         ? db
@@ -393,6 +435,7 @@ export async function GET(request: Request) {
     return Response.json({
       me: user,
       entities: entityTree,
+      companyLeaders: ownership,
       users: allUsers,
       // Omitted, not nulled, when unchanged — the store shallow-merges, so an
       // absent key keeps the roster it already has.

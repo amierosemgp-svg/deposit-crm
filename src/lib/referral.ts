@@ -8,10 +8,31 @@ import {
   players,
   providerBoAccounts,
   referralBonuses,
+  settings,
 } from "@/db/schema";
 
-/** Share of a downline's first deposit that the upline earns. */
-export const REFERRAL_BONUS_PERCENTAGE = 20;
+/**
+ * Share of a downline's first deposit that the upline earns.
+ *
+ * The rate differs by operator — Pokercity's own books pay 30% where this was
+ * fixed at 20 — so it lives in settings, where it can be changed without a
+ * deploy. The constant remains the fallback for a database that has never had
+ * the row set.
+ */
+export const REFERRAL_BONUS_PERCENTAGE = 30;
+const REFERRAL_PCT_KEY = "referral_bonus_pct";
+
+async function referralPercentage(txn: {
+  select: typeof db.select;
+}): Promise<number> {
+  const [row] = await txn
+    .select({ value: settings.value })
+    .from(settings)
+    .where(eq(settings.key, REFERRAL_PCT_KEY));
+  const pct = typeof row?.value === "number" ? row.value : REFERRAL_BONUS_PERCENTAGE;
+  // A nonsense setting pays nonsense bonuses; fall back rather than trust it.
+  return Number.isFinite(pct) && pct > 0 && pct <= 100 ? pct : REFERRAL_BONUS_PERCENTAGE;
+}
 
 type Txn = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -126,10 +147,8 @@ export async function syncReferralBonus(
 
   // Bonus is on the deposit itself, not the bonused total — the house bonus
   // isn't the referrer's to take a cut of.
-  const bonusAmount = +(
-    (firstDeposit.deposit_amount * REFERRAL_BONUS_PERCENTAGE) /
-    100
-  ).toFixed(2);
+  const percentage = await referralPercentage(txn);
+  const bonusAmount = +((firstDeposit.deposit_amount * percentage) / 100).toFixed(2);
   if (bonusAmount <= 0) return;
 
   if (existing) {
@@ -141,7 +160,7 @@ export async function syncReferralBonus(
         upline_player_id: player.upline_player_id,
         deposit_id: firstDeposit.deposit_id,
         deposit_amount: firstDeposit.deposit_amount,
-        bonus_percentage: REFERRAL_BONUS_PERCENTAGE,
+        bonus_percentage: percentage,
         bonus_amount: bonusAmount,
         status: "pending",
         note: null,
@@ -157,7 +176,7 @@ export async function syncReferralBonus(
       downline_player_id: downlinePlayerId,
       deposit_id: firstDeposit.deposit_id,
       deposit_amount: firstDeposit.deposit_amount,
-      bonus_percentage: REFERRAL_BONUS_PERCENTAGE,
+      bonus_percentage: percentage,
       bonus_amount: bonusAmount,
       status: "pending",
     })

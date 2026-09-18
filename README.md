@@ -101,6 +101,49 @@ the open one. Nothing on a command moves money, so a failure reverses nothing.
 
 An existing database needs `migrations/2026-08-21-bot-commands.sql`.
 
+## Sign-in security
+
+Three checks sit between the password and the session cookie, on
+**Settings → Security**. All three are off on arrival: an account with none of
+them configured signs in exactly as it always did.
+
+**Two-factor (Telegram).** Per user, opt-in. The user opens a one-shot deep
+link from the Security page, presses Start, and the bot's webhook records their
+chat id — nobody knows their own Telegram chat id, so it cannot be typed into a
+form. With it on, `/api/auth/login` returns a challenge and no cookie; the
+6-digit code lives 5 minutes, dies after 5 wrong answers, is stored only as a
+sha256, and must be entered from the same browser that asked for it.
+Needs `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_USERNAME` and
+`TELEGRAM_WEBHOOK_SECRET`, and the bot's webhook pointed at
+`/api/telegram/webhook` (see `.env.example` for the `setWebhook` call).
+Unlinking Telegram turns 2FA off with it — a second factor with nowhere to
+arrive is a locked account.
+
+**Device binding.** Every browser that signs in is recorded against the
+account. There is no MAC address involved and there cannot be: a web page
+cannot read one at any privilege level. A "device" is 32 random bytes in a
+long-lived httpOnly cookie — a browser profile, not hardware. Clearing cookies
+or using a second browser reads as a new device, which is the point: it
+appears on the list for approval.
+
+Recording and enforcing are deliberately separate. The `device_policy` setting
+starts at `off`: devices are listed but never refused. Approve the team's real
+machines, *then* switch it to `enforce` — the other order locks out the whole
+desk at once. A user's first-ever device is auto-approved as it is created, so
+turning enforcement on can't strand an account that has never had a list. Only
+an admin (or a leader, over their own staff) can approve; self-approval would
+make the control decorative.
+
+**IP allowlist.** Per user, super admin only, empty by default = anywhere.
+Accepts bare addresses and CIDR ranges, v4 and v6. The address comes from
+`x-forwarded-for`, which is trustworthy behind Vercel's edge; behind another
+proxy, confirm that before treating it as a control rather than a speed bump.
+
+Every outcome lands in the system log — codes sent, codes entered from the
+wrong browser, devices refused, networks refused.
+
+An existing database needs `migrations/2026-09-12-2fa-devices-access.sql`.
+
 ## System log
 
 Three tables hold "what happened", and the **System Log** page (leaders and the

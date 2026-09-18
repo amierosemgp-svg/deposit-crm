@@ -55,3 +55,156 @@ export const CREDIT_CONFLICT_TARGET = [
   gameCredits.game_name,
   gameCredits.game_username,
 ] as const;
+
+/**
+ * Move credit between two of a player's wallets, inside a transaction.
+ *
+ * Extracted from the agent's completion handler so the manual rail books a
+ * transfer exactly the way the agent does. Two call sites writing this by hand
+ * is how the same transfer ends up debiting one balance and crediting another
+ * that spelling drift has forked in two.
+ *
+ * Locks the source row, re-reads it (the cached figure the request was made
+ * against may have moved), and writes back under the spelling already on file
+ * so a case variant can't fork the balance the unique index forbids. Returns
+ * what actually moved.
+ */
+export async function moveGameCredit(
+  txn: {
+    select: typeof import("@/db").db.select;
+    update: typeof import("@/db").db.update;
+    insert: typeof import("@/db").db.insert;
+  },
+  input: {
+    playerId: number;
+    fromGame: string;
+    fromLogin: string;
+    toGame: string;
+    toLogin: string;
+    /** Null with `all` — the whole source balance, whatever it turns out to be. */
+    amount: number | null;
+    all?: boolean;
+    nowIso: string;
+  },
+): Promise<number> {
+  const { playerId, fromGame, fromLogin, toGame, toLogin, nowIso } = input;
+
+  const [fromCredit] = await txn
+    .select()
+    .from(gameCredits)
+    .where(creditWhere(playerId, fromGame, fromLogin))
+    .for("update");
+  const fromBalance = fromCredit?.current_balance ?? 0;
+
+  const moved = input.all ? fromBalance : (input.amount ?? 0);
+  if (moved <= 0) {
+    throw new InsufficientCreditError(
+      `Nothing to transfer from ${fromGame} (balance ${fromBalance.toFixed(2)})`,
+    );
+  }
+  if (fromBalance < moved) {
+    throw new InsufficientCreditError(
+      `Insufficient ${fromGame} balance (${fromBalance.toFixed(2)} available, ${moved.toFixed(2)} needed)`,
+    );
+  }
+
+  const fromName = fromCredit?.game_name ?? fromGame;
+  const fromUser = fromCredit?.game_username ?? fromLogin;
+  await txn
+    .update(gameCredits)
+    .set({
+      current_balance: +(fromBalance - moved).toFixed(2),
+      last_updated_at: nowIso,
+    })
+    .where(
+      and(
+        eq(gameCredits.player_id, playerId),
+        eq(gameCredits.game_name, fromName),
+        eq(gameCredits.game_username, fromUser),
+      ),
+    );
+
+  // Resolve the destination's existing spelling before upserting, or the
+  // case-sensitive primary key misses the conflict and the case-insensitive
+  // unique index rejects the insert outright.
+  const [toCredit] = await txn
+    .select({
+      game_name: gameCredits.game_name,
+      game_username: gameCredits.game_username,
+    })
+    .from(gameCredits)
+    .where(creditWhere(playerId, toGame, toLogin))
+    .for("update");
+  await txn
+    .insert(gameCredits)
+    .values({
+      player_id: playerId,
+      game_name: toCredit?.game_name ?? toGame,
+      game_username: toCredit?.game_username ?? toLogin,
+      current_balance: moved,
+      last_updated_at: nowIso,
+    })
+    .onConflictDoUpdate({
+      target: [...CREDIT_CONFLICT_TARGET],
+      set: {
+        current_balance: sql`${gameCredits.current_balance} + ${moved}`,
+        last_updated_at: nowIso,
+      },
+    });
+
+  return moved;
+}
+
+/** The source wallet can't cover the move. Callers map this to a 422. */
+export class InsufficientCreditError extends Error {}
+
+/**
+ * Add to or take from one wallet, and report where it ended up.
+ *
+ * For corrections rather than transactions: re-booking a deposit that was
+ * recorded wrong has to undo a credit that has already been written. Unlike
+ * moveGameCredit this does not refuse to go negative — the correction is the
+ * truth, and a balance that ends below zero says the cached figure and the
+ * provider have parted company, which is worth showing rather than rounding
+ * away. Callers surface that to CS.
+ */
+export async function adjustGameCredit(
+  txn: {
+    select: typeof import("@/db").db.select;
+    insert: typeof import("@/db").db.insert;
+  },
+  input: {
+    playerId: number;
+    gameName: string;
+    gameUsername: string;
+    delta: number;
+    nowIso: string;
+  },
+): Promise<number> {
+  const { playerId, gameName, gameUsername, delta, nowIso } = input;
+  if (delta === 0) return 0;
+
+  const [existing] = await txn
+    .select()
+    .from(gameCredits)
+    .where(creditWhere(playerId, gameName, gameUsername))
+    .for("update");
+
+  const next = +((existing?.current_balance ?? 0) + delta).toFixed(2);
+  await txn
+    .insert(gameCredits)
+    .values({
+      player_id: playerId,
+      // Write back under the spelling already on file, so a case variant can't
+      // fork the balance the unique index forbids.
+      game_name: existing?.game_name ?? gameName,
+      game_username: existing?.game_username ?? gameUsername,
+      current_balance: next,
+      last_updated_at: nowIso,
+    })
+    .onConflictDoUpdate({
+      target: [...CREDIT_CONFLICT_TARGET],
+      set: { current_balance: next, last_updated_at: nowIso },
+    });
+  return next;
+}

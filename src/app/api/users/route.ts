@@ -9,8 +9,17 @@ import { companyOfEntity, logActivity } from "@/lib/activity-log";
 
 const createSchema = z.object({
   username: z.string().min(2).regex(/^[a-z0-9_]+$/i, "Letters, numbers, underscores only"),
-  email: z.string().email(),
-  full_name: z.string().min(1),
+  /**
+   * Both optional for an account on the main company.
+   *
+   * Those are the operator's own logins — they sign in with a username and
+   * nobody emails them. Insisting on an address produced made-up ones, which
+   * is worse than not asking: a fake address in a unique column is a real
+   * collision waiting to happen. Defaults below are derived and never shown as
+   * something to contact.
+   */
+  email: z.string().email().optional(),
+  full_name: z.string().min(1).optional(),
   password: z.string().min(8),
   role: z.enum(["company_leader", "cs_agent", "viewer"]),
   entity_id: z.number().int().positive(),
@@ -40,6 +49,11 @@ export async function POST(request: Request) {
       .from(entities)
       .where(eq(entities.entity_id, body.entity_id));
     if (!entity) return jsonError("Entity not found", 404);
+    // Everyone else still has to give both: a leader or CS agent is a person
+    // somebody needs to be able to name and reach.
+    if (entity.entity_type !== "main_company" && (!body.email || !body.full_name)) {
+      return jsonError("Email and full name are required outside the main company");
+    }
     if (!ROLE_ENTITY[body.role].includes(entity.entity_type)) {
       return jsonError(
         `A ${body.role} must be attached to a ${ROLE_ENTITY[body.role].join("/")} entity`,
@@ -57,14 +71,27 @@ export async function POST(request: Request) {
       ) {
         throw new AuthError(403, "CS desk is outside your companies");
       }
+    } else if (
+      user.role === "super_admin" &&
+      user.ownedEntityIds !== null &&
+      !user.ownedEntityIds.includes(entity.entity_id)
+    ) {
+      // A super admin creating logins inside another organisation's tree is
+      // the same breach as editing it — one main company, one super admin.
+      throw new AuthError(403, "Entity belongs to another organisation");
     }
 
     const [created] = await db
       .insert(users)
       .values({
         username: body.username.toLowerCase(),
-        email: body.email.toLowerCase(),
-        full_name: body.full_name,
+        // Derived, not invented, when the main company left them out: scoped by
+        // entity so two organisations can each have an "admin" without
+        // colliding on the unique email column.
+        email:
+          body.email?.toLowerCase() ??
+          `${body.username.toLowerCase()}@e${entity.entity_id}.local`,
+        full_name: body.full_name ?? body.username,
         password_hash: await bcrypt.hash(body.password, 10),
         role: body.role,
         entity_id: body.entity_id,
