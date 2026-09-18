@@ -5,6 +5,7 @@ import { deposits, players, transactions } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import { canOverrideEligibility, resolveBonusForDeposit } from "@/lib/bonus";
+import { bonusOn } from "@/lib/bonus-math";
 import { rebookCompletedDeposit } from "@/lib/deposit-complete";
 import { InsufficientKioskCreditError } from "@/lib/kiosk-credit";
 import {
@@ -228,7 +229,7 @@ export async function PATCH(
       const pct =
         (bonusPatch as { bonus_percentage?: number }).bonus_percentage ??
         row.bonus_percentage;
-      const bonus = +((body.deposit_amount * pct) / 100).toFixed(2);
+      const bonus = bonusOn(body.deposit_amount, pct);
       amountPatch = {
         deposit_amount: body.deposit_amount,
         bonus_amount: bonus,

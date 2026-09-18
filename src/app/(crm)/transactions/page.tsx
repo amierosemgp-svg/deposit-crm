@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore, type MutationResult } from "@/lib/store";
+import { bonusOn } from "@/lib/bonus-math";
 import { formatClock, formatRelative, formatRM } from "@/lib/format";
 import { byBankOrder } from "@/lib/bank-order";
 import { extractSenderName } from "@/lib/bank-remark";
@@ -449,7 +450,7 @@ function computeDepositDerived(drafts: string[][]): string[][] {
   return drafts.map((row) => {
     const amt = parseAmount(row[c.amount] ?? "");
     const pct = parseBonusPct(row[c.bonuspct] ?? "");
-    const bonusValue = amt && pct ? +((amt * pct) / 100).toFixed(2) : 0;
+    const bonusValue = amt && pct ? bonusOn(amt, pct) : 0;
     const bonus = amt && pct ? fmtAmount(bonusValue) : "";
     const total = amt ? fmtAmount(amt + bonusValue) : "";
     if ((row[c.bonus] ?? "") === bonus && (row[c.total] ?? "") === total) return row;
@@ -1717,7 +1718,7 @@ export default function TransactionsPage() {
           title: `General bonus ${pct}%`,
           badge: "General",
           detail: "No rule attached — available on any deposit, any number of times",
-          figure: amt > 0 ? formatRM(+((amt * pct) / 100).toFixed(2)) : `${pct}%`,
+          figure: amt > 0 ? formatRM(bonusOn(amt, pct)) : `${pct}%`,
         });
       }
       return list;

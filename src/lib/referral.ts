@@ -1,5 +1,6 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
+import { bonusOn } from "@/lib/bonus-math";
 import { CREDIT_CONFLICT_TARGET } from "@/lib/game-credits";
 import {
   bonusPlans,
@@ -148,7 +149,7 @@ export async function syncReferralBonus(
   // Bonus is on the deposit itself, not the bonused total — the house bonus
   // isn't the referrer's to take a cut of.
   const percentage = await referralPercentage(txn);
-  const bonusAmount = +((firstDeposit.deposit_amount * percentage) / 100).toFixed(2);
+  const bonusAmount = bonusOn(firstDeposit.deposit_amount, percentage);
   if (bonusAmount <= 0) return;
 
   if (existing) {

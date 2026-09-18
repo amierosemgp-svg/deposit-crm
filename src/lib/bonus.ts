@@ -2,6 +2,7 @@ import { and, asc, desc, eq, gte, ne, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { bonusPlans, deposits, players, withdrawals } from "@/db/schema";
 import { AuthError, type AuthedUser } from "./auth";
+import { bonusOn } from "@/lib/bonus-math";
 
 export type BonusPlan = typeof bonusPlans.$inferSelect;
 export type BonusPeriod = "daily" | "weekly" | "monthly";
@@ -275,7 +276,7 @@ export async function evaluateBonusPlan(
 }
 
 function pct(base: number, percentage: number): number {
-  return +((base * percentage) / 100).toFixed(2);
+  return bonusOn(base, percentage);
 }
 
 /**
