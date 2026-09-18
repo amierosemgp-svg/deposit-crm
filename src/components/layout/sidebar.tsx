@@ -73,7 +73,15 @@ const NAV: NavGroup[] = [
       { href: "/rebates", label: "Rebates", icon: Percent },
       { href: "/bank-accounts", label: "Bank Accounts", icon: Landmark },
       { href: "/provider-accounts", label: "Kiosks Accounts", icon: KeyRound },
-      { href: "/hierarchy", label: "Hierarchy", icon: Network },
+      // The org chart is management's view of the business. A CS desk works
+      // one casino and has no use for the shape above it — and the page was
+      // showing them the leaders and, until today, the super admins' logins.
+      {
+        href: "/hierarchy",
+        label: "Hierarchy",
+        icon: Network,
+        roles: ["super_admin", "company_leader"],
+      },
       // Lead lists are managed inside Players → Leads now; the standalone page
       // stays reachable by URL but is off the menu.
       {

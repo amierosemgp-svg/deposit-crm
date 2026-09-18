@@ -563,6 +563,30 @@ export default function HierarchyPage() {
     );
   }
 
+  /**
+   * Not for the desk. Hidden from the menu too; this is the guard for anyone
+   * who types the URL, and it comes before the empty-state below — a CS agent
+   * is no longer sent a main company, so without it they would land on "no
+   * organization data yet" and reasonably read it as something being broken.
+   */
+  if (me?.role === "cs_agent") {
+    return (
+      <div className="space-y-5">
+        <div>
+          <h1 className="text-2xl font-semibold">Organization Hierarchy</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Leaders, companies and CS desks in your organization
+          </p>
+        </div>
+        <Card>
+          <CardContent className="py-12 text-center text-sm text-muted-foreground">
+            This page is for company leaders and admins.
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   if (!mains.length) {
     return (
       <div className="space-y-5">

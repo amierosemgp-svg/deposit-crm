@@ -274,7 +274,22 @@ export async function GET(request: Request) {
             ? undefined
             : inArray(
                 users.entity_id,
-                entityTree.map((e) => e.entity_id),
+                /**
+                 * Logins from the visible tree, minus the group's own.
+                 *
+                 * The tree includes ancestors so a card can be drawn with a
+                 * name on it; that is display context, not a staff list. It
+                 * meant a CS agent's hierarchy page listed every super admin's
+                 * username — the accounts worth attacking, handed to the
+                 * widest-held role in the company.
+                 */
+                entityTree
+                  .filter(
+                    (e) =>
+                      user.role === "super_admin" ||
+                      e.entity_type !== "main_company",
+                  )
+                  .map((e) => e.entity_id),
               ),
         )
         .orderBy(asc(users.user_id)),

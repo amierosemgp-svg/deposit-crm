@@ -94,13 +94,21 @@ export async function visibleEntityTree(user: AuthedUser) {
     }
   }
 
-  // 2. Ancestors of the roots — for display context only (NOT their other children).
+  /**
+   * 2. Ancestors, for context only — never their other children.
+   *
+   * How far up depends on who is asking. A leader sees the group they belong
+   * to; a CS agent sees the company that owns their casino and stops there.
+   * The desk has no business knowing the shape of the organisation above its
+   * own company, and the group card carried the super admins' logins with it.
+   */
+  const ancestorLimit = user.role === "cs_agent" ? 1 : Infinity;
   const keep = new Set<number>(subtree);
   for (const rootId of roots) {
     let cur = byId.get(rootId)?.parent_entity_id
       ? byId.get(byId.get(rootId)!.parent_entity_id!)
       : undefined;
-    while (cur) {
+    for (let up = 0; cur && up < ancestorLimit; up++) {
       keep.add(cur.entity_id);
       cur = cur.parent_entity_id ? byId.get(cur.parent_entity_id) : undefined;
     }
