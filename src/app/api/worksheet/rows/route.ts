@@ -215,8 +215,24 @@ export async function GET(request: Request) {
     if (p.from) where.push(sql`${businessDay(cfg.date)} >= ${p.from}::date`);
     if (p.to) where.push(sql`${businessDay(cfg.date)} <= ${p.to}::date`);
 
+    // The Free Credit sheet reads a flattened row — reason, source and the
+    // transfer it queued — which live inside `details` on the ledger. Raw rows
+    // left every one of them undefined, and a free credit with no source reads
+    // as "queued for the agent".
+    const shape =
+      sheet === "freecredit"
+        ? sql`jsonb_build_object(
+              'transaction_id', t.transaction_id, 'created_at', t.created_at,
+              'player_id', t.player_id, 'entity_id', t.entity_id,
+              'game_name', t.game_name, 'amount', t.amount::float8,
+              'user_id', t.user_id,
+              'reason', t.details->>'reason',
+              'source', coalesce(t.details->>'source', 'manual'),
+              'game_transfer_id', (t.details->>'game_transfer_id')::int) AS row`
+        : asRow(cfg.alias, cfg.numerics);
+
     const other = await db.execute(sql`
-      SELECT ${asRow(cfg.alias, cfg.numerics)}
+      SELECT ${shape}
         FROM ${cfg.from}
        WHERE ${all(where)}
        ORDER BY ${cfg.date} DESC

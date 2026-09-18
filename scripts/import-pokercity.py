@@ -1149,8 +1149,12 @@ INSERT INTO transactions (player_id, entity_id, type, amount, game_name, referen
 INSERT INTO transactions (player_id, entity_id, type, amount, game_name, user_id,
                           details, created_at)
   SELECT m.player_id, c.v, 'game_topup', f.amount, f.game_name, u.v,
-         jsonb_build_object('source', 'import', 'action', 'free_credit',
-                            'kind', 'free_credit', 'remark', f.remark,
+         -- "manual" is what these were: CS put the credit into the game in
+         -- the back-office and wrote it on the sheet. Marked 'import' they
+         -- read as queued for an agent that was never asked to do anything.
+         jsonb_build_object('source', 'manual', 'action', 'free_credit',
+                            'kind', 'free_credit', 'imported', true,
+                            'remark', f.remark,
                             'game_username', f.game_username, 'sheet_row', f.ref),
          f.at
     FROM imp_fc f JOIN imp_member m USING (code), ctx c, cs_user u WHERE c.k = 'company';
