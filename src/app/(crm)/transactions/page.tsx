@@ -3493,10 +3493,10 @@ export default function TransactionsPage() {
     { key: "freecredit", label: "Free Credit" },
     { key: "transfer", label: "Game Transfer" },
     { key: "leaderwithdrawal", label: "Leader Withdrawal" },
-    // Leader settlements stay super-admin, as on their own page. Expenses are
-    // open to everyone now, but only for bank charges — the desk records those
-    // because they move a bank balance nobody else is watching.
-    ...(isAdmin ? [{ key: "leadertransfer" as const, label: "Leader Transfer" }] : []),
+    // Both are open to the desk now: expenses for bank charges, settlements
+    // because CS records them alongside the day's takings. Each is scoped
+    // server-side to the caller's own tree, so "open" does not mean "all".
+    { key: "leadertransfer" as const, label: "Leader Transfer" },
     { key: "expense" as const, label: isAdmin ? "Expenses" : "Bank Charges" },
   ];
 

@@ -1,10 +1,11 @@
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { authErrorResponse, requireUser } from "@/lib/auth";
-import { jsonError } from "@/lib/api-helpers";
+import { jsonError, visibleEntityIds } from "@/lib/api-helpers";
 import {
   all,
   businessDay,
+  csCutoff,
   DEPOSIT_COUNTS,
   parseReportParams,
   scopeDeposits,
@@ -68,11 +69,23 @@ export async function GET(request: Request) {
     const limit = Math.min(Number(sp.get("limit") ?? 2000) || 2000, 5000);
     const offset = Math.max(Number(sp.get("offset") ?? 0) || 0, 0);
 
+    /**
+     * A CS agent sees a rolling day, whatever range they ask for.
+     *
+     * The sheet's date filter is theirs to move, and without this a CS could
+     * simply widen it and read the month — the row cap that used to hide older
+     * rows was never the rule, just a side effect of the payload size. The same
+     * 24 hours /api/state has always applied, now enforced where the rows are.
+     */
+    const cutoff = csCutoff(user);
+    const visible = await visibleEntityIds(user);
+
     if (sheet === "deposit") {
       const w = [...scopeDeposits(user), DEPOSIT_COUNTS];
       if (p.from) w.push(sql`${businessDay(sql`d.deposit_date`)} >= ${p.from}::date`);
       if (p.to) w.push(sql`${businessDay(sql`d.deposit_date`)} <= ${p.to}::date`);
       if (p.companyId !== null) w.push(sql`d.company_entity_id = ${p.companyId}`);
+      if (cutoff) w.push(sql`d.created_at >= ${cutoff}::timestamptz`);
 
       const rows = await db.execute(sql`
         SELECT ${asRow("d", [
@@ -108,6 +121,7 @@ export async function GET(request: Request) {
     if (p.from) w.push(sql`${businessDay(sql`wd.created_at`)} >= ${p.from}::date`);
     if (p.to) w.push(sql`${businessDay(sql`wd.created_at`)} <= ${p.to}::date`);
     if (p.companyId !== null) w.push(sql`pl.company_entity_id = ${p.companyId}`);
+    if (cutoff) w.push(sql`wd.created_at >= ${cutoff}::timestamptz`);
 
     const rows = await db.execute(sql`
       SELECT ${asRow("wd", ["requested_amount", "credit_pulled_amount"])}
@@ -174,7 +188,14 @@ export async function GET(request: Request) {
       },
       leadertransfer: {
         from: sql`leader_transfers t`,
-        scope: sql`true`,           // super-admin only, as its own route enforces
+        // One end in the caller's tree. The sheet is open to the desk now, and
+        // an unscoped ledger would show them every organisation's settlements.
+        scope: visible === null
+          ? sql`true`
+          : visible.length
+            ? sql`(t.from_leader_entity_id IN (${sql.join(visible.map((id) => sql`${id}`), sql`, `)})
+                   OR t.to_leader_entity_id IN (${sql.join(visible.map((id) => sql`${id}`), sql`, `)}))`
+            : sql`false`,
         date: sql`t.created_at`,
         numerics: ["amount"],
         alias: "t",
@@ -190,6 +211,7 @@ export async function GET(request: Request) {
 
     const cfg = spec[sheet];
     const where: SQL[] = [cfg.scope];
+    if (cutoff) where.push(sql`${cfg.date} >= ${cutoff}::timestamptz`);
     if (p.from) where.push(sql`${businessDay(cfg.date)} >= ${p.from}::date`);
     if (p.to) where.push(sql`${businessDay(cfg.date)} <= ${p.to}::date`);
 

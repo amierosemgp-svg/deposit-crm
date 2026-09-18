@@ -59,6 +59,23 @@ export type ReportParams = {
  * The filter bar, parsed. Returns a string instead of params when something is
  * malformed, so the route can answer 400 rather than quietly widen the query.
  */
+/**
+ * How far back a CS agent may look: a rolling 24 hours.
+ *
+ * They work the day in front of them, and everything they need to act on — a
+ * pending deposit, a withdrawal waiting to be paid — happened within it. The
+ * rest is the desk's history, which is a leader's to read.
+ *
+ * Returned as an ISO instant rather than a business day, so the window rolls
+ * with the clock instead of snapping to midnight and emptying the sheet at the
+ * start of a shift.
+ */
+export function csCutoff(user: AuthedUser): string | null {
+  return user.role === "cs_agent"
+    ? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+    : null;
+}
+
 export function parseReportParams(
   url: string,
 ): ReportParams | { error: string } {

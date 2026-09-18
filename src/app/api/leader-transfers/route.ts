@@ -1,9 +1,9 @@
-import { desc, inArray } from "drizzle-orm";
+import { desc, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { bankAccounts, entities, leaderTransfers, transactions } from "@/db/schema";
-import { AuthError, authErrorResponse, requireUser } from "@/lib/auth";
-import { jsonError } from "@/lib/api-helpers";
+import { AuthError, authErrorResponse, requireUser, requireWriteUser } from "@/lib/auth";
+import { jsonError, visibleEntityIds } from "@/lib/api-helpers";
 import { InsufficientBankBalanceError, moveBankBalance } from "@/lib/bank-balance";
 import { logActivity } from "@/lib/activity-log";
 
@@ -31,16 +31,32 @@ const createSchema = z
 
 /**
  * GET /api/leader-transfers — the settlement ledger between leaders.
- * Super-admin only: leaders sit at the top of the tree, and only the main
- * company sees across all of them.
+ *
+ * Scoped to the tree the caller can see, not gated on being an admin. A CS desk
+ * records these alongside the day's deposits, and a leader needs to read their
+ * own; what neither may see is another organisation's settlements, which an
+ * unscoped list handed to everyone the moment the tab was opened up.
  */
 export async function GET() {
   try {
     const user = await requireUser();
-    if (user.role !== "super_admin") throw new AuthError(403, "Admins only");
+    const visible = await visibleEntityIds(user);
+    const mine =
+      visible === null
+        ? sql`true`
+        : visible.length
+          ? sql`(${leaderTransfers.from_leader_entity_id} IN (${sql.join(
+              visible.map((id) => sql`${id}`),
+              sql`, `,
+            )}) OR ${leaderTransfers.to_leader_entity_id} IN (${sql.join(
+              visible.map((id) => sql`${id}`),
+              sql`, `,
+            )}))`
+          : sql`false`;
     const rows = await db
       .select()
       .from(leaderTransfers)
+      .where(mine)
       .orderBy(desc(leaderTransfers.created_at))
       .limit(2000);
     return Response.json({ leader_transfers: rows });
@@ -55,8 +71,7 @@ export async function GET() {
 /** POST /api/leader-transfers — record a transfer between leaders, or one leader's own accounts. */
 export async function POST(request: Request) {
   try {
-    const user = await requireUser();
-    if (user.role !== "super_admin") throw new AuthError(403, "Admins only");
+    const user = await requireWriteUser();
     const parsed = createSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return jsonError("Invalid payload");
     const body = parsed.data;
@@ -103,6 +118,19 @@ export async function POST(request: Request) {
     const to = byId.get(body.to_leader_entity_id);
     if (!from || from.type !== "leader") return jsonError("From is not a leader");
     if (!to || to.type !== "leader") return jsonError("To is not a leader");
+
+    /**
+     * One end has to be theirs. Recording a settlement between two organisations
+     * neither of which you belong to is not a mistake anyone makes by accident.
+     */
+    const visible = await visibleEntityIds(user);
+    if (
+      visible !== null &&
+      !visible.includes(body.from_leader_entity_id) &&
+      !visible.includes(body.to_leader_entity_id)
+    ) {
+      throw new AuthError(403, "Neither end of that transfer is in your scope");
+    }
 
     /**
      * A named account has to belong to the leader on that side of the transfer.
