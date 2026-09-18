@@ -533,6 +533,8 @@ const CASH_SUFFIX = "cash";
 
 /** Stable empty map, so the alias memo below doesn't re-run every render. */
 const EMPTY_ALIASES: Record<string, string> = {};
+/** Likewise for the bonus rates, which are read straight out of settings. */
+const EMPTY_RATES: number[] = [];
 
 export default function TransactionsPage() {
   const deposits = useStore((s) => s.deposits);
@@ -574,6 +576,7 @@ export default function TransactionsPage() {
   const games = gamesFn();
   const banks = banksFn();
   const gameAliases = useStore((s) => s.settings.game_aliases) ?? EMPTY_ALIASES;
+  const houseRates = useStore((s) => s.settings.bonus_options) ?? EMPTY_RATES;
   const companies = companiesFn();
   const isViewer = me?.role === "viewer";
   const isAdmin = me?.role === "super_admin";
@@ -1667,7 +1670,7 @@ export default function TransactionsPage() {
 
   /** BonusPicker-style rows from the fetched eligibility. */
   const buildBonusSuggestions = useCallback(
-    (options: BonusOption[] | undefined, amt: number): SheetSuggestion[] => {
+    (options: BonusOption[] | undefined, amt: number, rates: number[]): SheetSuggestion[] => {
       if (!options) {
         return [
           { value: "", title: "Checking what this player qualifies for…", disabled: true },
@@ -1698,6 +1701,25 @@ export default function TransactionsPage() {
           });
         }
       }
+      /**
+       * The house's own rates, under whatever plans the player qualifies for.
+       *
+       * A plan is a rule — claimable once per period, once ever for a welcome —
+       * and most of what this desk pays has no rule at all: 5% and 10% go on
+       * almost every deposit, several times a day. Those cannot be plans, so
+       * without this the dropdown offered two welcome bonuses and nothing else,
+       * and the everyday rate had to be typed from memory.
+       */
+      for (const pct of rates) {
+        if (pct <= 0) continue;
+        list.push({
+          value: `${pct}%`,
+          title: `General bonus ${pct}%`,
+          badge: "General",
+          detail: "No rule attached — available on any deposit, any number of times",
+          figure: amt > 0 ? formatRM(+((amt * pct) / 100).toFixed(2)) : `${pct}%`,
+        });
+      }
       return list;
     },
     [],
@@ -1711,9 +1733,10 @@ export default function TransactionsPage() {
       return buildBonusSuggestions(
         bonusOptionsCache.get(`${dep.player_id}:${dep.deposit_amount}:${dep.deposit_id}`),
         dep.deposit_amount,
+        houseRates,
       );
     },
-    [tab, rows, depositById, bonusOptionsCache, buildBonusSuggestions],
+    [tab, rows, depositById, bonusOptionsCache, buildBonusSuggestions, houseRates],
   );
 
   const draftSuggestions = useCallback(
@@ -1811,9 +1834,10 @@ export default function TransactionsPage() {
       return buildBonusSuggestions(
         bonusOptionsCache.get(`${pl.player_id}:${amt}:0`),
         amt,
+        houseRates,
       );
     },
-    [tab, drafts, playerByCode, bonusOptionsCache, buildBonusSuggestions],
+    [tab, drafts, playerByCode, bonusOptionsCache, buildBonusSuggestions, houseRates],
   );
 
   // ---- validation ----

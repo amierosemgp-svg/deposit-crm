@@ -130,6 +130,14 @@ BANK_ACCOUNTS = {
     "HLBB 2":   ("04650234411",      "MOGANAH DEVI A/P PANNEAR SELVAN"),
     "AMBANK 2": ("8881071576184",    "MOGANAH DEVI A/P PANNEAR SELVAN"),
     "RHB 2":    ("26227800046310",   "MOGANAH DEVI A/P PANNEAR SELVAN"),
+    # Supplied with the cutoff file. All three appear in the Abdullah Club and
+    # Club 2 lists as well — the same accounts serving more than one casino,
+    # which is what the "BACKUP TO AC2 RHB" rows in the sheet were already
+    # telling us. The bank name decides the mapping: the only Maybank of the
+    # three is MBB 2, the only spare CIMB is CIMB 3.
+    "CIMB 3":   ("7658901890",       "ARNEETHA A/P SIVA"),
+    "MBB 2":    ("514477723194",     "ARNEETHA A/P SIVA"),
+    "AMBANK 3": ("8881067566478",    "SUGUNA A/P PONNIAH"),
 }
 PLACEHOLDER = "TO BE CONFIRMED"
 

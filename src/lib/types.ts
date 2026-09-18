@@ -606,6 +606,13 @@ export type ServerSettings = {
   min_withdrawal_amount?: number;
   games?: string[];
   /**
+   * The bonus rates the desk hands out day to day, as whole percentages.
+   * Offered in the deposit sheet's Bonus % cell beside whatever plans the
+   * player qualifies for — most houses run rates with no rule attached, and
+   * those can't be expressed as a plan (a plan is claimable once per period).
+   */
+  bonus_options?: number[];
+  /**
    * Other spellings of a game, as the operator writes them on their own
    * worksheet: {"MG888": "Mega888", "Scr918Kiss": "918Kiss"}.
    *
