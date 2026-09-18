@@ -676,6 +676,62 @@ export default function TransactionsPage() {
     setPreset("custom");
     setRange((r) => ({ ...r, [edge]: value || null }));
   }, []);
+  /**
+   * Deposits and withdrawals for the range on screen.
+   *
+   * /api/state sends a fixed slice — the newest 500 — because it is one payload
+   * polled every ten seconds by every open tab. At this house's volume that
+   * reached back four days, so opening the month showed a fortnight of nothing
+   * while the rows sat in the database. This asks for the period instead, and
+   * carries the totals for the whole of it, not just the page.
+   *
+   * Falls back to the store's slice until the first response lands, so the
+   * sheet is never empty while it loads.
+   */
+  const [rangeRows, setRangeRows] = useState<
+    Partial<Record<TabKey, { rows: unknown[]; totals: { rows: number; amount: number } }>>
+  >({});
+  const loadRangeRows = useCallback(
+    async (which: TabKey) => {
+      const qs = new URLSearchParams({ sheet: which });
+      if (range.from) qs.set("from", range.from);
+      if (range.to) qs.set("to", range.to);
+      if (selectedCompanyId != null) qs.set("company", String(selectedCompanyId));
+      try {
+        const res = await fetch(`/api/worksheet/rows?${qs}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        setRangeRows((prev) => ({ ...prev, [which]: data }));
+      } catch {
+        // Keep whatever is on screen; the next refresh or poll retries.
+      }
+    },
+    [range.from, range.to, selectedCompanyId],
+  );
+  /** Rebates are generated on their own page, so they have no range to fetch. */
+  const RANGE_SHEETS = useMemo<TabKey[]>(
+    () => ["deposit", "withdrawal", "transfer", "freecredit", "leaderwithdrawal", "leadertransfer", "expense"],
+    [],
+  );
+  useEffect(() => {
+    if (!RANGE_SHEETS.includes(tab)) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void loadRangeRows(tab);
+    // The store polls /api/state every 10s; these rows no longer come from it,
+    // so they need their own heartbeat or a colleague's entry never shows up.
+    const timer = setInterval(() => void loadRangeRows(tab), 10_000);
+    return () => clearInterval(timer);
+  }, [tab, loadRangeRows, RANGE_SHEETS]);
+
+  /**
+   * What each sheet draws: the range fetch once it lands, the store's slice
+   * until then, so the sheet is never blank while it loads.
+   */
+  const inRangeOr = useCallback(
+    <T,>(which: TabKey, fallback: T[]): T[] => (rangeRows[which]?.rows as T[]) ?? fallback,
+    [rangeRows],
+  );
+
   // Status pills — any number lit; none lit = every status.
   const [statusFilters, setStatusFilters] = useState<Set<string>>(() => new Set());
   const toggleStatus = useCallback((value: string) => {
@@ -964,9 +1020,9 @@ export default function TransactionsPage() {
         assign,
         date,
         time,
-        from: { label: "From Company", width: 160, entry: true, required: true, options: LEADER_SUGGESTIONS, placeholder: "from leader" },
+        from: { label: "From Leader", width: 160, entry: true, required: true, options: LEADER_SUGGESTIONS, placeholder: "from leader" },
         fromaccount: { label: "From Account", width: 190, entry: true, options: END_SUGGESTIONS, placeholder: "bank account / Cash" },
-        to: { label: "To Company", width: 160, entry: true, required: true, options: LEADER_SUGGESTIONS, placeholder: "to leader" },
+        to: { label: "To Leader", width: 160, entry: true, required: true, options: LEADER_SUGGESTIONS, placeholder: "to leader" },
         toaccount: { label: "To Account", width: 190, entry: true, options: END_SUGGESTIONS, placeholder: "bank account / Cash" },
         amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "1000" },
         note: { label: "Note", width: 260, entry: true, placeholder: "what it settles (optional)" },
@@ -1297,7 +1353,7 @@ export default function TransactionsPage() {
   );
 
   const depositRows = useMemo<SheetRow[]>(() => {
-    return deposits
+    return inRangeOr<Deposit>("deposit", deposits)
       .filter((d) => d.company_entity_id === null || companyInScope(d.company_entity_id))
       .filter((d) => inRange(d.deposit_date, range))
       .filter((d) => statusFilters.size === 0 || statusFilters.has(d.status))
@@ -1342,10 +1398,10 @@ export default function TransactionsPage() {
       })
       .filter((r) => matchesSearch(r.cells));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deposits, playerById, range, statusFilters, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId]);
+  }, [deposits, playerById, range, statusFilters, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId, inRangeOr]);
 
   const withdrawalRows = useMemo<SheetRow[]>(() => {
-    return withdrawals
+    return inRangeOr<Withdrawal>("withdrawal", withdrawals)
       .filter((w) => {
         const p = playerById.get(w.player_id);
         return !p || companyInScope(p.company_entity_id);
@@ -1383,7 +1439,7 @@ export default function TransactionsPage() {
       })
       .filter((r) => matchesSearch(r.cells));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [withdrawals, playerById, range, statusFilters, matchesSearch, assignCell, payoutAccountOf, selectedCompanyId, selectedLeaderId]);
+  }, [withdrawals, playerById, range, statusFilters, matchesSearch, assignCell, payoutAccountOf, selectedCompanyId, selectedLeaderId, inRangeOr]);
 
   const freeCreditRows = useMemo<SheetRow[]>(() => {
     // Live status for agent-queued rows comes off the referenced transfer.
@@ -1394,7 +1450,7 @@ export default function TransactionsPage() {
       const t = f.game_transfer_id != null ? transferById.get(f.game_transfer_id) : undefined;
       return t ? t.status : "queued";
     };
-    return [...freeCredits]
+    return [...inRangeOr<FreeCredit>("freecredit", freeCredits)]
       .filter((f) => f.entity_id === null || companyInScope(f.entity_id))
       .filter((f) => inRange(f.created_at, range))
       .filter((f) => statusFilters.size === 0 || statusFilters.has(statusOf(f)))
@@ -1436,10 +1492,10 @@ export default function TransactionsPage() {
       })
       .filter((r) => matchesSearch(r.cells));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [freeCredits, gameTransfers, playerById, range, statusFilters, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId]);
+  }, [freeCredits, gameTransfers, playerById, range, statusFilters, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId, inRangeOr]);
 
   const transferRows = useMemo<SheetRow[]>(() => {
-    return gameTransfers
+    return inRangeOr<GameTransfer>("transfer", gameTransfers)
       .filter((t) => {
         const p = playerById.get(t.player_id);
         return !p || companyInScope(p.company_entity_id);
@@ -1470,7 +1526,7 @@ export default function TransactionsPage() {
       })
       .filter((r) => matchesSearch(r.cells));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gameTransfers, playerById, range, statusFilters, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId]);
+  }, [gameTransfers, playerById, range, statusFilters, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId, inRangeOr]);
 
   /** How an end reads back: the account's label, "Cash", or an em dash. */
   const transferEndLabel = useCallback(
@@ -1484,7 +1540,7 @@ export default function TransactionsPage() {
   );
 
   const expenseRows = useMemo<SheetRow[]>(() => {
-    return expenses
+    return inRangeOr<Expense>("expense", expenses)
       .filter((e) => e.company_entity_id === null || companyInScope(e.company_entity_id))
       .filter((e) => inRange(e.expense_date, range))
       .sort((a, b) => a.expense_date.localeCompare(b.expense_date))
@@ -1509,7 +1565,7 @@ export default function TransactionsPage() {
       }))
       .filter((r) => matchesSearch(r.cells));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expenses, companyNameById, range, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId, transferEndLabel, entityName]);
+  }, [expenses, companyNameById, range, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId, transferEndLabel, entityName, inRangeOr]);
 
   const accountById = useMemo(
     () => new Map(bankAccounts.map((a) => [a.account_id, a])),
@@ -1517,7 +1573,7 @@ export default function TransactionsPage() {
   );
 
   const leaderWithdrawalRows = useMemo<SheetRow[]>(() => {
-    return cashOuts
+    return inRangeOr<BankCashOut>("leaderwithdrawal", cashOuts)
       .filter((c) => companyInScope(c.entity_id))
       .filter((c) => inRange(c.occurred_at, range))
       .filter(
@@ -1544,7 +1600,7 @@ export default function TransactionsPage() {
       })
       .filter((r) => matchesSearch(r.cells));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cashOuts, accountById, range, statusFilters, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId]);
+  }, [cashOuts, accountById, range, statusFilters, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId, inRangeOr]);
 
   const rebateRows = useMemo<SheetRow[]>(() => {
     const tone = (st: RebateLiveStatus): SheetRow["tone"] =>
@@ -1589,7 +1645,7 @@ export default function TransactionsPage() {
   }, [rebatePayouts, range, statusFilters, rebatePlanFilter, rebateWindowFilter, matchesSearch, userName, selectedCompanyId, selectedLeaderId]);
 
   const leaderTransferRows = useMemo<SheetRow[]>(() => {
-    return leaderTransfers
+    return inRangeOr<LeaderTransferRow>("leadertransfer", leaderTransfers)
       .filter((t) => inRange(t.created_at, range))
       .sort((a, b) => a.created_at.localeCompare(b.created_at))
       .map((t) => ({
@@ -1608,7 +1664,7 @@ export default function TransactionsPage() {
         }),
       }))
       .filter((r) => matchesSearch(r.cells));
-  }, [leaderTransfers, range, matchesSearch, assignCell, entityName, transferEndLabel]);
+  }, [leaderTransfers, range, matchesSearch, assignCell, entityName, transferEndLabel, inRangeOr]);
 
   const rowsByTab: Record<TabKey, SheetRow[]> = {
     deposit: depositRows,
@@ -3131,7 +3187,7 @@ export default function TransactionsPage() {
     setDraftsByTab((prev) => ({ ...prev, [tab]: padDrafts(remaining, tab) }));
     setCommitErrors(failures);
     setSaving(false);
-    await Promise.all([refresh(), loadLedgers()]);
+    await Promise.all([refresh(), loadLedgers(), loadRangeRows(tab)]);
     const failed = jobs.length - succeeded.size;
     const noun = {
       deposit: "deposit",
@@ -3167,7 +3223,7 @@ export default function TransactionsPage() {
       toast.warning(`${w} — saved, waiting at Processing.`, { duration: 10_000 });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [saving, isViewer, draftsRaw, parseDraft, tab, commitErrors, draftKey, refresh, loadLedgers]);
+  }, [saving, isViewer, draftsRaw, parseDraft, tab, commitErrors, draftKey, refresh, loadLedgers, loadRangeRows]);
 
   // Cmd/Ctrl+S saves the ready entry rows from anywhere on the page — and
   // preventDefault stops the browser's own "save this page" dialog.
@@ -3436,11 +3492,11 @@ export default function TransactionsPage() {
     { key: "rebate", label: "Rebate" },
     { key: "freecredit", label: "Free Credit" },
     { key: "transfer", label: "Game Transfer" },
-    { key: "leaderwithdrawal", label: "Company Withdrawal" },
+    { key: "leaderwithdrawal", label: "Leader Withdrawal" },
     // Leader settlements stay super-admin, as on their own page. Expenses are
     // open to everyone now, but only for bank charges — the desk records those
     // because they move a bank balance nobody else is watching.
-    ...(isAdmin ? [{ key: "leadertransfer" as const, label: "Company Transfer" }] : []),
+    ...(isAdmin ? [{ key: "leadertransfer" as const, label: "Leader Transfer" }] : []),
     { key: "expense" as const, label: isAdmin ? "Expenses" : "Bank Charges" },
   ];
 

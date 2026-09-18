@@ -86,7 +86,7 @@ const NAV: NavGroup[] = [
       // stays reachable by URL but is off the menu.
       {
         href: "/leader-transfers",
-        label: "Company Transfers",
+        label: "Leader Transfers",
         icon: ArrowLeftRight,
         roles: ["super_admin"],
       },
