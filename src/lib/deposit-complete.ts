@@ -321,3 +321,90 @@ export async function rebookCompletedDeposit(
 
   return { negativeWallets };
 }
+
+/**
+ * Unwind a completed manual deposit completely, for a row being deleted.
+ *
+ * The "out with the old" half of rebookCompletedDeposit, and deliberately the
+ * same four movements in reverse: the bank gives back what it took, the kiosk
+ * float gets its credit back, the player's wallet gives up what it was given,
+ * and total_deposits drops by the deposit. A delete that only removed the row
+ * would leave every one of those standing against nothing — the desk's whole
+ * reason for wanting the button is a double-keyed row, which is exactly the
+ * case where the money must come back out.
+ *
+ * Returns any wallet left below zero, meaning the player has already spent
+ * credit this takes back. That is the CRM's cache being behind the provider,
+ * not a reason to refuse: the row was keyed by mistake either way.
+ */
+export async function reverseCompletedDeposit(
+  txn: Txn,
+  // No userId: the caller writes the ledger row for the delete, because it
+  // knows what else went with it (a cancelled recommend bonus, say).
+  input: { row: DepositRow; nowIso?: string },
+): Promise<{ negativeWallets: Array<{ game: string; login: string; balance: number }> }> {
+  const { row } = input;
+  const nowIso = input.nowIso ?? new Date().toISOString();
+
+  // Same question rebooking asks: did the completion actually write the wallet
+  // credit, or had the agent already synced the real balance? Reversing a
+  // credit that was never written would take the player's money twice.
+  const [completion] = await txn
+    .select({ details: transactions.details })
+    .from(transactions)
+    .where(
+      and(
+        eq(transactions.reference_id, row.deposit_id),
+        eq(transactions.type, "game_topup"),
+        sql`${transactions.details}->>'action' = 'manual_complete'`,
+      ),
+    )
+    .orderBy(desc(transactions.transaction_id))
+    .limit(1);
+  const walletWasCredited =
+    (completion?.details as { balance_credited?: boolean } | undefined)?.balance_credited !== false;
+
+  const gameName = row.selected_game ? await canonicalise(row.selected_game, txn) : null;
+  let login = "";
+  if (row.player_id && gameName) {
+    const [pl] = await txn
+      .select({ game_accounts: players.game_accounts })
+      .from(players)
+      .where(eq(players.player_id, row.player_id));
+    login = resolveGameLogin(pl?.game_accounts ?? null, gameName, row.selected_game_username);
+  }
+
+  if (row.received_into_account_id !== null) {
+    await moveBankBalance(txn, {
+      accountId: row.received_into_account_id,
+      delta: -row.deposit_amount,
+    });
+  }
+
+  await moveKioskCredit(txn, {
+    companyEntityId: row.company_entity_id,
+    gameName,
+    delta: row.total_amount,
+  });
+
+  const negativeWallets: Array<{ game: string; login: string; balance: number }> = [];
+  if (walletWasCredited && row.player_id && gameName) {
+    const balance = await adjustGameCredit(txn, {
+      playerId: row.player_id,
+      gameName,
+      gameUsername: login,
+      delta: -row.total_amount,
+      nowIso,
+    });
+    if (balance < 0) negativeWallets.push({ game: gameName, login, balance });
+  }
+
+  if (row.player_id) {
+    await txn
+      .update(players)
+      .set({ total_deposits: sql`${players.total_deposits} - ${row.deposit_amount}` })
+      .where(eq(players.player_id, row.player_id));
+  }
+
+  return { negativeWallets };
+}

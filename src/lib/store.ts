@@ -392,6 +392,15 @@ type Store = {
     paid_from_cash_entity_id?: number | null;
   }) => Promise<MutationResult>;
   deleteExpense: (expenseId: number) => Promise<MutationResult>;
+  /**
+   * Remove a worksheet row keyed wrong — a mistyped figure, or the same one
+   * entered twice. Each endpoint unwinds what its row booked (bank, kiosk
+   * float, member balance and totals) before the row goes.
+   */
+  deleteDeposit: (depositId: number) => Promise<MutationResult>;
+  deleteWithdrawal: (withdrawalId: number) => Promise<MutationResult>;
+  /** Keyed on the ledger row's transaction_id — that row IS the sheet's row. */
+  deleteFreeCredit: (transactionId: number) => Promise<MutationResult>;
   addEntity: (input: {
     parent_entity_id: number;
     entity_type: "leader" | "company" | "cs";
@@ -1076,6 +1085,13 @@ export const useStore = create<Store>((set, get) => {
       mutate("/api/expenses", { method: "POST", body: JSON.stringify(input) }),
     deleteExpense: (expenseId) =>
       mutate(`/api/expenses/${expenseId}`, { method: "DELETE" }),
+
+    deleteDeposit: (depositId) =>
+      mutate(`/api/deposits/${depositId}`, { method: "DELETE" }),
+    deleteWithdrawal: (withdrawalId) =>
+      mutate(`/api/withdrawals/${withdrawalId}`, { method: "DELETE" }),
+    deleteFreeCredit: (transactionId) =>
+      mutate(`/api/free-credits/${transactionId}`, { method: "DELETE" }),
 
     addEntity: (input) =>
       mutate("/api/entities", { method: "POST", body: JSON.stringify(input) }),

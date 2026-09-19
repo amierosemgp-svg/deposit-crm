@@ -6,7 +6,7 @@ import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import { appendEditNote, describeChanges, diffFields, logActivity } from "@/lib/activity-log";
 import { canonicalise } from "@/lib/game-name";
-import { rebookPulledWithdrawal } from "@/lib/withdrawal-pull";
+import { rebookPulledWithdrawal, reverseManualWithdrawal } from "@/lib/withdrawal-pull";
 
 const patchSchema = z.object({
   requested_amount: z.number().positive().optional(),
@@ -190,6 +190,113 @@ export async function PATCH(
     }
 
     return Response.json({ withdrawal: updated });
+  } catch (e) {
+    return (
+      authErrorResponse(e) ?? (console.error(e), jsonError("Server error", 500))
+    );
+  }
+}
+
+/**
+ * DELETE /api/withdrawals/:id — remove a row keyed wrong, giving back whatever
+ * it moved: the bank repaid, the float's credit taken back off it, the
+ * member's wallet and total_withdrawals restored.
+ *
+ * Gated like the deposit delete — own company, not held by someone else, and
+ * manual rows only, because a row the agent pulled is the agent's record of
+ * credit that really left the kiosk.
+ */
+export async function DELETE(
+  _request: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  try {
+    const user = await requireWriteUser();
+    const withdrawalId = Number((await params).id);
+
+    const row = await db.transaction(async (txn) => {
+      const [wd] = await txn
+        .select()
+        .from(withdrawals)
+        .where(eq(withdrawals.withdrawal_id, withdrawalId))
+        .for("update");
+      if (!wd) throw new AuthError(404, "Withdrawal not found");
+
+      const [player] = await txn
+        .select()
+        .from(players)
+        .where(eq(players.player_id, wd.player_id));
+      if (!player) throw new AuthError(404, "Player not found");
+      if (user.companyIds !== null && !user.companyIds.includes(player.company_entity_id)) {
+        throw new AuthError(403, "Withdrawal is outside your company scope");
+      }
+      // Held by the person deleting it — see the deposit delete for why a
+      // delete demands the claim where an edit does not.
+      if (wd.assigned_to_user_id !== user.user_id) {
+        throw new AuthError(
+          409,
+          wd.assigned_to_user_id === null
+            ? "Assign the row to yourself before deleting it"
+            : "That row is assigned to someone else — they have to release it first",
+        );
+      }
+      if (!wd.skip_bot) {
+        throw new AuthError(
+          409,
+          "That withdrawal was handled by the agent — only manual rows can be deleted here",
+        );
+      }
+
+      await reverseManualWithdrawal(txn, { row: wd, player, userId: user.user_id });
+
+      await txn.insert(transactions).values({
+        player_id: wd.player_id,
+        entity_id: player.company_entity_id,
+        type: "withdrawal",
+        amount: -wd.credit_pulled_amount,
+        game_name: wd.game_name,
+        user_id: user.user_id,
+        details: {
+          source: "manual",
+          action: "withdrawal_deleted",
+          withdrawal_id: wd.withdrawal_id,
+          player_username: player.username,
+          requested: wd.requested_amount,
+          pulled: wd.credit_pulled_amount,
+          paid_from_account_id: wd.paid_from_account_id,
+          status_before: wd.status,
+          // Which row, when two on one shift are otherwise identical.
+          requested_at: wd.created_at,
+        },
+      });
+
+      await txn.delete(withdrawals).where(eq(withdrawals.withdrawal_id, withdrawalId));
+      return { wd, player };
+    });
+
+    await logActivity({
+      category: "transaction",
+      action: "withdrawal.deleted",
+      summary:
+        `Withdrawal deleted: ${row.player.username} — ` +
+        `RM ${row.wd.credit_pulled_amount.toFixed(2)} ${row.wd.game_name} ` +
+        `requested ${row.wd.created_at} (was ${row.wd.status})`,
+      actor: user,
+      companyEntityId: row.player.company_entity_id,
+      targetType: "withdrawal",
+      targetId: row.wd.withdrawal_id,
+      targetLabel: row.player.username,
+      context: {
+        requested: row.wd.requested_amount,
+        pulled: row.wd.credit_pulled_amount,
+        game: row.wd.game_name,
+        paid_from_account_id: row.wd.paid_from_account_id,
+        requested_at: row.wd.created_at,
+        status_before: row.wd.status,
+      },
+    });
+
+    return Response.json({ ok: true });
   } catch (e) {
     return (
       authErrorResponse(e) ?? (console.error(e), jsonError("Server error", 500))

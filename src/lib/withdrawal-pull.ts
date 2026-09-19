@@ -263,3 +263,67 @@ export async function bookManualPayout(
 
   return updated;
 }
+
+/**
+ * Unwind a manual withdrawal completely, for a row being deleted.
+ *
+ * Whatever stage the row reached is given back in reverse order: the bank is
+ * repaid what it paid out and the member's total_withdrawals drops (if it got
+ * as far as `paid`), then the float gives up the credit the pull returned to
+ * it and the member's wallet gets that credit back (if it was ever pulled).
+ *
+ * The wallet is credited by exactly what the pull debited, not by the pulled
+ * figure — bookManualPull caps its debit at what the cache actually held, so
+ * refunding the full amount would invent credit the CRM never took away. That
+ * figure is on the pull's own ledger row; absent one, nothing was debited.
+ */
+export async function reverseManualWithdrawal(
+  txn: Txn,
+  input: { row: WithdrawalRow; player: PlayerRow; userId: number; nowIso?: string },
+): Promise<void> {
+  const { row, player } = input;
+  const nowIso = input.nowIso ?? new Date().toISOString();
+  const pulled = row.credit_pulled_amount;
+
+  if (row.status === "paid" && row.paid_from_account_id !== null) {
+    await moveBankBalance(txn, { accountId: row.paid_from_account_id, delta: pulled });
+    await txn
+      .update(players)
+      .set({ total_withdrawals: sql`${players.total_withdrawals} - ${pulled}` })
+      .where(eq(players.player_id, row.player_id));
+  }
+
+  if (row.status !== "paid" && row.status !== "credits_pulled") return;
+  if (pulled <= 0) return;
+
+  await moveKioskCredit(txn, {
+    companyEntityId: player.company_entity_id,
+    gameName: row.game_name,
+    delta: -pulled,
+  });
+
+  const [pull] = await txn
+    .select({ details: transactions.details })
+    .from(transactions)
+    .where(
+      and(
+        eq(transactions.reference_id, row.withdrawal_id),
+        eq(transactions.type, "credit_pull"),
+      ),
+    )
+    .orderBy(desc(transactions.transaction_id))
+    .limit(1);
+  const debited = Number(
+    (pull?.details as { wallet_debited?: number } | undefined)?.wallet_debited ?? 0,
+  );
+  if (debited > 0) {
+    const login = resolveGameLogin(player.game_accounts ?? null, row.game_name, row.game_username);
+    await adjustGameCredit(txn, {
+      playerId: row.player_id,
+      gameName: row.game_name,
+      gameUsername: login,
+      delta: debited,
+      nowIso,
+    });
+  }
+}

@@ -1,12 +1,12 @@
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { deposits, players, transactions } from "@/db/schema";
+import { deposits, players, referralBonuses, transactions } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import { canOverrideEligibility, resolveBonusForDeposit } from "@/lib/bonus";
 import { bonusOn } from "@/lib/bonus-math";
-import { rebookCompletedDeposit } from "@/lib/deposit-complete";
+import { rebookCompletedDeposit, reverseCompletedDeposit } from "@/lib/deposit-complete";
 import { InsufficientKioskCreditError } from "@/lib/kiosk-credit";
 import {
   appendEditNote,
@@ -388,6 +388,171 @@ export async function PATCH(
                   (w) =>
                     `${w.game}${w.login ? ` ${w.login}` : ""} is now ${w.balance.toFixed(2)}`,
                 )
+                .join(", ") +
+              `. Sync the kiosk balance.`,
+          }
+        : {}),
+    });
+  } catch (e) {
+    if (e instanceof InsufficientKioskCreditError) return jsonError(e.message, 422);
+    return (
+      authErrorResponse(e) ?? (console.error(e), jsonError("Server error", 500))
+    );
+  }
+}
+
+/**
+ * DELETE /api/deposits/:id — remove a row the desk keyed wrong, and put every
+ * figure it moved back where it was.
+ *
+ * The case this exists for is mundane and constant: a mistyped amount, or the
+ * same deposit entered twice by two people on the same shift. Until now the
+ * only fix was an edit, which cannot express "this never happened" — a
+ * duplicate left the bank, the float and the member's totals all counting it.
+ *
+ * Same three gates as correcting a row, for the same reasons:
+ *   - inside the caller's company scope;
+ *   - not held by someone else (two desks undoing one row is how a figure gets
+ *     reversed twice);
+ *   - manual only. A row the agent completed is the agent's record of what it
+ *     did at the provider, and deleting it here would leave the CRM silent
+ *     about credit that really moved.
+ */
+export async function DELETE(
+  _request: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  try {
+    const user = await requireWriteUser();
+    const depositId = Number((await params).id);
+
+    const result = await db.transaction(async (txn) => {
+      const [row] = await txn
+        .select()
+        .from(deposits)
+        .where(eq(deposits.deposit_id, depositId))
+        .for("update");
+      if (!row) throw new AuthError(404, "Deposit not found");
+      if (
+        user.companyIds !== null &&
+        row.company_entity_id !== null &&
+        !user.companyIds.includes(row.company_entity_id)
+      ) {
+        throw new AuthError(403, "Deposit is outside your company scope");
+      }
+      /**
+       * Deleting takes the claim, not just the absence of someone else's.
+       *
+       * Editing tolerates an unheld row — two desks correcting one figure end
+       * up with the later value and no harm done. A delete cannot be walked
+       * back, and the case it exists for is a duplicate: two people clearing
+       * "the extra one" at the same moment would take out both copies. So the
+       * row must be held by the person removing it, which costs one keystroke
+       * (⌘A) and makes the log say who owned it.
+       */
+      if (row.assigned_to_user_id !== user.user_id) {
+        throw new AuthError(
+          409,
+          row.assigned_to_user_id === null
+            ? "Assign the row to yourself before deleting it"
+            : "That row is assigned to someone else — they have to release it first",
+        );
+      }
+      if (!row.skip_bot) {
+        throw new AuthError(
+          409,
+          "That deposit was handled by the agent — only manual rows can be deleted here",
+        );
+      }
+
+      /**
+       * A recommend bonus that has already been paid is somebody else's money
+       * now. Clawing it back out of the upline silently is worse than refusing:
+       * settle or cancel the payout first, then the deposit can go.
+       */
+      const bonuses = await txn
+        .select()
+        .from(referralBonuses)
+        .where(eq(referralBonuses.deposit_id, depositId));
+      if (bonuses.some((b) => b.status === "assigned")) {
+        throw new AuthError(
+          409,
+          "A recommend bonus on this deposit has already been paid — cancel that payout first",
+        );
+      }
+
+      // Only a completed row ever booked anything; pending and failed rows have
+      // nothing to give back.
+      const negativeWallets =
+        row.status === "completed"
+          ? (await reverseCompletedDeposit(txn, { row })).negativeWallets
+          : [];
+
+      // The bonus rows point at the deposit, so they go first.
+      if (bonuses.length) {
+        await txn.delete(referralBonuses).where(eq(referralBonuses.deposit_id, depositId));
+      }
+
+      await txn.insert(transactions).values({
+        player_id: row.player_id,
+        entity_id: row.company_entity_id,
+        type: "game_topup",
+        amount: -row.total_amount,
+        game_name: row.selected_game,
+        user_id: user.user_id,
+        details: {
+          source: "manual",
+          action: "deposit_deleted",
+          deposit_id: row.deposit_id,
+          transaction_ref: row.transaction_ref,
+          player_username: row.player_username,
+          amount: row.deposit_amount,
+          bonus: row.bonus_amount,
+          bank: row.bank_name,
+          received_into_account_id: row.received_into_account_id,
+          status_before: row.status,
+          // The row's own timestamp. Two deposits keyed twice on one shift are
+          // identical in every other column, and telling them apart is exactly
+          // what the log is for.
+          deposit_date: row.deposit_date,
+          ...(negativeWallets.length ? { wallets_below_zero: negativeWallets } : {}),
+        },
+      });
+
+      await txn.delete(deposits).where(eq(deposits.deposit_id, depositId));
+      return { row, negativeWallets };
+    });
+
+    await logActivity({
+      category: "transaction",
+      action: "deposit.deleted",
+      summary:
+        `Deposit deleted: ${result.row.player_username ?? "unmatched"} — ` +
+        `RM ${result.row.deposit_amount.toFixed(2)} into ${result.row.bank_name} ` +
+        `at ${result.row.deposit_date} (${result.row.transaction_ref})`,
+      actor: user,
+      companyEntityId: result.row.company_entity_id,
+      targetType: "deposit",
+      targetId: result.row.deposit_id,
+      targetLabel: result.row.transaction_ref,
+      context: {
+        amount: result.row.deposit_amount,
+        bonus: result.row.bonus_amount,
+        bank: result.row.bank_name,
+        game: result.row.selected_game,
+        deposit_date: result.row.deposit_date,
+        status_before: result.row.status,
+      },
+    });
+
+    return Response.json({
+      ok: true,
+      ...(result.negativeWallets.length
+        ? {
+            warning:
+              `Deleted, but the player had already spent some of it — ` +
+              result.negativeWallets
+                .map((w) => `${w.game}${w.login ? ` ${w.login}` : ""} is now ${w.balance.toFixed(2)}`)
                 .join(", ") +
               `. Sync the kiosk balance.`,
           }

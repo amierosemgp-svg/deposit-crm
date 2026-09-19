@@ -465,6 +465,14 @@ function computeDepositDerived(drafts: string[][]): string[][] {
 const IS_MAC =
   typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
 const MOD_LABEL = IS_MAC ? "\u2318" : "Ctrl+";
+/**
+ * Delete rides Shift as well — Shift+Ctrl+D on Windows, \u21e7\u2318D on a Mac.
+ *
+ * It is the one action here that destroys a row rather than advancing it, and
+ * plain ⌘D is a browser bookmark reflex. The extra modifier means nobody wipes
+ * a shift's entries reaching for something else.
+ */
+const DEL_LABEL = IS_MAC ? "\u21e7\u2318" : "Shift+Ctrl+";
 
 /** Shortcut chip shown inside action buttons. `light` for solid backgrounds. */
 /** The Crawl banks tooltip — what the last crawl did, in one line. */
@@ -563,6 +571,9 @@ export default function TransactionsPage() {
   const rejectWithdrawal = useStore((s) => s.rejectWithdrawal);
   const reprocessGameTransfer = useStore((s) => s.reprocessGameTransfer);
   const deleteExpense = useStore((s) => s.deleteExpense);
+  const deleteDeposit = useStore((s) => s.deleteDeposit);
+  const deleteWithdrawal = useStore((s) => s.deleteWithdrawal);
+  const deleteFreeCredit = useStore((s) => s.deleteFreeCredit);
   const fetchBonusOptions = useStore((s) => s.fetchBonusOptions);
   const gamesFn = useStore((s) => s.games);
   const banksFn = useStore((s) => s.banks);
@@ -783,6 +794,9 @@ export default function TransactionsPage() {
       | "reject-deposit"
       | "reject-withdrawal"
       | "delete-expense"
+      | "delete-deposit"
+      | "delete-withdrawal"
+      | "delete-freecredit"
       | "reverse-cashout"
       | "pay-rebate"
       | "pay-rebate-manual";
@@ -2666,6 +2680,19 @@ export default function TransactionsPage() {
         : [],
     [tab, selectedNumericIds, transferByIdMap],
   );
+  const freeCreditById = useMemo(
+    () => new Map(freeCredits.map((f) => [f.transaction_id, f])),
+    [freeCredits],
+  );
+  const selectedFreeCredits = useMemo(
+    () =>
+      tab === "freecredit"
+        ? selectedNumericIds
+            .map((id) => freeCreditById.get(id))
+            .filter((f): f is FreeCredit => !!f)
+        : [],
+    [tab, selectedNumericIds, freeCreditById],
+  );
   const selectedExpenses = useMemo(
     () =>
       tab === "expense"
@@ -2863,6 +2890,16 @@ export default function TransactionsPage() {
     ["pending_match", "matched", "pending"].includes(d.status),
   );
   const rejectableWd = selectedWithdrawals.filter((w) => w.status === "requested");
+  /**
+   * Deletable rows: hand-keyed, and held by whoever is deleting them.
+   *
+   * The claim is the rule for every other action on this bar, and it matters
+   * most here — a delete cannot be walked back, and two desks clearing "the
+   * duplicate" at once would take out both copies. A free credit has no
+   * assignee column; the person who issued it holds it.
+   */
+  const deletableDep = selectedDeposits.filter((d) => d.skip_bot);
+  const deletableWd = selectedWithdrawals.filter((w) => w.skip_bot);
   const can = useMemo(
     () => ({
       assign:
@@ -2882,6 +2919,15 @@ export default function TransactionsPage() {
         rejectableWd.length > 0 && rejectableWd.every((w) => mine(w.assigned_to_user_id)),
       retryTf: selectedTransfers.some((t) => t.status === "failed"),
       delExp: tab === "expense" && selectedExpenses.length > 0,
+      // Deleting a keyed-wrong row. Manual only — the server refuses the
+      // agent's own rows, so the button is not offered for them either.
+      delDep: tab === "deposit" && deletableDep.length > 0,
+      delDepMine: deletableDep.length > 0 && deletableDep.every((d) => mine(d.assigned_to_user_id)),
+      delWd: tab === "withdrawal" && deletableWd.length > 0,
+      delWdMine: deletableWd.length > 0 && deletableWd.every((w) => mine(w.assigned_to_user_id)),
+      delFc: tab === "freecredit" && selectedFreeCredits.length > 0,
+      delFcMine:
+        selectedFreeCredits.length > 0 && selectedFreeCredits.every((f) => mine(f.user_id)),
       // Reversing a cash-out is a leader's call; paying/skipping a rebate is CS work.
       revCash:
         tab === "leaderwithdrawal" &&
@@ -2894,7 +2940,8 @@ export default function TransactionsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       tab, me, selectedNumericIds, selectedDeposits, selectedWithdrawals, selectedTransfers,
-      selectedExpenses, selectedCashOuts, selectedRebates,
+      selectedExpenses, selectedCashOuts, selectedRebates, selectedFreeCredits,
+      deletableDep, deletableWd,
     ],
   );
 
@@ -2997,6 +3044,43 @@ export default function TransactionsPage() {
       }),
     [selectedExpenses],
   );
+  /**
+   * Delete keys off the rows a person entered, never the agent's.
+   *
+   * A row the agent handled is its record of what it did at the provider; the
+   * server refuses those too, and offering a button that always fails would
+   * only teach the desk to distrust it.
+   */
+  const handleDeleteDeposits = useCallback(
+    () =>
+      setConfirming({
+        kind: "delete-deposit",
+        ids: selectedDeposits
+          .filter((d) => d.skip_bot && !!me && d.assigned_to_user_id === me.user_id)
+          .map((d) => d.deposit_id),
+      }),
+    [selectedDeposits, me],
+  );
+  const handleDeleteWithdrawals = useCallback(
+    () =>
+      setConfirming({
+        kind: "delete-withdrawal",
+        ids: selectedWithdrawals
+          .filter((w) => w.skip_bot && !!me && w.assigned_to_user_id === me.user_id)
+          .map((w) => w.withdrawal_id),
+      }),
+    [selectedWithdrawals, me],
+  );
+  const handleDeleteFreeCredits = useCallback(
+    () =>
+      setConfirming({
+        kind: "delete-freecredit",
+        ids: selectedFreeCredits
+          .filter((f) => !!me && f.user_id === me.user_id)
+          .map((f) => f.transaction_id),
+      }),
+    [selectedFreeCredits, me],
+  );
   const handleReverseCashOuts = useCallback(
     () =>
       setConfirming({
@@ -3036,7 +3120,7 @@ export default function TransactionsPage() {
   // Single-letter shortcuts, live while saved rows are selected and no editor
   // is open. Capture phase, so the grid's type-to-edit never sees these keys.
   useEffect(() => {
-    if (isViewer || !selectedIds.length || tab === "freecredit") return;
+    if (isViewer || !selectedIds.length) return;
     const onKey = (e: KeyboardEvent) => {
       if (acting || confirming) return;
       const t = e.target as HTMLElement | null;
@@ -3051,7 +3135,11 @@ export default function TransactionsPage() {
       }
       const mod = IS_MAC ? e.metaKey : e.ctrlKey;
       const wrongMod = IS_MAC ? e.ctrlKey : e.metaKey;
-      if (!mod || wrongMod || e.altKey || e.shiftKey) return;
+      if (!mod || wrongMod || e.altKey) return;
+      // Shift belongs to Delete alone: every other action is bare-modifier,
+      // and letting them fire with Shift held would make the guard meaningless.
+      const del = e.shiftKey && k === "d";
+      if (e.shiftKey && !del) return;
       let run: (() => void) | null = null;
       if (k === "enter" && selectedPlayerId) run = handleViewPlayer;
       else if (k === "a" && can.assign) run = handleAssignToMe;
@@ -3078,8 +3166,12 @@ export default function TransactionsPage() {
         else if (k === "b" && can.paid) run = handleMarkPaid;
       } else if (tab === "transfer") {
         if (k === "i" && can.retryTf) run = handleRetryTransfers;
-      } else if (tab === "expense") {
-        if (k === "d" && can.delExp) run = handleDeleteExpenses;
+      }
+      if (del) {
+        if (tab === "deposit" && can.delDep) run = handleDeleteDeposits;
+        else if (tab === "withdrawal" && can.delWd) run = handleDeleteWithdrawals;
+        else if (tab === "freecredit" && can.delFc) run = handleDeleteFreeCredits;
+        else if (tab === "expense" && can.delExp) run = handleDeleteExpenses;
       }
       if (run) {
         e.preventDefault();
@@ -3094,6 +3186,7 @@ export default function TransactionsPage() {
     selectedPlayerId, handleViewPlayer,
     handleAssignToMe, handleApprove, handleComplete, handleRetryDeposits,
     handlePull, handleMarkPaid, handleRetryTransfers, handleDeleteExpenses,
+    handleDeleteDeposits, handleDeleteWithdrawals, handleDeleteFreeCredits,
   ]);
 
   // Shift+Cmd/Ctrl+Left/Right cycles the worksheet tabs — global, so it works
@@ -3329,6 +3422,99 @@ export default function TransactionsPage() {
           runBulk("Reject", list.map((w) => w.withdrawal_id), rejectWithdrawal),
       };
     }
+    if (confirming.kind === "delete-deposit") {
+      const list = confirming.ids
+        .map((id) => depositById.get(id))
+        .filter((d): d is Deposit => !!d);
+      return {
+        title: `Delete ${list.length} deposit${list.length === 1 ? "" : "s"}?`,
+        description:
+          "The row goes, and everything it moved comes back: the bank gives up " +
+          "the money, the kiosk float gets its credit back, and the member's " +
+          "balance and total deposits drop by it.",
+        confirmLabel: "Delete",
+        summary: [
+          { label: "Deposits", value: String(list.length) },
+          {
+            label: "Off the banks",
+            value: fmtAmount(list.reduce((a, d) => a + d.deposit_amount, 0)),
+            emphasis: true,
+          },
+          {
+            label: "Back to the float",
+            value: fmtAmount(list.reduce((a, d) => a + d.total_amount, 0)),
+          },
+        ] as SummaryRow[],
+        items: list.map((d) => ({
+          key: d.deposit_id,
+          label: d.player_username ?? "Unassigned",
+          meta: `${d.bank_name} · ${d.selected_game ?? "no game"}`,
+          value: fmtAmount(d.deposit_amount),
+        })),
+        run: () => runBulk("Delete", list.map((d) => d.deposit_id), deleteDeposit),
+      };
+    }
+    if (confirming.kind === "delete-withdrawal") {
+      const list = confirming.ids
+        .map((id) => withdrawalById.get(id))
+        .filter((w): w is Withdrawal => !!w);
+      return {
+        title: `Delete ${list.length} withdrawal${list.length === 1 ? "" : "s"}?`,
+        description:
+          "The row goes, and whatever it moved comes back: the bank is repaid, " +
+          "the credit comes off the float, and the member's balance and total " +
+          "withdrawals are restored.",
+        confirmLabel: "Delete",
+        summary: [
+          { label: "Withdrawals", value: String(list.length) },
+          {
+            label: "Back to the banks",
+            value: fmtAmount(
+              list.filter((w) => w.status === "paid").reduce((a, w) => a + w.credit_pulled_amount, 0),
+            ),
+            emphasis: true,
+          },
+        ] as SummaryRow[],
+        items: list.map((w) => ({
+          key: w.withdrawal_id,
+          label: playerById.get(w.player_id)?.username ?? `#${w.player_id}`,
+          meta: `${w.game_name} · ${w.status}`,
+          value: fmtAmount(w.credit_pulled_amount || w.requested_amount),
+        })),
+        run: () => runBulk("Delete", list.map((w) => w.withdrawal_id), deleteWithdrawal),
+      };
+    }
+    if (confirming.kind === "delete-freecredit") {
+      const list = confirming.ids
+        .map((id) => freeCreditById.get(id))
+        .filter((f): f is FreeCredit => !!f);
+      return {
+        title: `Delete ${list.length} free credit${list.length === 1 ? "" : "s"}?`,
+        description:
+          "A credit already given is taken back out of the member's game and " +
+          "returned to the kiosk float. One still queued for the agent is just " +
+          "cancelled.",
+        confirmLabel: "Delete",
+        summary: [
+          { label: "Free credits", value: String(list.length) },
+          {
+            label: "Total amount",
+            value: fmtAmount(list.reduce((a, f) => a + f.amount, 0)),
+            emphasis: true,
+          },
+        ] as SummaryRow[],
+        items: list.map((f) => ({
+          key: f.transaction_id,
+          label: (f.player_id ? playerById.get(f.player_id)?.username : null) ?? "Unassigned",
+          meta: `${f.game_name ?? "no game"}${f.reason ? ` · ${f.reason}` : ""}`,
+          value: fmtAmount(f.amount),
+        })),
+        run: async () => {
+          await runBulk("Delete", list.map((f) => f.transaction_id), deleteFreeCredit);
+          await loadFreeCredits();
+        },
+      };
+    }
     if (confirming.kind === "reverse-cashout") {
       const list = confirming.ids
         .map((id) => cashOutById.get(id))
@@ -3428,9 +3614,10 @@ export default function TransactionsPage() {
     };
   }, [
     confirming, depositById, withdrawalById, expenseById, playerById,
-    cashOutById, rebateById, accountById,
+    cashOutById, rebateById, accountById, freeCreditById,
     runBulk, rejectDeposit, rejectWithdrawal, deleteExpense, reverseBankCashOut,
-    loadCashOuts, loadRebatePayouts,
+    deleteDeposit, deleteWithdrawal, deleteFreeCredit,
+    loadCashOuts, loadRebatePayouts, loadFreeCredits,
   ]);
 
   // ---- Crawl banks (deposit tab): ask the agent to re-read the banks now ----
@@ -3819,7 +4006,7 @@ export default function TransactionsPage() {
 
       {/* Floating action panel — pinned bottom-center over the sheet while
           saved rows are selected. Letters fire the actions; Esc clears. */}
-      {!isViewer && selectedIds.length > 0 && tab !== "freecredit" && (
+      {!isViewer && selectedIds.length > 0 && (
         <div className="pointer-events-none absolute inset-x-0 bottom-14 z-40 flex justify-center">
           <div className="pointer-events-auto flex max-w-[92%] flex-wrap items-center justify-center gap-1.5 rounded-lg border border-emerald-600/40 bg-background/95 px-3 py-1.5 shadow-xl backdrop-blur">
             <span className="text-[11px] font-semibold text-emerald-800 dark:text-emerald-300">
@@ -3971,6 +4158,30 @@ export default function TransactionsPage() {
                 <Kbd k={`${MOD_LABEL}I`} />
               </Button>
             )}
+            {(can.delDep || can.delWd || can.delFc) && (
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={acting || !(can.delDepMine || can.delWdMine || can.delFcMine)}
+                onClick={
+                  can.delDep
+                    ? handleDeleteDeposits
+                    : can.delWd
+                      ? handleDeleteWithdrawals
+                      : handleDeleteFreeCredits
+                }
+                title={
+                  can.delDepMine || can.delWdMine || can.delFcMine
+                    ? "Delete these rows and put back everything they moved"
+                    : "Assign to me first — actions run only on rows you've claimed"
+                }
+                className="cursor-pointer gap-1 border-red-300 text-red-700 hover:bg-red-50 dark:text-red-300"
+              >
+                <Trash2 className="h-3 w-3" />
+                Delete
+                <Kbd k={`${DEL_LABEL}D`} />
+              </Button>
+            )}
             {can.delExp && (
               <Button
                 size="xs"
@@ -3981,7 +4192,7 @@ export default function TransactionsPage() {
               >
                 <Trash2 className="h-3 w-3" />
                 Delete
-                <Kbd k={`${MOD_LABEL}D`} />
+                <Kbd k={`${DEL_LABEL}D`} />
               </Button>
             )}
             {can.revCash && (

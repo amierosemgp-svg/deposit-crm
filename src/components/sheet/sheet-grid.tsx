@@ -142,13 +142,19 @@ function parseNumeric(raw: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-const TONE_TEXT: Record<SheetRowTone, string> = {
-  default: "",
-  success: "text-emerald-700 dark:text-emerald-400",
-  danger: "text-red-600 dark:text-red-400",
-  warning: "text-amber-700 dark:text-amber-400",
-  muted: "text-muted-foreground",
-};
+/**
+ * Rows are not tinted by status.
+ *
+ * Every sheet used to paint whole rows green/red/amber by their status, which
+ * on a screen showing several hundred at once read as noise rather than
+ * signal — and the Status column already says the same thing in words, without
+ * asking anyone to remember what amber meant. Plain foreground, so the theme
+ * decides: black on light, white on dark.
+ *
+ * `SheetRow.tone` is still accepted and still set by the pages; it simply is
+ * not painted. Keeping it means the semantics survive if a future design wants
+ * a subtler marker (a left border, an icon) instead of colouring the text.
+ */
 
 /** Selection slice handed to a row — computed narrow so memo() can bite. */
 type RowSel = { c1: number; c2: number; anchorC: number } | null;
@@ -160,7 +166,6 @@ const GridRow = memo(function GridRow({
   marker,
   cells,
   columns,
-  tone,
   isDraft,
   firstDraft,
   showPlaceholder,
@@ -179,7 +184,6 @@ const GridRow = memo(function GridRow({
   marker: "ready" | "error" | null;
   cells: string[];
   columns: SheetColumn[];
-  tone: SheetRowTone;
   isDraft: boolean;
   firstDraft: boolean;
   /** This is the first still-blank entry row — show column placeholders here. */
@@ -239,7 +243,6 @@ const GridRow = memo(function GridRow({
               "relative cursor-cell select-none overflow-hidden whitespace-nowrap border-b border-r border-border px-1.5 text-[13px]",
               col.align === "right" && "text-right tabular-nums",
               col.align === "center" && "text-center",
-              tone !== "default" && TONE_TEXT[tone],
               isDraft && !col.entry && "italic text-muted-foreground",
               // Room for the chevron, so the value never runs underneath it.
               isDropdown && "pr-5",
@@ -1609,7 +1612,6 @@ export function SheetGrid({
                 marker={null}
                 cells={row.cells}
                 columns={columns}
-                tone={row.tone ?? "default"}
                 isDraft={false}
                 firstDraft={false}
                 showPlaceholder={false}
@@ -1713,7 +1715,6 @@ export function SheetGrid({
                       }
                       cells={draft}
                       columns={entryColumns}
-                      tone="default"
                       isDraft
                       firstDraft={false}
                       showPlaceholder={i === placeholderIndex}
