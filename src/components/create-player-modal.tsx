@@ -47,10 +47,8 @@ type GameRow = { game_name: string; game_username: string };
 
 type FormState = {
   full_name: string;
-  username: string;
-  telegram_username: string;
-  contact_number: string;
-  wechat_id: string;
+  /** The member-code series, e.g. "GA". The code itself is derived from it. */
+  prefix: string;
   company_entity_id: string;
   bank_accounts: BankRow[];
   game_accounts: GameRow[];
@@ -59,10 +57,7 @@ type FormState = {
 
 const EMPTY: FormState = {
   full_name: "",
-  username: "",
-  telegram_username: "",
-  contact_number: "",
-  wechat_id: "",
+  prefix: "",
   company_entity_id: "",
   bank_accounts: [],
   game_accounts: [],
@@ -78,6 +73,7 @@ export function CreatePlayerModal({
   onCreated,
 }: Props) {
   const createPlayer = useStore((s) => s.createPlayer);
+  const me = useStore((s) => s.me);
   const players = useStore((s) => s.players);
   const companiesFn = useStore((s) => s.companies);
   const banksFn = useStore((s) => s.banks);
@@ -87,7 +83,26 @@ export function CreatePlayerModal({
   const banks = banksFn();
   const games = gamesFn();
 
+  /**
+   * The company the member is created into.
+   *
+   * A CS desk belongs to exactly one casino, so asking them to pick it is a
+   * required field with one answer — and a chance to get it wrong. Their scope
+   * already says which it is, so the field shows it and locks. Leaders and
+   * admins, who really do have several, still choose.
+   *
+   * Derived rather than written into the form on open: a value that is never
+   * the user's to change has no business being editable state.
+   */
   const [form, setForm] = useState<FormState>(EMPTY);
+  const ownCompanyId = useMemo(() => {
+    const scoped = me?.companyIds;
+    if (scoped && scoped.length === 1) return scoped[0];
+    return companies.length === 1 ? companies[0].company_id : null;
+  }, [me, companies]);
+  const companyLocked = ownCompanyId !== null;
+  const companyValue = companyLocked ? String(ownCompanyId) : form.company_entity_id;
+
   const [phase, setPhase] = useState<"input" | "done">("input");
   const [createdName, setCreatedName] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -124,7 +139,7 @@ export function CreatePlayerModal({
 
   // Distributions pointed at the currently selected company.
   const distsForCompany = dists.filter(
-    (d) => String(d.to_entity_id) === form.company_entity_id,
+    (d) => String(d.to_entity_id) === companyValue,
   );
   const selectedDist = distsForCompany.find((d) => String(d.dist_id) === sourceDistId);
   const previewCode = selectedDist
@@ -161,25 +176,70 @@ export function CreatePlayerModal({
     wasOpen.current = open;
   }, [open, prefill]);
 
+  /**
+   * The next number in each member-code series, read off the members already
+   * in this company — the same rule the Players worksheet uses, so a code
+   * created here and one typed there cannot collide.
+   *
+   * A prefix nobody has used yet starts at 1, padded to four digits, which is
+   * the width every series in the data uses.
+   */
+  const codeSeries = useMemo(() => {
+    const companyId = Number(companyValue);
+    const series = new Map<string, { next: number; width: number }>();
+    for (const p of players) {
+      if (Number.isFinite(companyId) && p.company_entity_id !== companyId) continue;
+      const m = /^([A-Za-z]+)(\d+)$/.exec(p.username.trim());
+      if (!m) continue;
+      const [, letters, digits] = m;
+      const key = letters.toUpperCase();
+      const at = series.get(key) ?? { next: 0, width: digits.length };
+      at.next = Math.max(at.next, Number(digits) + 1);
+      at.width = Math.max(at.width, digits.length);
+      series.set(key, at);
+    }
+    return series;
+  }, [players, companyValue]);
+
+  const nextCode = useMemo(() => {
+    const prefix = form.prefix.trim().toUpperCase();
+    if (!prefix) return "";
+    const at = codeSeries.get(prefix);
+    return `${prefix}${String(at?.next ?? 1).padStart(at?.width ?? 4, "0")}`;
+  }, [form.prefix, codeSeries]);
+
+  // The code the row will actually be saved under: a lead list assigns its
+  // own, otherwise the prefix's next number.
+  const memberCode = selectedDist ? previewCode : nextCode;
+
+  /**
+   * Scoped to the company, because that is what the database enforces:
+   * players_company_username_key is (company_entity_id, lower(username)). A
+   * global check refuses a perfectly free code because some other casino
+   * happens to use it — with twelve thousand members on file, often.
+   */
   const usernameTaken = useMemo(() => {
-    const u = form.username.trim().toLowerCase();
-    if (!u) return false;
-    return players.some((p) => p.username.toLowerCase() === u);
-  }, [form.username, players]);
+    const u = memberCode.trim().toLowerCase();
+    const companyId = Number(companyValue);
+    if (!u || !Number.isFinite(companyId)) return false;
+    return players.some(
+      (p) => p.company_entity_id === companyId && p.username.toLowerCase() === u,
+    );
+  }, [memberCode, companyValue, players]);
 
   const errors = {
     full_name: !form.full_name.trim() ? "Required" : null,
     // When converting from a list the code is auto-assigned, so the manual
     // field isn't required or checked.
+    prefix: selectedDist || form.prefix.trim() ? null : "Required",
     username: selectedDist
       ? null
-      : !form.username.trim()
+      : !memberCode.trim()
         ? "Required"
         : usernameTaken
           ? "Member code already exists"
           : null,
-    telegram_username: !form.telegram_username.trim() ? "Required" : null,
-    company_entity_id: !form.company_entity_id ? "Required" : null,
+    company_entity_id: !companyValue ? "Required" : null,
     bank_accounts: form.bank_accounts.some(
       (b) => !b.bank_name || !b.account_number.trim(),
     )
@@ -245,7 +305,6 @@ export function CreatePlayerModal({
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!isValid || submitting) return;
-    const tg = form.telegram_username.trim();
     const fullName = form.full_name.trim();
 
     const bankAccounts: PlayerBankAccount[] = form.bank_accounts.map((b) => ({
@@ -261,12 +320,9 @@ export function CreatePlayerModal({
     setSubmitting(true);
     const res = await createPlayer({
       full_name: fullName,
-      username: sourceDistId ? previewCode || "auto" : form.username.trim(),
+      username: sourceDistId ? previewCode || "auto" : memberCode,
       ...(sourceDistId ? { source_dist_id: Number(sourceDistId) } : {}),
-      telegram_username: tg.startsWith("@") ? tg : `@${tg}`,
-      contact_number: form.contact_number.trim() || undefined,
-      wechat_id: form.wechat_id.trim() || undefined,
-      company_entity_id: Number(form.company_entity_id),
+      company_entity_id: Number(companyValue),
       bank_accounts: bankAccounts.length ? bankAccounts : undefined,
       game_accounts: gameAccounts.length ? gameAccounts : undefined,
       notes: form.notes.trim() || undefined,
@@ -278,7 +334,7 @@ export function CreatePlayerModal({
       return;
     }
     if (onCreated) {
-      const username = form.username.trim().toLowerCase();
+      const username = memberCode.toLowerCase();
       const created = useStore
         .getState()
         .players.find((p) => p.username.toLowerCase() === username);
@@ -335,15 +391,47 @@ export function CreatePlayerModal({
                     />
                   </div>
                   <div className="space-y-1.5">
+                    <Label htmlFor="cp-prefix">
+                      Prefix <span className="text-rose-600 dark:text-rose-400">*</span>
+                    </Label>
+                    <Input
+                      id="cp-prefix"
+                      value={form.prefix}
+                      onChange={(e) =>
+                        update("prefix", e.target.value.toUpperCase().replace(/[^A-Z]/g, ""))
+                      }
+                      placeholder="GA"
+                      list="cp-prefixes"
+                      disabled={!!selectedDist}
+                      aria-invalid={!!errors.prefix}
+                    />
+                    <datalist id="cp-prefixes">
+                      {[...codeSeries.entries()]
+                        .sort((a, b) => b[1].next - a[1].next)
+                        .map(([prefix, at]) => (
+                          <option
+                            key={prefix}
+                            value={prefix}
+                          >{`next ${prefix}${String(at.next).padStart(at.width, "0")}`}</option>
+                        ))}
+                    </datalist>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
                     <Label htmlFor="cp-username">
                       Member Code <span className="text-rose-600 dark:text-rose-400">*</span>
                     </Label>
+                    {/* Never typed. The series decides it, so the desk cannot
+                        skip a number or reuse one by hand. */}
                     <Input
                       id="cp-username"
-                      value={selectedDist ? previewCode : form.username}
-                      onChange={(e) => update("username", e.target.value)}
-                      placeholder="S2616"
-                      disabled={!!selectedDist}
+                      value={memberCode}
+                      readOnly
+                      tabIndex={-1}
+                      placeholder="Pick a prefix"
+                      className="cursor-not-allowed bg-muted/50 text-muted-foreground"
                       aria-invalid={!!errors.username}
                     />
                     {selectedDist ? (
@@ -360,50 +448,13 @@ export function CreatePlayerModal({
                       )
                     )}
                   </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1.5">
-                    <Label htmlFor="cp-tg">
-                      Telegram <span className="text-rose-600 dark:text-rose-400">*</span>
-                    </Label>
-                    <Input
-                      id="cp-tg"
-                      value={form.telegram_username}
-                      onChange={(e) =>
-                        update("telegram_username", e.target.value)
-                      }
-                      placeholder="@thm_tan"
-                      aria-invalid={!!errors.telegram_username}
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="cp-wechat">WeChat ID</Label>
-                    <Input
-                      id="cp-wechat"
-                      value={form.wechat_id}
-                      onChange={(e) => update("wechat_id", e.target.value)}
-                      placeholder="thmtan_wx"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1.5">
-                    <Label htmlFor="cp-phone">Contact number</Label>
-                    <Input
-                      id="cp-phone"
-                      value={form.contact_number}
-                      onChange={(e) => update("contact_number", e.target.value)}
-                      placeholder="+60 12-345 6789"
-                    />
-                  </div>
                   <div className="space-y-1.5">
                     <Label>
                       Company <span className="text-rose-600 dark:text-rose-400">*</span>
                     </Label>
                     <Select
-                      value={form.company_entity_id}
+                      value={companyValue}
+                      disabled={companyLocked}
                       onValueChange={(v) => {
                         update("company_entity_id", v ?? "");
                         setSourceDistId("");
@@ -414,7 +465,7 @@ export function CreatePlayerModal({
                       }))}
                     >
                       <SelectTrigger
-                        className="h-8 w-full"
+                        className="h-8 w-full disabled:cursor-not-allowed disabled:bg-muted/50"
                         aria-invalid={!!errors.company_entity_id}
                       >
                         <SelectValue placeholder="Select company" />

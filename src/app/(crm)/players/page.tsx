@@ -7,7 +7,7 @@
  *    works a list: type the phone and the Lead List cell offers the lists that
  *    phone leads in; pick one and the member code writes itself from the list's
  *    prefix. The first member from a list sets that prefix; everyone after is
- *    locked to it. Walk-ins with no list use the Import / Walk-in buttons.
+ *    locked to it. Members with no list come in via Import / New player.
  *
  *  • Leads — every lead under the lists you own, and entry rows to add more.
  *    A lead becomes a member from the Players tab (or the row shows "Member"
@@ -152,7 +152,7 @@ function sinceLabel(iso: string | undefined): string {
 // No phone column. A member's number identifies them to whoever holds the
 // list, which is the one piece of member data worth stealing, so it is not on
 // screen at all — not even masked. It is still stored, still searchable, and
-// still enterable on the Walk-in form where CS has been given it directly.
+// still enterable on the New player form where CS has been given it directly.
 const PLAYER_COLUMNS: SheetColumn[] = [
   { key: "name", label: "Name", width: 210 },
   { key: "code", label: "Member Code", width: 130 },
@@ -681,7 +681,7 @@ export default function PlayersPage() {
           {
             value: "",
             title: "This phone isn't in any lead list",
-            detail: "Use Create Player for a walk-in with no list",
+            detail: "Not in a list — use New player instead",
             detailTone: "warning",
             disabled: true,
           },
@@ -1013,7 +1013,7 @@ export default function PlayersPage() {
         ))}
         <span className="ml-3 pb-1.5 text-[11px] text-muted-foreground">
           {tab === "players"
-            ? "Entry: Name · Member Code — add a walk-in for anything more"
+            ? "Entry: Name · Member Code — use New player for anything more"
             : tab === "winloss"
               ? "Positive is the house up on that member, negative is the member up. Select a row and press ⌘↵ to open their profile."
               : "Leads come in by import — use the Import button, then convert them on the Players tab"}
@@ -1177,7 +1177,7 @@ export default function PlayersPage() {
                 className="h-8 cursor-pointer gap-1.5"
               >
                 <UserPlus className="h-3.5 w-3.5" />
-                Walk-in
+                New player
               </Button>
             </>
           )}
