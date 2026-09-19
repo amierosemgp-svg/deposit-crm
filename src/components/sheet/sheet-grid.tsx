@@ -96,6 +96,15 @@ export type SheetSuggestion = {
   detailTone?: "default" | "warning";
   figure?: string;
   disabled?: boolean;
+  /**
+   * A command, not a value: picking it calls the grid's `onSuggestionAction`
+   * instead of writing anything into the cell — "＋ New player", say.
+   *
+   * Action rows survive filtering and always sit last, so the offer is still
+   * there when a typed code matches nothing, which is exactly when it's
+   * wanted. They're the reason the list can open with no ordinary matches.
+   */
+  action?: boolean;
 };
 
 export type SheetRowTone = "default" | "success" | "danger" | "warning" | "muted";
@@ -307,6 +316,8 @@ type EditorProps = {
   onBlur: () => void;
   /** Accept a suggestion: write `value` into the cell and move on. */
   onPick: (value: string, move: "down" | "right" | "left" | "up" | "none") => void;
+  /** Run an `action` suggestion. Nothing is written; the edit is abandoned. */
+  onAction: (value: string, typed: string) => void;
 };
 
 /** How many suggestions the typeahead shows while filtering. */
@@ -336,6 +347,7 @@ function CellEditor({
   onKeyDown,
   onBlur,
   onPick,
+  onAction,
 }: EditorProps) {
   const ref = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -361,11 +373,14 @@ function CellEditor({
 
   const matches = useMemo(() => {
     if (!suggestions?.length) return [];
-    if (browsing) return suggestions.slice(0, MAX_BROWSE);
+    // Commands are not candidates: they never filter out, and they go last.
+    const actions = suggestions.filter((sg) => sg.action);
+    const values = actions.length ? suggestions.filter((sg) => !sg.action) : suggestions;
+    if (browsing) return [...values.slice(0, MAX_BROWSE), ...actions];
     const q = value.trim().toLowerCase();
     const starts: SheetSuggestion[] = [];
     const contains: SheetSuggestion[] = [];
-    for (const sg of suggestions) {
+    for (const sg of values) {
       if (!q) {
         starts.push(sg);
       } else {
@@ -382,8 +397,14 @@ function CellEditor({
       }
       if (starts.length >= MAX_SUGGESTIONS) break;
     }
-    return [...starts, ...contains].slice(0, MAX_SUGGESTIONS);
+    return [...[...starts, ...contains].slice(0, MAX_SUGGESTIONS), ...actions];
   }, [suggestions, value, browsing]);
+
+  /** Take a row: run it if it's a command, otherwise write it into the cell. */
+  const take = (sg: SheetSuggestion, move: "right" | "left" | "none") => {
+    if (sg.action) onAction(sg.value, value.trim());
+    else onPick(sg.value, move);
+  };
 
   /** Walk the highlight up/down, skipping rows that can't be picked. */
   const stepHighlight = (dir: 1 | -1) =>
@@ -461,8 +482,8 @@ function CellEditor({
         e.preventDefault();
         // Enter accepts and stays on the cell (combobox-style) — jumping a row
         // down mid-entry loses the row being filled. Tab accepts and moves on.
-        onPick(
-          matches[highlight].value,
+        take(
+          matches[highlight],
           e.key === "Tab" ? (e.shiftKey ? "left" : "right") : "none",
         );
         return;
@@ -556,7 +577,7 @@ function CellEditor({
                   data-idx={i}
                   onMouseDown={(e) => {
                     e.preventDefault();
-                    if (!sg.disabled) onPick(sg.value, "none");
+                    if (!sg.disabled) take(sg, "none");
                   }}
                   onMouseEnter={() => {
                     if (!sg.disabled) setHighlight(i);
@@ -564,6 +585,10 @@ function CellEditor({
                   className={cn(
                     "flex items-start justify-between gap-2 border-b border-border px-2.5 py-2 text-left last:border-b-0",
                     sg.disabled ? "cursor-not-allowed opacity-55" : "cursor-pointer",
+                    // A command reads as a footer to the list, not another
+                    // candidate in it.
+                    sg.action &&
+                      "sticky bottom-0 border-t bg-background font-medium text-emerald-700 dark:text-emerald-400",
                     i === highlight && !sg.disabled && "bg-emerald-600/15 dark:bg-emerald-400/20",
                   )}
                 >
@@ -610,7 +635,7 @@ function CellEditor({
                   // first, or the half-typed value commits before the pick lands.
                   onMouseDown={(e) => {
                     e.preventDefault();
-                    onPick(sg.value, "none");
+                    take(sg, "none");
                   }}
                   onMouseEnter={() => setHighlight(i)}
                   className={cn(
@@ -704,6 +729,7 @@ export function SheetGrid({
   draftSuggestions,
   committedSuggestions,
   onEditStart,
+  onSuggestionAction,
 }: {
   columns: SheetColumn[];
   rows: SheetRow[];
@@ -757,6 +783,21 @@ export function SheetGrid({
   committedSuggestions?: (rowIndex: number, colIndex: number) => SheetSuggestion[] | undefined;
   /** Fired as a cell edit begins — the moment to prefetch dynamic suggestions. */
   onEditStart?: (rowIndex: number, colIndex: number) => void;
+  /**
+   * An `action` suggestion was picked. The edit is abandoned first, so the
+   * handler is free to open a dialog over the sheet; `typed` is whatever was
+   * in the cell, which is usually what the new record should be called.
+   */
+  onSuggestionAction?: (ctx: {
+    /** Index into `drafts`, or null when the cell is a saved row. */
+    draftIndex: number | null;
+    rowIndex: number;
+    colIndex: number;
+    /** The suggestion's `value` — which command was chosen. */
+    value: string;
+    /** What was in the cell when it was chosen. */
+    typed: string;
+  }) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   /** Scroll container of the committed rows (infinite-scroll root). */
@@ -1534,6 +1575,17 @@ export function SheetGrid({
         },
         onBlur: () => commitEdit("none"),
         onPick: commitWith,
+        onAction: (value, typed) => {
+          const { r, c } = editing;
+          cancelEdit();
+          onSuggestionAction?.({
+            draftIndex: r >= draftStart ? r - draftStart : null,
+            rowIndex: r,
+            colIndex: c,
+            value,
+            typed,
+          });
+        },
       }
     : null;
 

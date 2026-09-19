@@ -32,6 +32,8 @@ type Props = {
   /** Seeds the form each time the modal opens (e.g. from a deposit's bank details). */
   prefill?: {
     full_name?: string;
+    /** Member-code series to start from — e.g. the letters CS just typed. */
+    prefix?: string;
     company_entity_id?: number;
     bank_accounts?: BankRow[];
   };
@@ -166,6 +168,7 @@ export function CreatePlayerModal({
       setForm({
         ...EMPTY,
         full_name: prefill.full_name ?? "",
+        prefix: (prefill.prefix ?? "").toUpperCase().replace(/[^A-Z]/g, ""),
         company_entity_id:
           prefill.company_entity_id != null
             ? String(prefill.company_entity_id)
@@ -334,10 +337,16 @@ export function CreatePlayerModal({
       return;
     }
     if (onCreated) {
+      // Scoped to the company: member codes are unique per casino, not
+      // globally, so a bare code match can hand back somebody else's member.
       const username = memberCode.toLowerCase();
+      const companyId = Number(companyValue);
       const created = useStore
         .getState()
-        .players.find((p) => p.username.toLowerCase() === username);
+        .players.find(
+          (p) =>
+            p.company_entity_id === companyId && p.username.toLowerCase() === username,
+        );
       toast.success(`Player "${fullName}" created`);
       setForm(EMPTY);
       onOpenChange(false);

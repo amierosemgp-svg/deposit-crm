@@ -27,6 +27,7 @@ import {
   type SheetSuggestion,
 } from "@/components/sheet/sheet-grid";
 import { CompanyInfoPanel } from "@/components/sheet/company-info-panel";
+import { CreatePlayerModal } from "@/components/create-player-modal";
 import {
   Select,
   SelectContent,
@@ -56,6 +57,7 @@ import {
   Undo2,
   User,
   UserCheck,
+  UserPlus,
   UserMinus,
   X,
 } from "lucide-react";
@@ -247,6 +249,11 @@ type FreeCredit = {
   source: string;
   game_transfer_id: number | null;
 };
+
+/** Sentinel for the member list's "New player" command row. */
+const NEW_PLAYER = "__new_player__";
+/** The sheets that name a member, and so can create one. */
+const MEMBER_TABS = new Set<TabKey>(["deposit", "withdrawal", "freecredit", "transfer"]);
 
 const MIN_BLANK_ROWS = 8;
 
@@ -785,6 +792,26 @@ export default function TransactionsPage() {
   const [search, setSearch] = useState("");
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  /**
+   * Create-player, opened from the sheet.
+   *
+   * `cell` remembers which entry row asked, so the code the form mints lands
+   * back in it and the half-typed row carries on. Null when the button in the
+   * toolbar opened it, where there is no row waiting for an answer.
+   */
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createFor, setCreateFor] = useState<{ draftIndex: number; col: number } | null>(null);
+  /** Letters of whatever was typed, used as the new member's code series. */
+  const [createPrefix, setCreatePrefix] = useState("");
+
+  const openCreatePlayer = useCallback(
+    (at: { draftIndex: number; col: number } | null, typed = "") => {
+      setCreateFor(at);
+      setCreatePrefix(typed.toUpperCase().replace(/[^A-Z]/g, ""));
+      setCreateOpen(true);
+    },
+    [],
+  );
   const [crawlRequesting, setCrawlRequesting] = useState(false);
   // Committed rows currently selected in the grid — what the action bar acts on.
   const [selectedIds, setSelectedIds] = useState<(string | number)[]>([]);
@@ -814,13 +841,33 @@ export default function TransactionsPage() {
 
   // Typeahead for Member Code cells: every player in scope, code + name, so
   // CS can type a few letters of either and arrow-key the right one in.
-  const memberSuggestions = useMemo(
-    () =>
-      players
+  /**
+   * Member codes, plus a way out when the member isn't one yet.
+   *
+   * CS meets new players mid-shift: the deposit is in the bank and the code
+   * they were given isn't on file. Until now that meant leaving the sheet for
+   * the Players page and coming back to retype the row. The last entry in the
+   * list opens the same Create player form without losing the row, and the new
+   * code drops into the cell that asked for it.
+   */
+  const memberSuggestions = useMemo<SheetSuggestion[]>(
+    () => [
+      ...players
         .filter((p) => companyInScope(p.company_entity_id))
         .map((p) => ({ value: p.username, hint: p.full_name })),
+      ...(isViewer
+        ? []
+        : [
+            {
+              value: NEW_PLAYER,
+              title: "\u002B  New player",
+              detail: "Not on file yet — create them without leaving the row",
+              action: true,
+            } satisfies SheetSuggestion,
+          ]),
+    ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [players, selectedCompanyId, selectedLeaderId],
+    [players, selectedCompanyId, selectedLeaderId, isViewer],
   );
 
   const MODE_SUGGESTIONS = useMemo(
@@ -1353,6 +1400,20 @@ export default function TransactionsPage() {
       });
     },
     [tab, playerByCode],
+  );
+
+  const onSuggestionAction = useCallback(
+    ({ draftIndex, colIndex, value, typed }: {
+      draftIndex: number | null;
+      rowIndex: number;
+      colIndex: number;
+      value: string;
+      typed: string;
+    }) => {
+      if (value !== NEW_PLAYER) return;
+      openCreatePlayer(draftIndex === null ? null : { draftIndex, col: colIndex }, typed);
+    },
+    [openCreatePlayer],
   );
 
   const onDraftsChange = useCallback(
@@ -3843,6 +3904,18 @@ export default function TransactionsPage() {
                 : "Crawl banks"}
             </Button>
           )}
+          {MEMBER_TABS.has(tab) && !isViewer && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 cursor-pointer gap-1.5"
+              onClick={() => openCreatePlayer(null)}
+              title="Create a member without leaving the sheet"
+            >
+              <UserPlus className="h-3.5 w-3.5" />
+              New player
+            </Button>
+          )}
           <Button
             size="sm"
             variant="outline"
@@ -3997,6 +4070,7 @@ export default function TransactionsPage() {
         onCommittedEdit={onCommittedEdit}
         onSelectedRowsChange={setSelectedIds}
         draftSuggestions={draftSuggestions}
+        onSuggestionAction={onSuggestionAction}
         committedSuggestions={committedSuggestions}
         onEditStart={handleEditStart}
         // Re-fires after hydration so the initial jump lands on the entry
@@ -4281,6 +4355,34 @@ export default function TransactionsPage() {
           }}
         />
       )}
+
+      {/* Create a member without leaving the sheet. Opened by the toolbar
+          button, or by the "New player" row at the foot of a Member Code
+          list — in which case the code it mints drops into the cell that
+          asked, so the half-typed row carries on where it left off. */}
+      <CreatePlayerModal
+        open={createOpen}
+        onOpenChange={(o) => {
+          setCreateOpen(o);
+          if (!o) setCreateFor(null);
+        }}
+        prefill={{ prefix: createPrefix }}
+        onCreated={(player) => {
+          const at = createFor;
+          setCreateFor(null);
+          if (!at) return;
+          setDraftsByTab((prev) => {
+            const filled = prev[tab].map((row, i) =>
+              i === at.draftIndex
+                ? row.map((v, c) => (c === at.col ? player.username : v))
+                : row,
+            );
+            let processed = enrichMemberChanges(prev[tab], filled);
+            if (tab === "deposit") processed = computeDepositDerived(processed);
+            return { ...prev, [tab]: padDrafts(processed, tab) };
+          });
+        }}
+      />
     </div>
   );
 }
