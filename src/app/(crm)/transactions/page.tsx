@@ -3505,7 +3505,7 @@ export default function TransactionsPage() {
     { key: "rebate", label: "Rebate" },
     { key: "freecredit", label: "Free Credit" },
     { key: "transfer", label: "Game Transfer" },
-    { key: "leaderwithdrawal", label: "Leader Withdrawal" },
+    { key: "leaderwithdrawal", label: "Clear Bank" },
     // Both are open to the desk now: expenses for bank charges, settlements
     // because CS records them alongside the day's takings. Each is scoped
     // server-side to the caller's own tree, so "open" does not mean "all".
