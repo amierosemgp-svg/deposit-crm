@@ -66,6 +66,7 @@ import {
   BONUS_PERIOD_LABELS,
   BONUS_TYPE_LABELS,
   EXPENSE_CATEGORIES,
+  EXPENSE_CATEGORY_LABEL,
   OPEN_BOT_COMMAND_STATUSES,
   type BankCashOut,
   type BonusOption,
@@ -1169,7 +1170,7 @@ export default function TransactionsPage() {
       expense: order("expense", {
         assign,
         date: { label: "Date", width: 92, align: "center", entry: true, required: true, placeholder: "31/8/2026" },
-        category: { label: "Category", width: 110, entry: true, required: true, options: [...EXPENSE_CATEGORIES], placeholder: "category" },
+        category: { label: "Category", width: 130, entry: true, required: true, options: EXPENSE_CATEGORIES.map((c) => EXPENSE_CATEGORY_LABEL[c]), placeholder: "category" },
         description: { label: "Description", width: 260, entry: true, required: true, placeholder: "what it's for" },
         amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "100" },
         company: { label: "Company", width: 150, entry: true, options: companies.map((c) => c.company_name), placeholder: "company" },
@@ -1689,6 +1690,7 @@ export default function TransactionsPage() {
     return inRangeOr<Expense>("expense", expenses)
       .filter((e) => e.company_entity_id === null || companyInScope(e.company_entity_id))
       .filter((e) => inRange(e.expense_date, range))
+      .filter((e) => statusFilters.size === 0 || statusFilters.has(e.category))
       .sort((a, b) => a.expense_date.localeCompare(b.expense_date))
       .map((e: Expense) => ({
         id: e.expense_id,
@@ -1696,7 +1698,7 @@ export default function TransactionsPage() {
         cells: toCells("expense", {
           assign: assignCell(e.recorded_by_user_id),
           date: sheetDate(e.expense_date),
-          category: e.category,
+          category: EXPENSE_CATEGORY_LABEL[e.category] ?? e.category,
           description: e.description,
           amount: fmtAmount(e.amount),
           company: e.company_entity_id ? (companyNameById.get(e.company_entity_id) ?? "") : "",
@@ -1711,7 +1713,7 @@ export default function TransactionsPage() {
       }))
       .filter((r) => matchesSearch(r.cells));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expenses, companyNameById, range, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId, transferEndLabel, entityName, inRangeOr]);
+  }, [expenses, companyNameById, range, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId, transferEndLabel, entityName, inRangeOr, statusFilters]);
 
   const accountById = useMemo(
     () => new Map(bankAccounts.map((a) => [a.account_id, a])),
@@ -3505,7 +3507,9 @@ export default function TransactionsPage() {
     ],
     rebate: Object.entries(REBATE_STATUS_LABEL),
     leadertransfer: [],
-    expense: [],
+    // Expenses have no status — what the desk filters by is the category, so
+    // the same pills carry those instead.
+    expense: EXPENSE_CATEGORIES.map((c) => [c, EXPENSE_CATEGORY_LABEL[c]] as [string, string]),
   };
   const statusOptions = statusOptionsByTab[tab];
 

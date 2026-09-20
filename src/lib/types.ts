@@ -584,6 +584,25 @@ export type CompanyLeader = {
 
 export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
 
+/**
+ * What each expense category is called on screen.
+ *
+ * Kept beside the categories themselves so the Expenses page and the Expenses
+ * worksheet cannot drift into calling the same thing two different names.
+ */
+export const EXPENSE_CATEGORY_LABEL: Record<ExpenseCategory, string> = {
+  salary: "Salary",
+  sim_card: "SIM Card",
+  subscription: "Subscription",
+  rent: "Rent",
+  utilities: "Utilities",
+  equipment: "Equipment",
+  marketing: "Marketing",
+  bank_charge: "Bank Charge",
+  other: "Other",
+};
+
+
 export type Expense = {
   expense_id: number;
   expense_date: string;

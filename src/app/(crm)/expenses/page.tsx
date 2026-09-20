@@ -29,19 +29,36 @@ import {
 import { useStore } from "@/lib/store";
 import { formatRM } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { EXPENSE_CATEGORIES, type Expense, type ExpenseCategory } from "@/lib/types";
+import {
+  EXPENSE_CATEGORIES,
+  EXPENSE_CATEGORY_LABEL,
+  type Expense,
+  type ExpenseCategory,
+} from "@/lib/types";
 
-const CATEGORY_META: Record<ExpenseCategory, { label: string; cls: string }> = {
-  salary: { label: "Salary", cls: "bg-blue-500/10 text-blue-700 dark:text-blue-300" },
-  sim_card: { label: "SIM Card", cls: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" },
-  subscription: { label: "Subscription", cls: "bg-purple-500/10 text-purple-700" },
-  rent: { label: "Rent", cls: "bg-amber-500/10 text-amber-700 dark:text-amber-300" },
-  utilities: { label: "Utilities", cls: "bg-cyan-500/10 text-cyan-700" },
-  equipment: { label: "Equipment", cls: "bg-slate-500/10 text-slate-700 dark:text-slate-300" },
-  marketing: { label: "Marketing", cls: "bg-rose-500/10 text-rose-700 dark:text-rose-300" },
-  bank_charge: { label: "Bank Charge", cls: "bg-orange-500/10 text-orange-700 dark:text-orange-300" },
-  other: { label: "Other", cls: "bg-zinc-500/10 text-zinc-700 dark:text-zinc-300" },
+/**
+ * Colour per category; the wording comes from EXPENSE_CATEGORY_LABEL so this
+ * page and the Expenses worksheet cannot end up calling the same thing two
+ * different names.
+ */
+const CATEGORY_CLS: Record<ExpenseCategory, string> = {
+  salary: "bg-blue-500/10 text-blue-700 dark:text-blue-300",
+  sim_card: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+  subscription: "bg-purple-500/10 text-purple-700",
+  rent: "bg-amber-500/10 text-amber-700 dark:text-amber-300",
+  utilities: "bg-cyan-500/10 text-cyan-700",
+  equipment: "bg-slate-500/10 text-slate-700 dark:text-slate-300",
+  marketing: "bg-rose-500/10 text-rose-700 dark:text-rose-300",
+  bank_charge: "bg-orange-500/10 text-orange-700 dark:text-orange-300",
+  other: "bg-zinc-500/10 text-zinc-700 dark:text-zinc-300",
 };
+const CATEGORY_META: Record<ExpenseCategory, { label: string; cls: string }> =
+  Object.fromEntries(
+    EXPENSE_CATEGORIES.map((c) => [
+      c,
+      { label: EXPENSE_CATEGORY_LABEL[c], cls: CATEGORY_CLS[c] },
+    ]),
+  ) as Record<ExpenseCategory, { label: string; cls: string }>;
 
 function todayStr() {
   return new Date().toISOString().slice(0, 10);
