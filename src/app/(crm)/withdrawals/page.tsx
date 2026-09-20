@@ -2,6 +2,7 @@
 
 import { useMemo, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
+import { useHydratePlayers } from "@/lib/use-players";
 import { formatRM, formatShortDateTime, formatRelative } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -60,10 +61,10 @@ const STATUS_FILTERS: { value: string; tab: string }[] = [
 export default function WithdrawalsPage() {
   const withdrawals = useStore((s) => s.withdrawals);
   const hydrated = useStore((s) => s.hydrated);
-  const players = useStore((s) => s.players);
   const bankAccounts = useStore((s) => s.bankAccounts);
   const getBalance = useStore((s) => s.getCreditBalance);
   const playerById = useStore((s) => s.playerById);
+  useHydratePlayers(useMemo(() => withdrawals.map((w) => w.player_id), [withdrawals]));
   const markPaid = useStore((s) => s.markWithdrawalPaid);
   const createWithdrawal = useStore((s) => s.createWithdrawal);
   const rejectWithdrawal = useStore((s) => s.rejectWithdrawal);
@@ -176,12 +177,6 @@ export default function WithdrawalsPage() {
   ).length;
   const activeCompany = companiesFn().find(
     (c) => c.company_id === selectedCompanyId,
-  );
-
-  const eligiblePlayers = useMemo(
-    () => players.filter((p) => companyInScope(p.company_entity_id)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [players, selectedCompanyId, selectedLeaderId],
   );
 
   const payoutAccounts = bankAccounts.filter(
@@ -875,11 +870,6 @@ export default function WithdrawalsPage() {
                 )}
                 <Users className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
               </button>
-              {eligiblePlayers.length === 0 && (
-                <p className="text-[11px] text-muted-foreground">
-                  No players available — create a player first.
-                </p>
-              )}
             </div>
 
             <div className="space-y-1.5">
@@ -1018,7 +1008,6 @@ export default function WithdrawalsPage() {
       <PlayerPickerSheet
         open={playerPickerOpen}
         onOpenChange={setPlayerPickerOpen}
-        players={eligiblePlayers}
         title="Select player"
         description="Choose the player requesting the withdrawal"
         onSelect={(p) => {

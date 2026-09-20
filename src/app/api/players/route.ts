@@ -9,10 +9,10 @@ import {
   players,
   transactions,
 } from "@/db/schema";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { findOrCreatePerson } from "@/lib/people";
 import { formatCode } from "@/lib/lead-lists";
-import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
+import { AuthError, authErrorResponse, requireUser, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import { loadGameCatalogue, normaliseGameAccounts } from "@/lib/game-name";
 
@@ -45,6 +45,177 @@ const createSchema = z.union([playerSchema, z.array(playerSchema).min(1)]);
 
 /** Rows per INSERT — keeps each statement well under Postgres's parameter cap. */
 const INSERT_CHUNK = 500;
+
+/**
+ * GET /api/players — the roster, a page at a time.
+ *
+ * The client used to hold every member, shipped whole inside /api/state. That
+ * was tenable at a few hundred; Pokercity's master list took it to 12,280,
+ * which is 8 MB of JSON re-sent on every poll that follows a member edit —
+ * and completing a deposit edits a member, so that is most polls during a
+ * shift. Nothing on screen ever needed the whole roster: a sheet needs the
+ * members on the rows it is showing, and a search box needs the handful that
+ * match what was typed. Both are questions for the database.
+ *
+ * Query:
+ *   ids      comma-separated player ids — hydrate exactly these, no paging
+ *   q        free text over member code, name, phone and game logins
+ *   company  restrict to one company (must be in scope)
+ *   prefix   member-code series, e.g. GA
+ *   upline   members introduced by this player
+ *   last_dep "never", "within:30", "over:90" — how long since they last paid in
+ *   limit    default 100, max 500
+ *   offset   where to start
+ *
+ * Every row carries `last_deposit_at`, so the roster needs no second request to
+ * say who has gone cold.
+ *
+ * Returns { players, total, limit, offset } so a caller can page without
+ * guessing whether more exist.
+ */
+export async function GET(request: Request) {
+  try {
+    const user = await requireUser();
+    const sp = new URL(request.url).searchParams;
+
+    const scope: SQL[] = [];
+    if (user.companyIds !== null) {
+      scope.push(
+        user.companyIds.length
+          ? sql`p.company_entity_id IN (${sql.join(
+              user.companyIds.map((id) => sql`${id}`),
+              sql`, `,
+            )})`
+          : sql`false`,
+      );
+    }
+
+    const companyParam = sp.get("company");
+    if (companyParam && companyParam !== "all") {
+      const companyId = Number(companyParam);
+      if (!Number.isFinite(companyId)) return jsonError("Bad company");
+      scope.push(sql`p.company_entity_id = ${companyId}`);
+    }
+
+    // Hydrate-by-id: the sheets ask for the members on the rows they drew.
+    const idsParam = sp.get("ids");
+    if (idsParam !== null) {
+      const ids = idsParam
+        .split(",")
+        .map((v) => Number(v.trim()))
+        .filter((n) => Number.isInteger(n) && n > 0);
+      if (!ids.length) return Response.json({ players: [], total: 0, limit: 0, offset: 0 });
+      if (ids.length > MAX_HYDRATE) {
+        return jsonError(`Too many ids — ${MAX_HYDRATE} at a time`);
+      }
+      scope.push(sql`p.player_id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})`);
+      const rows = await db.execute(sql`
+        SELECT to_jsonb(p) || jsonb_build_object(
+                 'last_deposit_at',
+                 (SELECT max(d.deposit_date) FROM deposits d
+                   WHERE d.player_id = p.player_id AND d.status <> 'failed')) AS row
+          FROM players p
+         WHERE ${sql.join(scope, sql` AND `)}`);
+      const list = rows.rows.map((r) => (r as { row: unknown }).row);
+      return Response.json({ players: list, total: list.length, limit: list.length, offset: 0 });
+    }
+
+    /**
+     * Search covers what CS actually types: the member code, the name, the
+     * phone, and the game login — a player is often identified by the login
+     * written on a deposit slip rather than by their code.
+     */
+    const q = (sp.get("q") ?? "").trim().toLowerCase();
+    if (q) {
+      const like = `%${q}%`;
+      scope.push(sql`(
+        lower(p.username) LIKE ${like}
+        OR lower(p.full_name) LIKE ${like}
+        OR lower(coalesce(p.contact_number, '')) LIKE ${like}
+        OR lower(coalesce(p.telegram_username, '')) LIKE ${like}
+        OR EXISTS (
+          SELECT 1 FROM jsonb_array_elements(coalesce(p.game_accounts, '[]'::jsonb)) g
+           WHERE lower(g->>'game_username') LIKE ${like})
+      )`);
+    }
+
+    // Everyone this member introduced — the Referrals tab's own list.
+    const upline = sp.get("upline");
+    if (upline !== null) {
+      const uplineId = Number(upline);
+      if (!Number.isInteger(uplineId) || uplineId <= 0) return jsonError("Bad upline");
+      scope.push(sql`p.upline_player_id = ${uplineId}`);
+    }
+
+    const prefix = (sp.get("prefix") ?? "").trim();
+    if (prefix && prefix !== "all") {
+      if (!/^[A-Za-z]{1,4}$/.test(prefix)) return jsonError("Bad prefix");
+      // Anchored on the letters, so GA does not also match G.
+      scope.push(sql`upper((regexp_match(p.username, '^([A-Za-z]+)'))[1]) = ${prefix.toUpperCase()}`);
+    }
+
+    /**
+     * How long since the member last paid in. "Never deposited" is a different
+     * answer from "a long time ago", so it is its own option rather than being
+     * swept into "over N days".
+     */
+    const lastDep = (sp.get("last_dep") ?? "").trim();
+    if (lastDep) {
+      const lastAt = sql`(SELECT max(d.deposit_date) FROM deposits d
+                           WHERE d.player_id = p.player_id AND d.status <> 'failed')`;
+      if (lastDep === "never") {
+        scope.push(sql`${lastAt} IS NULL`);
+      } else {
+        const [dir, raw] = lastDep.split(":");
+        const days = Number(raw);
+        if ((dir !== "within" && dir !== "over") || !Number.isFinite(days)) {
+          return jsonError("Bad last_dep");
+        }
+        scope.push(
+          dir === "within"
+            ? sql`${lastAt} >= now() - make_interval(days => ${Math.floor(days)})`
+            : sql`${lastAt} < now() - make_interval(days => ${Math.floor(days)})`,
+        );
+      }
+    }
+
+    const limit = Math.min(Math.max(Number(sp.get("limit") ?? 100) || 100, 1), 500);
+    const offset = Math.max(Number(sp.get("offset") ?? 0) || 0, 0);
+    const where = scope.length ? sql.join(scope, sql` AND `) : sql`true`;
+
+    const rows = await db.execute(sql`
+      SELECT to_jsonb(p) || jsonb_build_object(
+               'last_deposit_at',
+               (SELECT max(d.deposit_date) FROM deposits d
+                 WHERE d.player_id = p.player_id AND d.status <> 'failed')) AS row
+        FROM players p
+       WHERE ${where}
+       -- Newest first, player_id breaking ties: a bulk import gives every row
+       -- the same registration_date, and without the tiebreak the same member
+       -- can appear on two pages and another on none.
+       ORDER BY p.registration_date DESC, p.player_id DESC
+       LIMIT ${limit} OFFSET ${offset}`);
+
+    const [totals] = (await db.execute(sql`
+      SELECT count(*)::int AS total FROM players p WHERE ${where}`)).rows as unknown as {
+      total: number;
+    }[];
+
+    return Response.json({
+      players: rows.rows.map((r) => (r as { row: unknown }).row),
+      total: totals?.total ?? 0,
+      limit,
+      offset,
+    });
+  } catch (e) {
+    return (
+      authErrorResponse(e) ?? (console.error(e), jsonError("Server error", 500))
+    );
+  }
+}
+
+/** Most ids one hydrate call may ask for — a sheet page is far smaller. */
+const MAX_HYDRATE = 500;
 
 /** POST /api/players — create one player, or an array (import). */
 export async function POST(request: Request) {

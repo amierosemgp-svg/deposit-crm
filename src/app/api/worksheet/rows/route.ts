@@ -6,11 +6,9 @@ import {
   all,
   businessDay,
   csCutoff,
-  DEPOSIT_COUNTS,
   parseReportParams,
   scopeDeposits,
   scopeByPlayer,
-  WITHDRAWAL_COUNTS,
 } from "@/lib/report-sql";
 
 /**
@@ -80,8 +78,20 @@ export async function GET(request: Request) {
     const cutoff = csCutoff(user);
     const visible = await visibleEntityIds(user);
 
+    /**
+     * A worksheet shows every row, whatever state it is in.
+     *
+     * These two queries used to carry the REPORTS' predicates — DEPOSIT_COUNTS
+     * ("not failed") and WITHDRAWAL_COUNTS ("paid only"). Those say what counts
+     * as money moved, which is right for a report and wrong here: the sheet is
+     * the desk's working list. Carrying them meant the Withdrawal tab showed
+     * only paid rows, so a withdrawal CS had just entered — requested, or
+     * credits pulled — was invisible the moment it was saved, and the tab's own
+     * Requested / Credits pulled / Failed filters could never match anything.
+     * The status pills do the filtering, client-side, on the full set.
+     */
     if (sheet === "deposit") {
-      const w = [...scopeDeposits(user), DEPOSIT_COUNTS];
+      const w = [...scopeDeposits(user)];
       if (p.from) w.push(sql`${businessDay(sql`d.deposit_date`)} >= ${p.from}::date`);
       if (p.to) w.push(sql`${businessDay(sql`d.deposit_date`)} <= ${p.to}::date`);
       if (p.companyId !== null) w.push(sql`d.company_entity_id = ${p.companyId}`);
@@ -117,7 +127,7 @@ export async function GET(request: Request) {
       });
     }
 
-    const w = [...scopeByPlayer(user), WITHDRAWAL_COUNTS];
+    const w = [...scopeByPlayer(user)];
     if (p.from) w.push(sql`${businessDay(sql`wd.created_at`)} >= ${p.from}::date`);
     if (p.to) w.push(sql`${businessDay(sql`wd.created_at`)} <= ${p.to}::date`);
     if (p.companyId !== null) w.push(sql`pl.company_entity_id = ${p.companyId}`);

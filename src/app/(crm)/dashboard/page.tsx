@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
 import Link from "next/link";
 import { formatRM, formatDateTime, isBotOnline } from "@/lib/format";
@@ -78,7 +78,9 @@ export default function DashboardPage() {
   const hydrated = useStore((s) => s.hydrated);
   const deposits = useStore((s) => s.deposits);
   const withdrawals = useStore((s) => s.withdrawals);
+  const playerCounts = useStore((s) => s.playerCounts);
   const players = useStore((s) => s.players);
+  const hydratePlayers = useStore((s) => s.hydratePlayers);
   const entities = useStore((s) => s.entities);
   const boAccounts = useStore((s) => s.boAccounts);
   const bankAccounts = useStore((s) => s.bankAccounts);
@@ -94,28 +96,44 @@ export default function DashboardPage() {
   const [dateFrom, setDateFrom] = useState(todayStr());
   const [dateTo, setDateTo] = useState(todayStr());
 
-  const playerMap = useMemo(
-    () => new Map(players.map((p) => [p.player_id, p])),
-    [players],
-  );
-
   const scopedDeposits = useMemo(
     () => deposits.filter((d) => companyInScope(d.company_entity_id)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [deposits, selectedCompanyId, selectedLeaderId],
   );
-  const scopedWithdrawals = useMemo(
-    () =>
-      withdrawals.filter((w) =>
-        companyInScope(playerMap.get(w.player_id)?.company_entity_id),
-      ),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [withdrawals, playerMap, selectedCompanyId, selectedLeaderId],
+  /**
+   * The members this page names, fetched.
+   *
+   * Only the rows on screen — the recent deposits and withdrawals and the
+   * uplines of any recommend bonus — never the roster.
+   */
+  const playerMap = useMemo(
+    () => new Map(players.map((p) => [p.player_id, p])),
+    [players],
   );
-  const scopedPlayers = useMemo(
-    () => players.filter((p) => companyInScope(p.company_entity_id)),
+  useEffect(() => {
+    const ids = [
+      ...deposits.map((d) => d.player_id),
+      ...withdrawals.map((w) => w.player_id),
+      ...referralBonuses.map((b) => b.upline_player_id),
+    ];
+    if (ids.length) void hydratePlayers(ids);
+  }, [deposits, withdrawals, referralBonuses, hydratePlayers]);
+
+  // The company rides on the withdrawal now — see /api/state.
+  const scopedWithdrawals = useMemo(
+    () => withdrawals.filter((w) => companyInScope(w.company_entity_id ?? null)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [players, selectedCompanyId, selectedLeaderId],
+    [withdrawals, selectedCompanyId, selectedLeaderId],
+  );
+  /** Members in scope, counted by the server rather than tallied here. */
+  const memberTotal = useMemo(
+    () =>
+      playerCounts
+        .filter((c) => companyInScope(c.company_entity_id))
+        .reduce((n, c) => n + c.members, 0),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [playerCounts, selectedCompanyId, selectedLeaderId],
   );
   const scopedBoAccounts = useMemo(
     () => boAccounts.filter((b) => companyInScope(b.company_entity_id)),
@@ -548,8 +566,8 @@ export default function DashboardPage() {
         />
         <StatTile
           title="Active Players"
-          value={String(scopedPlayers.filter((p) => p.status === "active").length)}
-          sub={`${scopedPlayers.length} total`}
+          value={String(memberTotal)}
+          sub="members on file"
           icon={Users}
         />
       </div>

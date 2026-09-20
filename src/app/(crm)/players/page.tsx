@@ -61,6 +61,9 @@ type TabKey = "players" | "leads" | "winloss";
 /** One member's standing against the house, from /api/players/win-loss. */
 type WinLossRow = {
   player_id: number;
+  username: string;
+  full_name: string;
+  company_entity_id: number;
   money_in: number;
   bonus: number;
   free_credit: number;
@@ -128,8 +131,6 @@ function padDrafts(rows: string[][], nCols: number): string[][] {
 }
 
 const fmtSeq = (prefix: string, seq: number) => `${prefix}${String(seq).padStart(4, "0")}`;
-/** The letters a member/lead code starts with — its list prefix. */
-const prefixOfCode = (code: string) => code.match(/^[^0-9]+/)?.[0] ?? "";
 
 /**
  * How long a member has been quiet: "today", "3d", "2mo", or a dash when they
@@ -200,7 +201,8 @@ const LEAD_COLUMNS: SheetColumn[] = [
 ];
 
 export default function PlayersPage() {
-  const players = useStore((s) => s.players);
+  const listPlayers = useStore((s) => s.listPlayers);
+  const loadCodeSeries = useStore((s) => s.loadCodeSeries);
   const gameCredits = useStore((s) => s.gameCredits);
   const hydrated = useStore((s) => s.hydrated);
   const me = useStore((s) => s.me);
@@ -249,30 +251,38 @@ export default function PlayersPage() {
   const [lastDepDays, setLastDepDays] = useState("30");
 
   /**
-   * When each member last deposited. Fetched rather than read from the store:
-   * /api/state's roster is cached against players.updated_at, which a deposit
-   * does not touch until completion, so this would otherwise show a frozen
-   * figure for as long as nothing else edited the member.
+   * One page of the roster, fetched.
+   *
+   * The whole list used to be in the browser, filtered there. Twelve thousand
+   * members made that untenable, so the company, the prefix, the how-long-since
+   * filter, the search and the paging are all the server's job now, and each
+   * row arrives carrying its own last_deposit_at.
    */
-  const [lastDepositAt, setLastDepositAt] = useState<Map<number, string>>(new Map());
-  useEffect(() => {
-    let live = true;
-    fetch("/api/players/activity")
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then((d: { activity?: { player_id: number; last_deposit_at: string }[] }) => {
-        if (!live) return;
-        setLastDepositAt(
-          new Map((d.activity ?? []).map((a) => [a.player_id, a.last_deposit_at])),
-        );
-      })
-      .catch(() => {
-        // A missing activity map costs the column a dash, nothing more — not
-        // worth a toast on a page whose main job is the roster.
-      });
-    return () => {
-      live = false;
-    };
-  }, []);
+  const PAGE_SIZE = 100;
+  /** Bumped after a save so the page and the code series are re-read. */
+  const [savedAt, setSavedAt] = useState(0);
+  /**
+   * How many pages of the current filter we have pulled in, and the filters
+   * they belong to.
+   *
+   * The roster scrolls rather than paging: reaching the bottom fetches the next
+   * hundred and appends. Keeping the filter signature beside the count means a
+   * filter change resets to one page during render, so there is never a frame
+   * where yesterday's rows are shown under today's filters.
+   */
+  const [pageState, setPageState] = useState({ key: "", pages: 1 });
+  const [pageRows, setPageRows] = useState<Player[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loadingPage, setLoadingPage] = useState(false);
+  const lastDepositAt = useMemo(
+    () =>
+      new Map(
+        pageRows
+          .map((p) => [p.player_id, (p as Player & { last_deposit_at?: string }).last_deposit_at])
+          .filter((e): e is [number, string] => typeof e[1] === "string"),
+      ),
+    [pageRows],
+  );
 
   const matchesLastDep = useCallback(
     (iso: string | undefined) => {
@@ -401,21 +411,24 @@ export default function PlayersPage() {
    * treating GA2283 as a G-code would hand the next member G2284 — a number
    * three thousand short of where that series actually is.
    */
-  const codeSeries = useMemo(() => {
-    const series = new Map<string, { next: number; width: number }>();
-    for (const p of players) {
-      if (entryCompanyId !== null && p.company_entity_id !== entryCompanyId) continue;
-      const m = /^([A-Za-z]+)(\d+)$/.exec(p.username.trim());
-      if (!m) continue;
-      const [, letters, digits] = m;
-      const key = letters.toUpperCase();
-      const at = series.get(key) ?? { next: 0, width: digits.length };
-      at.next = Math.max(at.next, Number(digits) + 1);
-      at.width = Math.max(at.width, digits.length);
-      series.set(key, at);
-    }
-    return series;
-  }, [players, entryCompanyId]);
+  const [seriesRows, setSeriesRows] = useState<
+    { prefix: string; next: number; width: number; members: number }[]
+  >([]);
+  useEffect(() => {
+    let live = true;
+    void loadCodeSeries(entryCompanyId).then((rows) => {
+      if (live) setSeriesRows(rows);
+    });
+    return () => {
+      live = false;
+    };
+    // Re-read after a save: the codes just issued move every series on.
+  }, [loadCodeSeries, entryCompanyId, savedAt]);
+
+  const codeSeries = useMemo(
+    () => new Map(seriesRows.map((r) => [r.prefix, { next: r.next, width: r.width }])),
+    [seriesRows],
+  );
 
   const prefixSuggestions = useMemo<SheetSuggestion[]>(
     () =>
@@ -489,12 +502,87 @@ export default function PlayersPage() {
     [search],
   );
 
+  /**
+   * Fetch the page whenever anything that defines it moves.
+   *
+   * Search is debounced: every keystroke is a query now, and the roster is big
+   * enough that firing one per character would queue them faster than they
+   * return.
+   */
+  const filterKey = [
+    search.trim(),
+    selectedCompanyId ?? "",
+    prefixFilter,
+    lastDepDir,
+    lastDepDays,
+    savedAt,
+  ].join("\u0000");
+  const pages = pageState.key === filterKey ? pageState.pages : 1;
+  const loadMore = useCallback(
+    () =>
+      setPageState((prev) =>
+        prev.key === filterKey
+          ? { key: filterKey, pages: prev.pages + 1 }
+          : { key: filterKey, pages: 2 },
+      ),
+    [filterKey],
+  );
+
+  /**
+   * Fetch the page just scrolled to and add it to what is already shown.
+   *
+   * Merged by player_id rather than concatenated: a member created while the
+   * list is open shifts every later row down one, and a blind append would
+   * then show somebody twice. The first page replaces, so changing a filter
+   * cannot leave the previous result's rows underneath the new one.
+   */
+  useEffect(() => {
+    if (tab !== "players") return;
+    let live = true;
+    const offset = (pages - 1) * PAGE_SIZE;
+    const run = async () => {
+      setLoadingPage(true);
+      const res = await listPlayers({
+        q: search.trim() || undefined,
+        companyId: selectedCompanyId ?? undefined,
+        limit: PAGE_SIZE,
+        offset,
+        prefix: prefixFilter === "all" ? undefined : prefixFilter,
+        lastDep:
+          lastDepDir === "any"
+            ? undefined
+            : lastDepDir === "never"
+              ? "never"
+              : Number.isFinite(Number(lastDepDays)) && lastDepDays.trim() !== ""
+                ? `${lastDepDir}:${Math.floor(Number(lastDepDays))}`
+                : undefined,
+      });
+      if (!live) return;
+      setPageRows((prev) => {
+        if (offset === 0) return res.players;
+        const byId = new Map(prev.map((p) => [p.player_id, p]));
+        for (const p of res.players) byId.set(p.player_id, p);
+        return [...byId.values()];
+      });
+      setTotal(res.total);
+      setLoadingPage(false);
+    };
+    // Only the first page waits for the typing to settle; a scroll-triggered
+    // page is already a deliberate request.
+    const timer = setTimeout(run, offset === 0 && search.trim() ? 250 : 0);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [
+    tab, listPlayers, search, selectedCompanyId, pages, prefixFilter,
+    lastDepDir, lastDepDays, savedAt,
+  ]);
+
   const memberRows = useMemo<SheetRow[]>(() => {
-    return players
-      .filter((p) => companyInScope(p.company_entity_id))
-      .filter((p) => prefixFilter === "all" || prefixOfCode(p.username) === prefixFilter)
-      .filter((p) => matchesLastDep(lastDepositAt.get(p.player_id)))
-      .sort((a, b) => a.registration_date.localeCompare(b.registration_date))
+    // Filtering, ordering and paging all happen in the query now; the rows
+    // arrive ready to draw.
+    return pageRows
       .map<SheetRow>((p) => ({
         id: p.player_id,
         tone: p.status === "suspended" ? "muted" : "default",
@@ -507,10 +595,8 @@ export default function PlayersPage() {
           sinceLabel(lastDepositAt.get(p.player_id)),
           gameAccountsLabel(p),
         ],
-      }))
-      .filter((r) => matches(r.cells));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [players, selectedCompanyId, selectedLeaderId, companyInScope, matches, prefixFilter, lastDepositAt, gameAccountsLabel, matchesLastDep]);
+      }));
+  }, [pageRows, lastDepositAt, gameAccountsLabel]);
 
   const leadRows = useMemo<SheetRow[]>(
     () =>
@@ -576,10 +662,9 @@ export default function PlayersPage() {
   }, [tab, wlUrl, wlLoaded]);
 
   const winLossRows = useMemo<SheetRow[]>(() => {
-    const byId = new Map(players.map((p) => [p.player_id, p]));
+    // The report names its own members now; the roster is not held locally.
     return winLoss
-      .map((w) => ({ w, p: byId.get(w.player_id) }))
-      .filter((x): x is { w: WinLossRow; p: Player } => !!x.p)
+      .map((w) => ({ w, p: w }))
       .filter((x) => companyInScope(x.p.company_entity_id))
       // The row's own last deposit, which is the one inside the chosen range —
       // not the roster's all-time figure the Players tab uses.
@@ -603,7 +688,7 @@ export default function PlayersPage() {
       }))
       .filter((r) => matches(r.cells));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [winLoss, players, companyInScope, matches, matchesLastDep, selectedCompanyId, selectedLeaderId]);
+  }, [winLoss, companyInScope, matches, matchesLastDep, selectedCompanyId, selectedLeaderId]);
 
   const rows =
     tab === "players" ? memberRows : tab === "winloss" ? winLossRows : leadRows;
@@ -853,6 +938,7 @@ export default function PlayersPage() {
     // Counters moved, so cached lookups/previews are stale.
     setLeadCache(new Map());
     setSaving(false);
+    setSavedAt((n) => n + 1);
     await Promise.all([refresh(), loadLeadData()]);
 
     const failed = jobs.length - succeeded.size;
@@ -965,19 +1051,17 @@ export default function PlayersPage() {
   // Players has entry rows; Leads is read-only — leads arrive by import.
   const playersReadOnly = !canEnterPlayers;
   const canImportLeads = isLeaderOrAdmin;
-  const inScopeTotal = players.filter((p) => companyInScope(p.company_entity_id)).length;
+  // The server counted them; this is no longer a length of a local array.
+  const inScopeTotal = total;
 
-  // Filter dropdown options — member-code prefixes in scope, and lead-list names.
-  const prefixOptions = useMemo(() => {
-    const s = new Set<string>();
-    for (const p of players) {
-      if (!companyInScope(p.company_entity_id)) continue;
-      const pfx = prefixOfCode(p.username);
-      if (pfx) s.add(pfx);
-    }
-    return [...s].sort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [players, selectedCompanyId, selectedLeaderId, companyInScope]);
+  /**
+   * Prefixes to filter by, taken from the code-series query rather than from
+   * the roster — the browser no longer holds every member to scan.
+   */
+  const prefixOptions = useMemo(
+    () => seriesRows.map((r) => r.prefix).sort(),
+    [seriesRows],
+  );
   const listOptions = useMemo(
     () => [...new Set(leadsData.map((l) => l.list_name))].sort(),
     [leadsData],
@@ -1040,6 +1124,14 @@ export default function PlayersPage() {
             )}
           </p>
         </div>
+
+        {/* How much of the roster is on screen. The rest arrives by scrolling. */}
+        {tab === "players" && total > 0 && (
+          <span className="ml-2 flex items-center gap-1.5 text-[11px] tabular-nums text-muted-foreground">
+            showing {Math.min(pageRows.length, total)} of {total}
+            {loadingPage && <Loader2 className="h-3 w-3 animate-spin" />}
+          </span>
+        )}
 
         <div className="relative ml-2">
           <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -1242,6 +1334,9 @@ export default function PlayersPage() {
       )}
 
       <SheetGrid
+        onLoadMore={tab === "players" ? loadMore : undefined}
+        hasMore={tab === "players" && pageRows.length < total}
+        loadingMore={loadingPage}
         key={tab}
         columns={columns}
         rows={rows}

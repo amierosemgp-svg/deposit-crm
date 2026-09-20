@@ -76,7 +76,7 @@ export function CreatePlayerModal({
 }: Props) {
   const createPlayer = useStore((s) => s.createPlayer);
   const me = useStore((s) => s.me);
-  const players = useStore((s) => s.players);
+  const loadCodeSeries = useStore((s) => s.loadCodeSeries);
   const companiesFn = useStore((s) => s.companies);
   const banksFn = useStore((s) => s.banks);
   const gamesFn = useStore((s) => s.games);
@@ -187,22 +187,25 @@ export function CreatePlayerModal({
    * A prefix nobody has used yet starts at 1, padded to four digits, which is
    * the width every series in the data uses.
    */
-  const codeSeries = useMemo(() => {
+  const [seriesRows, setSeriesRows] = useState<
+    { prefix: string; next: number; width: number; members: number }[]
+  >([]);
+  useEffect(() => {
+    if (!open) return;
     const companyId = Number(companyValue);
-    const series = new Map<string, { next: number; width: number }>();
-    for (const p of players) {
-      if (Number.isFinite(companyId) && p.company_entity_id !== companyId) continue;
-      const m = /^([A-Za-z]+)(\d+)$/.exec(p.username.trim());
-      if (!m) continue;
-      const [, letters, digits] = m;
-      const key = letters.toUpperCase();
-      const at = series.get(key) ?? { next: 0, width: digits.length };
-      at.next = Math.max(at.next, Number(digits) + 1);
-      at.width = Math.max(at.width, digits.length);
-      series.set(key, at);
-    }
-    return series;
-  }, [players, companyValue]);
+    let live = true;
+    void loadCodeSeries(Number.isFinite(companyId) ? companyId : null).then((rows) => {
+      if (live) setSeriesRows(rows);
+    });
+    return () => {
+      live = false;
+    };
+  }, [open, companyValue, loadCodeSeries]);
+
+  const codeSeries = useMemo(
+    () => new Map(seriesRows.map((r) => [r.prefix, { next: r.next, width: r.width }])),
+    [seriesRows],
+  );
 
   const nextCode = useMemo(() => {
     const prefix = form.prefix.trim().toUpperCase();
@@ -216,19 +219,13 @@ export function CreatePlayerModal({
   const memberCode = selectedDist ? previewCode : nextCode;
 
   /**
-   * Scoped to the company, because that is what the database enforces:
-   * players_company_username_key is (company_entity_id, lower(username)). A
-   * global check refuses a perfectly free code because some other casino
-   * happens to use it — with twelve thousand members on file, often.
+   * The series hands out the next free number, so a clash can only happen if
+   * someone else takes it in the seconds before this saves — and the database's
+   * own (company, lower(username)) unique index refuses that, with the error
+   * surfacing on the save. There is nothing useful to check here any more, and
+   * checking meant holding every member in the browser.
    */
-  const usernameTaken = useMemo(() => {
-    const u = memberCode.trim().toLowerCase();
-    const companyId = Number(companyValue);
-    if (!u || !Number.isFinite(companyId)) return false;
-    return players.some(
-      (p) => p.company_entity_id === companyId && p.username.toLowerCase() === u,
-    );
-  }, [memberCode, companyValue, players]);
+  const usernameTaken = false;
 
   const errors = {
     full_name: !form.full_name.trim() ? "Required" : null,

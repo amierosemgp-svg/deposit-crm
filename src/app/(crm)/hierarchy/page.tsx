@@ -411,7 +411,7 @@ export default function HierarchyPage() {
   const entities = useStore((s) => s.entities);
   const companyLeaders = useStore((s) => s.companyLeaders);
   const users = useStore((s) => s.users);
-  const players = useStore((s) => s.players);
+  const playerCounts = useStore((s) => s.playerCounts);
 
   const [entityDialog, setEntityDialog] = useState<EntityDialogState>(null);
   const [userDialog, setUserDialogState] = useState<UserDialogState>(null);
@@ -437,16 +437,16 @@ export default function HierarchyPage() {
     return map;
   }, [users]);
 
-  const playerCountByCompany = useMemo(() => {
-    const map = new Map<number, number>();
-    for (const p of players) {
-      map.set(
-        p.company_entity_id,
-        (map.get(p.company_entity_id) ?? 0) + 1,
-      );
-    }
-    return map;
-  }, [players]);
+  // Counted by the server — one grouped query, rather than shipping every
+  // member to be tallied in the browser.
+  const playerCountByCompany = useMemo(
+    () => new Map(playerCounts.map((c) => [c.company_entity_id, c.members])),
+    [playerCounts],
+  );
+  const playerTotal = useMemo(
+    () => playerCounts.reduce((n, c) => n + c.members, 0),
+    [playerCounts],
+  );
 
   /**
    * Every main company, not just the first one.
@@ -615,8 +615,8 @@ export default function HierarchyPage() {
           {mains.length === 1 ? "Main Company" : "Main Companies"} →{" "}
           {mains.reduce((n, m) => n + leadersOf(m.entity_id).length, 0)}{" "}
           Leaders → {companyCount}{" "}
-          {companyCount === 1 ? "Company" : "Companies"} → {players.length}{" "}
-          {players.length === 1 ? "Player" : "Players"}
+          {companyCount === 1 ? "Company" : "Companies"} → {playerTotal}{" "}
+          {playerTotal === 1 ? "Player" : "Players"}
         </p>
       </div>
 

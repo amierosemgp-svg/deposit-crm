@@ -205,7 +205,7 @@ export default function EntityEditPage() {
   const me = useStore((s) => s.me);
   const entities = useStore((s) => s.entities);
   const users = useStore((s) => s.users);
-  const players = useStore((s) => s.players);
+  const playerCounts = useStore((s) => s.playerCounts);
 
   const entity = entities.find((e) => e.entity_id === id);
   const parent = entities.find((e) => e.entity_id === entity?.parent_entity_id);
@@ -218,9 +218,10 @@ export default function EntityEditPage() {
     () => users.filter((u) => u.entity_id === id).length,
     [users, id],
   );
+  // Counted by the server: the roster is no longer held in the browser.
   const playerCount = useMemo(
-    () => players.filter((p) => p.company_entity_id === id).length,
-    [players, id],
+    () => playerCounts.find((c) => c.company_entity_id === id)?.members ?? 0,
+    [playerCounts, id],
   );
 
   if (!hydrated) {

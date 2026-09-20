@@ -14,6 +14,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { useStore } from "@/lib/store";
+import { useHydratePlayers } from "@/lib/use-players";
 import { formatRM, formatShortDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
@@ -173,6 +174,12 @@ export default function RebatesPage() {
   // Expanded windows (by start) and the payouts loaded for each.
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [payoutsByWindow, setPayoutsByWindow] = useState<Record<string, RebatePayoutView[]>>({});
+  useHydratePlayers(
+    useMemo(
+      () => Object.values(payoutsByWindow).flat().map((r) => r.player_id),
+      [payoutsByWindow],
+    ),
+  );
   const [loadingWindow, setLoadingWindow] = useState<string | null>(null);
   const [generatingWindow, setGeneratingWindow] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);

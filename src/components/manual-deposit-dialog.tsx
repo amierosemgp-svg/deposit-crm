@@ -25,11 +25,9 @@ type Props = {
 };
 
 export function ManualDepositDialog({ open, onOpenChange }: Props) {
-  const players = useStore((s) => s.players);
   const banksFn = useStore((s) => s.banks);
   const createDepositIntent = useStore((s) => s.createDepositIntent);
   const uploadFile = useStore((s) => s.uploadFile);
-  const companyInScope = useStore((s) => s.companyInScope);
   // Subscribe to the scope selectors so eligiblePlayers re-computes if the
   // top-nav company/leader changes while the dialog is open.
   useStore((s) => s.selectedCompanyId);
@@ -70,9 +68,6 @@ export function ManualDepositDialog({ open, onOpenChange }: Props) {
     }
   }
 
-  const eligiblePlayers = players.filter((p) =>
-    companyInScope(p.company_entity_id),
-  );
   const playerGames = (player?.game_accounts ?? []).map((g) => g.game_name);
 
   const amt = Number.parseFloat(amount);
@@ -326,7 +321,6 @@ export function ManualDepositDialog({ open, onOpenChange }: Props) {
       <PlayerPickerSheet
         open={pickerOpen}
         onOpenChange={setPickerOpen}
-        players={eligiblePlayers}
         title="Select player"
         description="Choose the player who made the deposit"
         onSelect={(p) => {

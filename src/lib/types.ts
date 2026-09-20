@@ -316,6 +316,8 @@ export type Deposit = {
 export type WithdrawalStatus = "requested" | "credits_pulled" | "paid" | "failed";
 
 export type Withdrawal = {
+  /** The member's company, joined on so screens can scope without a roster. */
+  company_entity_id?: number | null;
   withdrawal_id: number;
   player_id: number;
   /** 0 when withdraw_all is set — not known until the credits are pulled. */

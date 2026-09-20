@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Search, UserPlus, Users } from "lucide-react";
 import {
   Sheet,
@@ -54,8 +54,14 @@ export function PlayerPickerSheet({
   title = "Select player",
   description,
 }: Props) {
-  const allPlayers = useStore((s) => s.players);
-  const source = players ?? allPlayers;
+  const searchPlayers = useStore((s) => s.searchPlayers);
+  const selectedCompanyId = useStore((s) => s.selectedCompanyId);
+  /**
+   * Given an explicit list, filter it here — the caller has already decided
+   * who is eligible and it is short. Otherwise the roster is far too large to
+   * hold, so the typing is sent to the server instead.
+   */
+  const [found, setFound] = useState<Player[]>([]);
 
   const [query, setQuery] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
@@ -67,12 +73,31 @@ export function PlayerPickerSheet({
     if (!open) setQuery("");
   }
 
+  useEffect(() => {
+    if (players || !open) return;
+    let live = true;
+    const timer = setTimeout(() => {
+      void searchPlayers(query.trim(), {
+        companyId: selectedCompanyId,
+        limit: 50,
+      }).then((rows) => {
+        if (live) setFound(rows);
+      });
+    }, 200);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [players, open, query, searchPlayers, selectedCompanyId]);
+
   const results = useMemo(() => {
+    const source = players ?? found;
     const q = norm(query);
+    // A server result is already matched; an explicit list still needs it.
     const matched =
-      q === "" ? source : source.filter((p) => playerHaystack(p).includes(q));
+      !players || q === "" ? source : source.filter((p) => playerHaystack(p).includes(q));
     return [...matched].sort((a, b) => a.full_name.localeCompare(b.full_name));
-  }, [source, query]);
+  }, [players, found, query]);
 
   function pick(p: Player) {
     if (p.status === "suspended") return;
@@ -118,9 +143,9 @@ export function PlayerPickerSheet({
               <div className="flex flex-col items-center gap-2 py-16 text-center">
                 <Users className="h-7 w-7 text-muted-foreground/50" />
                 <p className="text-sm text-muted-foreground">
-                  {source.length === 0
-                    ? "No players yet."
-                    : `No players match “${query}”.`}
+                  {query.trim()
+                    ? `No players match “${query}”.`
+                    : "No players yet."}
                 </p>
                 <Button
                   size="sm"

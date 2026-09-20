@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useStore } from "@/lib/store";
+import { useHydratePlayers } from "@/lib/use-players";
 import { formatRM, formatShortDateTime, formatRelative, initialsOf, maskPhone } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import {
@@ -95,6 +96,8 @@ export function PlayerProfileModal({
   const player = useStore((s) =>
     playerId ? s.players.find((p) => p.player_id === playerId) : undefined,
   );
+  // The profile may be opened from a row whose member we have never fetched.
+  useHydratePlayers(useMemo(() => [playerId, player?.upline_player_id], [playerId, player?.upline_player_id]));
   const gameCredits = useStore((s) => s.gameCredits);
   const deposits = useStore((s) => s.deposits);
   const withdrawals = useStore((s) => s.withdrawals);

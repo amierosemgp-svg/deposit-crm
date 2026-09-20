@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
+import { useHydratePlayers } from "@/lib/use-players";
+import type { Player } from "@/lib/types";
 import {
   formatRM,
   formatDateTime,
@@ -96,11 +98,12 @@ export default function GameTransferPage() {
 
   const transfers = useStore((s) => s.gameTransfers);
   const hydrated = useStore((s) => s.hydrated);
-  const players = useStore((s) => s.players);
+  const searchPlayers = useStore((s) => s.searchPlayers);
   const getBalance = useStore((s) => s.getCreditBalance);
   const createTransfer = useStore((s) => s.createGameTransfer);
   const reprocessTransfer = useStore((s) => s.reprocessGameTransfer);
   const playerById = useStore((s) => s.playerById);
+  useHydratePlayers(useMemo(() => transfers.map((t) => t.player_id), [transfers]));
   const userName = useStore((s) => s.userName);
   const gamesFn = useStore((s) => s.games);
   const me = useStore((s) => s.me);
@@ -117,19 +120,25 @@ export default function GameTransferPage() {
       ? toGameSel
       : (games.find((g) => g !== fromGame) ?? "");
 
-  const playerMatches = useMemo(() => {
-    if (!playerQuery) return [];
-    const q = playerQuery.toLowerCase();
-    return players
-      .filter(
-        (p) =>
-          (p.full_name.toLowerCase().includes(q) ||
-            p.username.toLowerCase().includes(q)) &&
-          companyInScope(p.company_entity_id),
-      )
-      .slice(0, 5);
+  /** Matched by the server — the roster is not held in the browser. */
+  const [matched, setMatched] = useState<Player[]>([]);
+  const playerMatches = playerQuery ? matched : [];
+  useEffect(() => {
+    if (!playerQuery) return;
+    let live = true;
+    const timer = setTimeout(() => {
+      void searchPlayers(playerQuery, { companyId: selectedCompanyId, limit: 5 }).then(
+        (rows) => {
+          if (live) setMatched(rows.filter((p) => companyInScope(p.company_entity_id)));
+        },
+      );
+    }, 200);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playerQuery, players, selectedCompanyId, selectedLeaderId]);
+  }, [playerQuery, searchPlayers, selectedCompanyId, selectedLeaderId]);
 
   const scopedTransfers = useMemo(
     () =>

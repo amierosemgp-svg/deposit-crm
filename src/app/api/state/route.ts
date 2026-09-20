@@ -1,4 +1,4 @@
-import { aliasedTable, and, asc, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
+import { aliasedTable, and, asc, desc, eq, getTableColumns, gte, inArray, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   bankAccounts,
@@ -52,33 +52,25 @@ let lastSweptAt = 0;
  * Returns every collection the UI needs, filtered by the user's role scope.
  * The frontend polls this (10s) for live updates.
  */
-export async function GET(request: Request) {
+export async function GET() {
   try {
     const user = await requireUser();
 
-    // The player list is 98% of this payload — 2,625 rows, 1.5 MB, and the UI
-    // polls every 10 seconds. Re-sending an unchanged roster six times a minute
-    // per open tab is what put the database 713% over its egress quota.
-    //
-    // So the client tells us the version it holds and we omit the list when it
-    // is still current. `players.updated_at` is trigger-maintained, so this
-    // cannot serve a stale roster as fresh: any write from any path moves it.
-    // count(*) is in the version because a DELETE lowers no timestamp.
-    const [playersStamp] = await db
-      .select({
-        max: sql<string | null>`max(${players.updated_at})`,
-        count: sql<number>`count(*)::int`,
-      })
-      .from(players);
-    // The viewer's own scope is part of the version: the stamp above only
-    // answers "did the players table change", and a user moved to a different
-    // company would otherwise keep serving themselves a roster they can no
-    // longer see.
-    const scopeKey =
-      user.companyIds === null ? "all" : [...user.companyIds].sort().join(".");
-    const playersVersion = `${playersStamp?.max ?? "0"}:${playersStamp?.count ?? 0}:${scopeKey}`;
-    const playersUnchanged =
-      new URL(request.url).searchParams.get("pv") === playersVersion;
+    /**
+     * The roster is no longer sent here at all.
+     *
+     * It used to be the whole payload, and a version stamp kept it from being
+     * re-sent while unchanged. That held up to a few hundred members. Importing
+     * Pokercity's master list took it to 12,280 — 8 MB of JSON — and the stamp
+     * stopped helping, because completing a deposit writes players.total_deposits
+     * and the trigger moves updated_at: during a shift the roster changes every
+     * minute or two, so almost every ten-second poll shipped all 8 MB again.
+     *
+     * Nothing ever needed the whole list. A sheet needs the members on the rows
+     * it drew, a search box needs what matches the typing, and a hierarchy page
+     * needs a count. Those are GET /api/players (paged, searchable, and
+     * hydrate-by-id) and the counts below.
+     */
 
     // Lazy sweeps: settle any bank transfer whose confirmation window expired,
     // restart any game transfer the agent has gone quiet on, and settle any
@@ -133,26 +125,29 @@ export async function GET(request: Request) {
     // The ids are needed either way — they scope the withdrawals, credits,
     // transfers and bonuses below — but they never leave the server, so when
     // the client's roster is current we fetch the ids alone and skip the 1.5 MB.
-    let scopedPlayers: (typeof players.$inferSelect)[] = [];
+    // The ids never leave the server: they scope the withdrawals, credits,
+    // transfers and bonuses below.
     let playerIds: number[] = [];
-    if (canSeePlayers && playersUnchanged) {
+    if (canSeePlayers) {
       const idRows = await db
         .select({ player_id: players.player_id })
         .from(players)
         .where(playerScope);
       playerIds = idRows.map((p) => p.player_id);
-    } else if (canSeePlayers) {
-      scopedPlayers = await db
-        .select()
-        .from(players)
-        .where(playerScope)
-        // Without an explicit order Postgres returns heap order, and an
-        // UPDATE writes a new tuple at the end of the heap — so editing a
-        // player made them jump position in the list. player_id breaks ties
-        // because a bulk import gives every row the same registration_date.
-        .orderBy(desc(players.registration_date), desc(players.player_id));
-      playerIds = scopedPlayers.map((p) => p.player_id);
     }
+
+    // How many members each company holds — what the hierarchy pages were
+    // counting by walking the roster.
+    const playerCounts = canSeePlayers
+      ? await db
+          .select({
+            company_entity_id: players.company_entity_id,
+            members: sql<number>`count(*)::int`,
+          })
+          .from(players)
+          .where(playerScope)
+          .groupBy(players.company_entity_id)
+      : [];
 
     // CS agents work a rolling day: transactions older than 24h are not
     // theirs to browse. Leaders and admins see the full window.
@@ -194,10 +189,22 @@ export async function GET(request: Request) {
         )
         .orderBy(desc(deposits.created_at))
         .limit(500),
+      /**
+       * Withdrawals carry the member's company on the row.
+       *
+       * A withdrawal belongs to a company only through its player, and the
+       * screens that scope by company used to look that up in the roster. The
+       * roster is no longer shipped, and this is one join rather than twelve
+       * thousand rows.
+       */
       playerIds.length
         ? db
-            .select()
+            .select({
+              ...getTableColumns(withdrawals),
+              company_entity_id: players.company_entity_id,
+            })
             .from(withdrawals)
+            .innerJoin(players, eq(players.player_id, withdrawals.player_id))
             .where(
               and(
                 inArray(withdrawals.player_id, playerIds),
@@ -207,7 +214,15 @@ export async function GET(request: Request) {
             .orderBy(desc(withdrawals.created_at))
             .limit(500)
         : user.companyIds === null
-          ? db.select().from(withdrawals).orderBy(desc(withdrawals.created_at)).limit(500)
+          ? db
+              .select({
+                ...getTableColumns(withdrawals),
+                company_entity_id: players.company_entity_id,
+              })
+              .from(withdrawals)
+              .innerJoin(players, eq(players.player_id, withdrawals.player_id))
+              .orderBy(desc(withdrawals.created_at))
+              .limit(500)
           : Promise.resolve([]),
       playerIds.length
         ? db.select().from(gameCredits).where(inArray(gameCredits.player_id, playerIds))
@@ -447,10 +462,8 @@ export async function GET(request: Request) {
       entities: entityTree,
       companyLeaders: ownership,
       users: allUsers,
-      // Omitted, not nulled, when unchanged — the store shallow-merges, so an
-      // absent key keeps the roster it already has.
-      ...(playersUnchanged ? {} : { players: scopedPlayers }),
-      playersVersion,
+      // Per-company member counts, in place of the roster itself.
+      playerCounts,
       deposits: scopedDeposits,
       withdrawals: scopedWithdrawals,
       gameCredits: scopedCredits,

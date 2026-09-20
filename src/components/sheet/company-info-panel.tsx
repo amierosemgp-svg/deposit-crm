@@ -162,7 +162,6 @@ export function CompanyInfoPanel({ range }: { range: DateRange }) {
   const botHealth = useStore((s) => s.botHealth);
   const deposits = useStore((s) => s.deposits);
   const withdrawals = useStore((s) => s.withdrawals);
-  const players = useStore((s) => s.players);
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
   const companyInScope = useStore((s) => s.companyInScope);
   useStore((s) => s.selectedLeaderId);
@@ -259,14 +258,13 @@ export function CompanyInfoPanel({ range }: { range: DateRange }) {
         depositCount.set(matched, (depositCount.get(matched) ?? 0) + 1);
       }
     }
-    // Withdrawals carry no company of their own — scope through the player.
-    const playerCompany = new Map(players.map((p) => [p.player_id, p.company_entity_id]));
+    // The company rides on the withdrawal row now — see /api/state.
     let wdTotal = 0;
     let wdCount = 0;
     for (const w of withdrawals) {
       if (w.status === "failed") continue;
       if (!inMonth(w.created_at)) continue;
-      if (!companyInScope(playerCompany.get(w.player_id) ?? null)) continue;
+      if (!companyInScope(w.company_entity_id ?? null)) continue;
       wdTotal += w.status === "paid" ? w.credit_pulled_amount || w.requested_amount : w.requested_amount;
       wdCount++;
     }
@@ -285,7 +283,7 @@ export function CompanyInfoPanel({ range }: { range: DateRange }) {
       wdCount,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bankAccounts, boAccounts, botHealth, deposits, withdrawals, players, range, selectedCompanyId, companyInScope]);
+  }, [bankAccounts, boAccounts, botHealth, deposits, withdrawals, range, selectedCompanyId, companyInScope]);
 
   const monthLabel = rangeLabel(range);
 

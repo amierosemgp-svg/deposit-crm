@@ -29,31 +29,22 @@ type Props = {
 const norm = (s: string | null | undefined) =>
   (s ?? "").toLowerCase().replace(/\s+/g, " ").trim();
 
-function playerHaystack(p: Player): string {
-  return [
-    p.full_name,
-    p.username,
-    p.telegram_username,
-    p.contact_number,
-    p.wechat_id,
-    ...(p.bank_accounts ?? []).flatMap((b) => [
-      b.account_holder,
-      b.account_number,
-      b.bank_name,
-    ]),
-    ...(p.game_accounts ?? []).map((g) => g.game_username),
-  ]
-    .map(norm)
-    .join(" ");
-}
-
 export function AssignPlayerSheet({
   depositIds,
   open,
   onOpenChange,
   onAssigned,
 }: Props) {
-  const players = useStore((s) => s.players);
+  const searchPlayers = useStore((s) => s.searchPlayers);
+  const selectedCompanyId = useStore((s) => s.selectedCompanyId);
+  /**
+   * Candidates for this deposit, fetched.
+   *
+   * Two searches run: the bank holder's name, which is who the deposit almost
+   * always belongs to, and whatever has been typed. The roster is far too
+   * large to sift through in the browser.
+   */
+  const [players, setPlayers] = useState<Player[]>([]);
   const deposits = useStore((s) => s.deposits);
   const updateDraft = useStore((s) => s.updateDepositDraft);
 
@@ -126,19 +117,41 @@ export function AssignPlayerSheet({
     };
   }, [targets, query]);
 
+  const holderQuery = useMemo(
+    () => (targets[0]?.bank_account_holder ?? "").trim(),
+    [targets],
+  );
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    const timer = setTimeout(() => {
+      const terms = [query.trim(), holderQuery].filter(Boolean);
+      void Promise.all(
+        (terms.length ? terms : [""]).map((t) =>
+          searchPlayers(t, { companyId: selectedCompanyId, limit: 50 }),
+        ),
+      ).then((lists) => {
+        if (!live) return;
+        const byId = new Map<number, Player>();
+        for (const list of lists) for (const p of list) byId.set(p.player_id, p);
+        setPlayers([...byId.values()]);
+      });
+    }, 200);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [open, query, holderQuery, searchPlayers, selectedCompanyId]);
+
   const results = useMemo(() => {
-    const q = norm(query);
-    const matched =
-      q === ""
-        ? players
-        : players.filter((p) => playerHaystack(p).includes(q));
-    return [...matched].sort((a, b) => {
+    // Already matched by the server; ordering is all that is left.
+    return [...players].sort((a, b) => {
       const sa = suggestedIds.has(a.player_id) ? 1 : 0;
       const sb = suggestedIds.has(b.player_id) ? 1 : 0;
       if (sa !== sb) return sb - sa;
       return a.full_name.localeCompare(b.full_name);
     });
-  }, [players, query, suggestedIds]);
+  }, [players, suggestedIds]);
 
   async function handleAssign(player: Player) {
     if (assigningId !== null || targets.length === 0) return;

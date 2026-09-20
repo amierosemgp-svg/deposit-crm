@@ -75,10 +75,8 @@ type StateResponse = {
   entities: Entity[];
   companyLeaders: CompanyLeader[];
   users: User[];
-  /** Absent when the roster we already hold is current — see playersVersion. */
-  players?: Player[];
-  /** Opaque version of the player roster; echoed back on the next poll. */
-  playersVersion: string;
+  /** Members per company. The roster itself is no longer sent — see below. */
+  playerCounts: { company_entity_id: number; members: number }[];
   deposits: Deposit[];
   withdrawals: Withdrawal[];
   gameCredits: GameCredit[];
@@ -103,7 +101,19 @@ type Store = {
   /** Who currently runs each company — a company may have more than one. */
   companyLeaders: CompanyLeader[];
   users: User[];
+  /**
+   * Members we have actually looked at — NOT the roster.
+   *
+   * Every member used to live here, shipped whole by /api/state. At twelve
+   * thousand that was 8 MB re-sent on most polls. This is now a cache: rows the
+   * sheets drew, results a search returned, a profile that was opened. Treat it
+   * as "what we happen to know", never as "everyone" — anything that needs to
+   * look across the whole roster must ask the server (searchPlayers,
+   * listPlayers, playerCounts).
+   */
   players: Player[];
+  /** Members per company, for the counts the hierarchy pages show. */
+  playerCounts: { company_entity_id: number; members: number }[];
   deposits: Deposit[];
   withdrawals: Withdrawal[];
   gameCredits: GameCredit[];
@@ -391,6 +401,39 @@ type Store = {
     paid_from_account_id?: number | null;
     paid_from_cash_entity_id?: number | null;
   }) => Promise<MutationResult>;
+  /**
+   * Make sure these members are in the cache, fetching the ones that are not.
+   *
+   * What a sheet calls after drawing its rows: it knows the player ids on the
+   * page and needs their codes, game logins and payout accounts. Safe to call
+   * on every render — ids already held cost nothing.
+   */
+  hydratePlayers: (ids: (number | null | undefined)[]) => Promise<void>;
+  /**
+   * Search the roster on the server. Results are merged into the cache, so a
+   * member picked from a search is then available to every lookup.
+   */
+  searchPlayers: (
+    q: string,
+    opts?: { companyId?: number | null; limit?: number },
+  ) => Promise<Player[]>;
+  /** One page of the roster, with the total, for a list that pages. */
+  listPlayers: (opts: {
+    q?: string;
+    companyId?: number | null;
+    limit?: number;
+    offset?: number;
+    /** Member-code series, e.g. "GA". */
+    prefix?: string;
+    /** "never", "within:30", "over:90". */
+    lastDep?: string;
+    /** Members introduced by this player. */
+    uplineId?: number;
+  }) => Promise<{ players: Player[]; total: number }>;
+  /** The member-code series in use, and what each would issue next. */
+  loadCodeSeries: (
+    companyId?: number | null,
+  ) => Promise<{ prefix: string; next: number; width: number; members: number }[]>;
   deleteExpense: (expenseId: number) => Promise<MutationResult>;
   /**
    * Remove a worksheet row keyed wrong — a mistyped figure, or the same one
@@ -474,8 +517,24 @@ type Store = {
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let knownDepositIds: Set<number> | null = null;
-/** Roster version the store currently holds; sent back to skip re-fetching it. */
-let knownPlayersVersion: string | null = null;
+
+/**
+ * Fold freshly fetched members into the cache, newest copy winning.
+ *
+ * Replaces rather than appends on a repeat id, so a member edited in one screen
+ * is not left stale for another. The cache is deliberately unbounded within a
+ * session: a shift touches a few hundred members, not twelve thousand.
+ */
+function mergePlayers(
+  set: (partial: Partial<Store>) => void,
+  get: () => Store,
+  incoming: Player[],
+): void {
+  if (!incoming.length) return;
+  const byId = new Map(get().players.map((p) => [p.player_id, p]));
+  for (const p of incoming) byId.set(p.player_id, p);
+  set({ players: [...byId.values()] });
+}
 
 export const useStore = create<Store>((set, get) => {
   async function mutate(
@@ -497,6 +556,7 @@ export const useStore = create<Store>((set, get) => {
     companyLeaders: [],
     users: [],
     players: [],
+    playerCounts: [],
     deposits: [],
     withdrawals: [],
     gameCredits: [],
@@ -546,13 +606,7 @@ export const useStore = create<Store>((set, get) => {
     },
 
     refresh: async () => {
-      // Echo the roster version we hold: the server omits the 1.5 MB player
-      // list when it still matches, which is nearly every poll.
-      const res = await api<StateResponse>(
-        knownPlayersVersion
-          ? `/api/state?pv=${encodeURIComponent(knownPlayersVersion)}`
-          : "/api/state",
-      );
+      const res = await api<StateResponse>("/api/state");
       if (!res.ok) {
         if (res.status === 401 && typeof window !== "undefined") {
           // The token may still verify at the Edge proxy (e.g. it was killed by
@@ -583,9 +637,8 @@ export const useStore = create<Store>((set, get) => {
         }
       }
       knownDepositIds = incoming;
-      knownPlayersVersion = data.playersVersion;
-      // `data` omits `players` entirely when unchanged, and zustand merges
-      // shallowly — so the roster already in the store survives untouched.
+      // `data` carries no players, and zustand merges shallowly, so the cache
+      // of members we have already looked at survives the poll untouched.
       set({ ...data, deposits: flagged, hydrated: true });
     },
 
@@ -1083,6 +1136,51 @@ export const useStore = create<Store>((set, get) => {
 
     createExpense: (input) =>
       mutate("/api/expenses", { method: "POST", body: JSON.stringify(input) }),
+    hydratePlayers: async (ids) => {
+      const want = [...new Set(ids.filter((id): id is number => typeof id === "number" && id > 0))];
+      if (!want.length) return;
+      const have = new Set(get().players.map((p) => p.player_id));
+      const missing = want.filter((id) => !have.has(id));
+      if (!missing.length) return;
+      // One request per 500, the server's cap.
+      for (let i = 0; i < missing.length; i += 500) {
+        const chunk = missing.slice(i, i + 500);
+        const res = await api<{ players: Player[] }>(`/api/players?ids=${chunk.join(",")}`);
+        if (!res.ok || !res.data) return;
+        mergePlayers(set, get, res.data.players);
+      }
+    },
+
+    searchPlayers: async (q, opts) => {
+      const qs = new URLSearchParams({ q, limit: String(opts?.limit ?? 25) });
+      if (opts?.companyId != null) qs.set("company", String(opts.companyId));
+      const res = await api<{ players: Player[] }>(`/api/players?${qs}`);
+      if (!res.ok || !res.data) return [];
+      mergePlayers(set, get, res.data.players);
+      return res.data.players;
+    },
+
+    listPlayers: async ({ q, companyId, limit = 100, offset = 0, prefix, lastDep, uplineId }) => {
+      const qs = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+      if (q) qs.set("q", q);
+      if (companyId != null) qs.set("company", String(companyId));
+      if (prefix) qs.set("prefix", prefix);
+      if (lastDep) qs.set("last_dep", lastDep);
+      if (uplineId != null) qs.set("upline", String(uplineId));
+      const res = await api<{ players: Player[]; total: number }>(`/api/players?${qs}`);
+      if (!res.ok || !res.data) return { players: [], total: 0 };
+      mergePlayers(set, get, res.data.players);
+      return { players: res.data.players, total: res.data.total };
+    },
+
+    loadCodeSeries: async (companyId) => {
+      const qs = companyId != null ? `?company=${companyId}` : "";
+      const res = await api<{
+        series: { prefix: string; next: number; width: number; members: number }[];
+      }>(`/api/players/code-series${qs}`);
+      return res.ok && res.data ? res.data.series : [];
+    },
+
     deleteExpense: (expenseId) =>
       mutate(`/api/expenses/${expenseId}`, { method: "DELETE" }),
 

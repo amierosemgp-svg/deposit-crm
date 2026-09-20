@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
+import type { Player } from "@/lib/types";
 import { usePlayerProfile } from "@/components/player-name-link";
 import { initialsOf, formatRM } from "@/lib/format";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -27,28 +28,41 @@ export function PlayerSearch() {
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const players = useStore((s) => s.players);
+  const searchPlayers = useStore((s) => s.searchPlayers);
   const entityName = useStore((s) => s.entityName);
   const companyInScope = useStore((s) => s.companyInScope);
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
   const selectedLeaderId = useStore((s) => s.selectedLeaderId);
   const { openPlayer } = usePlayerProfile();
 
-  const results = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return [];
-    return players
-      .filter(
-        (p) =>
-          companyInScope(p.company_entity_id) &&
-          (p.full_name.toLowerCase().includes(q) ||
-            p.username.toLowerCase().includes(q) ||
-            (p.telegram_username ?? "").toLowerCase().includes(q) ||
-            (p.contact_number ?? "").toLowerCase().includes(q)),
-      )
-      .slice(0, MAX_RESULTS);
+  /**
+   * Asked of the server, not filtered locally.
+   *
+   * The roster is far too large to hold in the browser, and this box is the
+   * one thing CS uses constantly — so it debounces the typing and shows what
+   * comes back, matching on member code, name, phone, Telegram and game login.
+   */
+  const [fetched, setFetched] = useState<Player[]>([]);
+  // Derived, so clearing the box empties the list without a round trip or a
+  // write-back from an effect.
+  const results = query.trim() ? fetched : [];
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) return;
+    let live = true;
+    const timer = setTimeout(() => {
+      void searchPlayers(q, { companyId: selectedCompanyId, limit: MAX_RESULTS }).then(
+        (found) => {
+          if (live) setFetched(found.filter((p) => companyInScope(p.company_entity_id)));
+        },
+      );
+    }, 200);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [players, query, selectedCompanyId, selectedLeaderId]);
+  }, [query, searchPlayers, selectedCompanyId, selectedLeaderId]);
 
   // Close on outside click or Escape.
   useEffect(() => {

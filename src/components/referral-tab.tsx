@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
+import type { Player } from "@/lib/types";
 import { formatRM, formatDateTime } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { PlayerNameLink } from "@/components/player-name-link";
@@ -29,7 +30,9 @@ export function ReferralTab({ playerId }: { playerId: number }) {
   const [downlineQuery, setDownlineQuery] = useState("");
   const busy = linkingId !== null || removing;
 
-  const players = useStore((s) => s.players);
+  const searchPlayers = useStore((s) => s.searchPlayers);
+  const listPlayers = useStore((s) => s.listPlayers);
+  const selectedCompanyId = useStore((s) => s.selectedCompanyId);
   const playerById = useStore((s) => s.playerById);
   const companyInScope = useStore((s) => s.companyInScope);
   const isViewer = useStore((s) => s.me?.role === "viewer");
@@ -40,42 +43,52 @@ export function ReferralTab({ playerId }: { playerId: number }) {
     ? playerById(player.upline_player_id)
     : undefined;
 
-  const downlines = useMemo(
-    () => players.filter((p) => p.upline_player_id === playerId),
-    [players, playerId],
+  /** Who this member introduced — asked of the server, not sifted locally. */
+  const [downlines, setDownlines] = useState<Player[]>([]);
+  useEffect(() => {
+    let live = true;
+    void listPlayers({ uplineId: playerId, limit: 200 }).then((res) => {
+      if (live) setDownlines(res.players);
+    });
+    return () => {
+      live = false;
+    };
+  }, [listPlayers, playerId, linkingId, removing]);
+
+  /** Candidates for "who referred them" and "add someone they referred". */
+  const [found, setFound] = useState<Player[]>([]);
+  const [foundFor, setFoundFor] = useState("");
+  const activeQuery = addingDownline ? downlineQuery : query;
+  useEffect(() => {
+    const q = activeQuery.trim();
+    if (!q) return;
+    let live = true;
+    const timer = setTimeout(() => {
+      void searchPlayers(q, { companyId: selectedCompanyId, limit: 12 }).then((rows) => {
+        if (!live) return;
+        setFound(rows);
+        setFoundFor(q);
+      });
+    }, 200);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [activeQuery, searchPlayers, selectedCompanyId]);
+
+  const candidates = useMemo(
+    () =>
+      activeQuery.trim() && foundFor === activeQuery.trim()
+        ? found.filter((p) => p.player_id !== playerId && companyInScope(p.company_entity_id))
+        : [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [found, foundFor, activeQuery, playerId, selectedCompanyId],
   );
 
-  const matches = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return [];
-    return players
-      .filter(
-        (p) =>
-          p.player_id !== playerId &&
-          companyInScope(p.company_entity_id) &&
-          (p.full_name.toLowerCase().includes(q) ||
-            p.username.toLowerCase().includes(q)),
-      )
-      .slice(0, 6);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, players, playerId]);
-
-  const downlineMatches = useMemo(() => {
-    const q = downlineQuery.trim().toLowerCase();
-    if (!q) return [];
-    return players
-      .filter(
-        (p) =>
-          p.player_id !== playerId &&
-          // Already this player's downline — nothing to do.
-          p.upline_player_id !== playerId &&
-          companyInScope(p.company_entity_id) &&
-          (p.full_name.toLowerCase().includes(q) ||
-            p.username.toLowerCase().includes(q)),
-      )
-      .slice(0, 6);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [downlineQuery, players, playerId]);
+  const matches = addingDownline ? [] : candidates.slice(0, 6);
+  const downlineMatches = addingDownline
+    ? candidates.filter((p) => p.upline_player_id !== playerId).slice(0, 6)
+    : [];
 
   /**
    * Point another player's upline at this one. Same endpoint as setting an

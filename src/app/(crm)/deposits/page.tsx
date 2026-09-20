@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
+import { useHydratePlayers } from "@/lib/use-players";
 import {
   formatDuration,
   formatRM,
@@ -135,6 +136,8 @@ export default function DepositsPage() {
   const companiesFn = useStore((s) => s.companies);
   const banksFn = useStore((s) => s.banks);
   const playerById = useStore((s) => s.playerById);
+  // The members named on these rows — the roster is not held locally.
+  useHydratePlayers(useMemo(() => deposits.map((d) => d.player_id), [deposits]));
   const setAssignment = useStore((s) => s.setAssignment);
   const bonusPlanById = useStore((s) => s.bonusPlanById);
   const botCommands = useStore((s) => s.botCommands);

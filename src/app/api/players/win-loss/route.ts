@@ -85,6 +85,10 @@ export async function GET(request: Request) {
          GROUP BY 1
       )
       SELECT p.player_id,
+             -- Carried on the row so the caller needs no roster to name it.
+             p.username,
+             p.full_name,
+             p.company_entity_id,
              coalesce(dep.money_in, 0)         AS money_in,
              coalesce(dep.deposit_count, 0)    AS deposit_count,
              coalesce(dep.bonus, 0)            AS bonus,

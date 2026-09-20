@@ -578,6 +578,8 @@ export default function TransactionsPage() {
   const rejectWithdrawal = useStore((s) => s.rejectWithdrawal);
   const reprocessGameTransfer = useStore((s) => s.reprocessGameTransfer);
   const deleteExpense = useStore((s) => s.deleteExpense);
+  const hydratePlayers = useStore((s) => s.hydratePlayers);
+  const searchPlayers = useStore((s) => s.searchPlayers);
   const deleteDeposit = useStore((s) => s.deleteDeposit);
   const deleteWithdrawal = useStore((s) => s.deleteWithdrawal);
   const deleteFreeCredit = useStore((s) => s.deleteFreeCredit);
@@ -751,6 +753,27 @@ export default function TransactionsPage() {
     },
     [range.from, range.to, selectedCompanyId],
   );
+  /**
+   * Pull in the members on the rows we just drew.
+   *
+   * The roster no longer arrives with the state, so a sheet knows the player id
+   * on each row but not the member's code, logins or payout accounts until they
+   * are fetched. One request covers a whole page and already-known ids cost
+   * nothing, so this can run whenever the rows change.
+   */
+  useEffect(() => {
+    const ids = new Set<number>();
+    const take = (v: unknown) => {
+      const id = (v as { player_id?: number | null } | undefined)?.player_id;
+      if (typeof id === "number") ids.add(id);
+    };
+    for (const sheet of Object.values(rangeRows)) for (const r of sheet?.rows ?? []) take(r);
+    for (const d of deposits) take(d);
+    for (const w of withdrawals) take(w);
+    for (const t of gameTransfers) take(t);
+    if (ids.size) void hydratePlayers([...ids]);
+  }, [rangeRows, deposits, withdrawals, gameTransfers, hydratePlayers]);
+
   /** Rebates are generated on their own page, so they have no range to fetch. */
   const RANGE_SHEETS = useMemo<TabKey[]>(
     () => ["deposit", "withdrawal", "transfer", "freecredit", "leaderwithdrawal", "leadertransfer", "expense"],
@@ -850,10 +873,19 @@ export default function TransactionsPage() {
    * list opens the same Create player form without losing the row, and the new
    * code drops into the cell that asked for it.
    */
+  /**
+   * The Member Code list is fetched, not filtered in the browser.
+   *
+   * Pokercity alone has 12,280 members; shipping them to filter locally is what
+   * made the app crawl. `memberSuggestions` is now only what the cell shows
+   * before the first reply — the members already on screen — plus the command
+   * row, which is never fetched.
+   */
   const memberSuggestions = useMemo<SheetSuggestion[]>(
     () => [
       ...players
         .filter((p) => companyInScope(p.company_entity_id))
+        .slice(0, 25)
         .map((p) => ({ value: p.username, hint: p.full_name })),
       ...(isViewer
         ? []
@@ -868,6 +900,27 @@ export default function TransactionsPage() {
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [players, selectedCompanyId, selectedLeaderId, isViewer],
+  );
+
+  /** Server-side search for any Member Code cell, on whichever sheet. */
+  const memberQuery = useCallback(
+    async (query: string): Promise<SheetSuggestion[]> => {
+      const found = await searchPlayers(query, { companyId: selectedCompanyId, limit: 25 });
+      return found.map((p) => ({
+        value: p.username,
+        hint: p.full_name === p.username ? "" : p.full_name,
+      }));
+    },
+    [searchPlayers, selectedCompanyId],
+  );
+
+  const suggestionQuery = useCallback(
+    (rowIndex: number, colIndex: number) => {
+      const memberCol = (COL[tab] as Record<string, number | undefined>).member;
+      return colIndex === memberCol ? memberQuery : undefined;
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tab, memberQuery],
   );
 
   const MODE_SUGGESTIONS = useMemo(
@@ -3313,6 +3366,33 @@ export default function TransactionsPage() {
             : d,
         )
       : draftsRaw;
+
+    /**
+     * Resolve any member code we have not met before saving.
+     *
+     * Codes usually arrive through the typeahead, which caches whatever it
+     * returned. A pasted code, or one typed faster than the debounce, would
+     * otherwise parse as "unknown member" purely because the browser had never
+     * been told about them — the roster is no longer held locally.
+     */
+    const memberCol = (COL[tab] as Record<string, number | undefined>).member;
+    if (memberCol !== undefined) {
+      const unknown = [
+        ...new Set(
+          drafts
+            .map((d) => d[memberCol]?.trim() ?? "")
+            .filter((code) => code && !playerByCode.has(code.toLowerCase())),
+        ),
+      ];
+      if (unknown.length) {
+        await Promise.all(
+          unknown.map((code) =>
+            searchPlayers(code, { companyId: selectedCompanyId, limit: 5 }),
+          ),
+        );
+      }
+    }
+
     const jobs = drafts
       .map((d, i) => ({ d, i, parsed: parseDraft(d) }))
       .filter((j) => !isBlankDraft(tab, j.d) && j.parsed.ok) as Array<{
@@ -3390,7 +3470,7 @@ export default function TransactionsPage() {
       toast.warning(`${w} — saved, waiting at Processing.`, { duration: 10_000 });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [saving, isViewer, draftsRaw, parseDraft, tab, commitErrors, draftKey, refresh, loadLedgers, loadRangeRows]);
+  }, [saving, isViewer, draftsRaw, parseDraft, tab, commitErrors, draftKey, refresh, loadLedgers, loadRangeRows, playerByCode, searchPlayers, selectedCompanyId]);
 
   // Cmd/Ctrl+S saves the ready entry rows from anywhere on the page — and
   // preventDefault stops the browser's own "save this page" dialog.
@@ -4070,6 +4150,7 @@ export default function TransactionsPage() {
         onCommittedEdit={onCommittedEdit}
         onSelectedRowsChange={setSelectedIds}
         draftSuggestions={draftSuggestions}
+        suggestionQuery={suggestionQuery}
         onSuggestionAction={onSuggestionAction}
         committedSuggestions={committedSuggestions}
         onEditStart={handleEditStart}

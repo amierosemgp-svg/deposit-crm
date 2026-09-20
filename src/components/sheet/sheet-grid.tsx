@@ -318,6 +318,17 @@ type EditorProps = {
   onPick: (value: string, move: "down" | "right" | "left" | "up" | "none") => void;
   /** Run an `action` suggestion. Nothing is written; the edit is abandoned. */
   onAction: (value: string, typed: string) => void;
+  /**
+   * Ask the owner for suggestions matching what has been typed, instead of
+   * filtering a list held in the browser.
+   *
+   * Member codes outgrew the browser: twelve thousand of them cannot be shipped
+   * to filter client-side. When this is set the editor debounces the keystrokes
+   * and shows what comes back; `suggestions` is then only the fallback shown
+   * before the first reply lands, plus any action rows, which are never
+   * filtered and never fetched.
+   */
+  onQuery?: (query: string) => Promise<SheetSuggestion[]>;
 };
 
 /** How many suggestions the typeahead shows while filtering. */
@@ -348,6 +359,7 @@ function CellEditor({
   onBlur,
   onPick,
   onAction,
+  onQuery,
 }: EditorProps) {
   const ref = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -371,7 +383,33 @@ function CellEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /**
+   * Server-side matches for the current text, when the owner fetches them.
+   *
+   * Debounced, and stamped with the query it answers so a slow reply for "GA1"
+   * cannot land after a fast one for "GA12" and overwrite it.
+   */
+  const [remote, setRemote] = useState<SheetSuggestion[] | null>(null);
+  const queryRef = useRef("");
+  useEffect(() => {
+    if (!onQuery) return;
+    const q = value.trim();
+    queryRef.current = q;
+    const timer = setTimeout(() => {
+      void onQuery(q).then((rows) => {
+        if (queryRef.current === q) setRemote(rows);
+      });
+    }, 160);
+    return () => clearTimeout(timer);
+  }, [value, onQuery]);
+
   const matches = useMemo(() => {
+    if (onQuery) {
+      // The server has already matched; only the commands are added here.
+      const actions = (suggestions ?? []).filter((sg) => sg.action);
+      const rows = remote ?? (suggestions ?? []).filter((sg) => !sg.action).slice(0, MAX_SUGGESTIONS);
+      return [...rows.slice(0, browsing ? MAX_BROWSE : MAX_SUGGESTIONS), ...actions];
+    }
     if (!suggestions?.length) return [];
     // Commands are not candidates: they never filter out, and they go last.
     const actions = suggestions.filter((sg) => sg.action);
@@ -398,7 +436,7 @@ function CellEditor({
       if (starts.length >= MAX_SUGGESTIONS) break;
     }
     return [...[...starts, ...contains].slice(0, MAX_SUGGESTIONS), ...actions];
-  }, [suggestions, value, browsing]);
+  }, [suggestions, value, browsing, onQuery, remote]);
 
   /** Take a row: run it if it's a command, otherwise write it into the cell. */
   const take = (sg: SheetSuggestion, move: "right" | "left" | "none") => {
@@ -730,6 +768,10 @@ export function SheetGrid({
   committedSuggestions,
   onEditStart,
   onSuggestionAction,
+  suggestionQuery,
+  onLoadMore,
+  hasMore = false,
+  loadingMore = false,
 }: {
   columns: SheetColumn[];
   rows: SheetRow[];
@@ -788,6 +830,26 @@ export function SheetGrid({
    * handler is free to open a dialog over the sheet; `typed` is whatever was
    * in the cell, which is usually what the new record should be called.
    */
+  /**
+   * Per-cell server-side typeahead. Return undefined to filter the column's
+   * own list in the browser instead — the right choice for short lists.
+   */
+  /**
+   * Fetch the next page, when the rows come from a server a page at a time.
+   *
+   * The grid's own infinite scroll only reveals rows it already holds. A list
+   * too large to hold — the member roster — needs the owner to fetch more, so
+   * reaching the end asks for them. `hasMore` says whether asking is worth it;
+   * `loadingMore` keeps the request from being fired again while it is in
+   * flight.
+   */
+  onLoadMore?: () => void;
+  hasMore?: boolean;
+  loadingMore?: boolean;
+  suggestionQuery?: (
+    rowIndex: number,
+    colIndex: number,
+  ) => ((query: string) => Promise<SheetSuggestion[]>) | undefined;
   onSuggestionAction?: (ctx: {
     /** Index into `drafts`, or null when the cell is a saved row. */
     draftIndex: number | null;
@@ -1009,6 +1071,28 @@ export function SheetGrid({
     io.observe(el);
     return () => io.disconnect();
   }, [hiddenAbove, rows.length]);
+
+  /**
+   * Ask the owner for the next page as the end of the list comes into view.
+   *
+   * Only once everything already fetched is on screen: while rows are still
+   * hidden above, the reader has not reached the end of what we hold.
+   */
+  const bottomSentinelRef = useRef<HTMLTableRowElement>(null);
+  useEffect(() => {
+    if (!onLoadMore || !hasMore || loadingMore) return;
+    const root = mainScrollRef.current;
+    const el = bottomSentinelRef.current;
+    if (!root || !el) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((en) => en.isIntersecting)) onLoadMore();
+      },
+      { root, rootMargin: "0px 0px 320px 0px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [onLoadMore, hasMore, loadingMore, rows.length]);
 
   // After a chunk mounts above the viewport, push scrollTop down by exactly
   // the added height so the rows the user was looking at don't jump.
@@ -1574,6 +1658,7 @@ export function SheetGrid({
           }
         },
         onBlur: () => commitEdit("none"),
+        onQuery: suggestionQuery?.(editing.r, editing.c),
         onPick: commitWith,
         onAction: (value, typed) => {
           const { r, c } = editing;
@@ -1686,6 +1771,16 @@ export function SheetGrid({
               />
               );
             })}
+            {(hasMore || loadingMore) && !hiddenAbove && (
+              <tr ref={bottomSentinelRef} className="h-7">
+                <td
+                  colSpan={nCols + 2}
+                  className="select-none border-b border-border bg-muted/40 px-2 text-center text-[11px] text-muted-foreground"
+                >
+                  {loadingMore ? "Loading more…" : "Scroll for more"}
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
