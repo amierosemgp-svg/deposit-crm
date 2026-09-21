@@ -10,6 +10,8 @@
  *
  *   arrows / Tab / Enter    move the selected cell (Shift reverses)
  *   Shift+arrows            grow the selection
+ *   Ctrl/Cmd+↑ / ↓          jump to the top / bottom of the block you are in
+ *   Ctrl/Cmd+click          add another rectangle to the selection
  *   type / F2 / double-click edit a draft cell (typing replaces, F2 appends)
  *   Enter / Alt+↓           on a dropdown cell, open its list (Excel's Alt+↓)
  *   Esc                     cancel the edit
@@ -166,7 +168,38 @@ function parseNumeric(raw: string): number | null {
  */
 
 /** Selection slice handed to a row — computed narrow so memo() can bite. */
-type RowSel = { c1: number; c2: number; anchorC: number } | null;
+/**
+ * This row's share of the selection.
+ *
+ * `spans` is a list because Ctrl+click builds a discontiguous selection the way
+ * Excel does, and one row can fall inside several of its rectangles. Encoded as
+ * "c1:c2,c1:c2" rather than an array so memo() keeps comparing it by value — an
+ * array literal would be a new object on every render and defeat the memo on
+ * every row in the sheet.
+ */
+type RowSel = { spans: string; anchorC: number } | null;
+
+/** An inclusive rectangle of cells. */
+type Bounds = { r1: number; r2: number; c1: number; c2: number };
+
+/**
+ * Right edge of a range that means "however wide this row is".
+ *
+ * Saved rows and entry rows carry different column counts, so a whole-row
+ * selection cannot name one number. Anything reading a range clamps to the
+ * row's own width; anything merely testing membership compares and is right.
+ */
+const WHOLE_ROW = Number.MAX_SAFE_INTEGER;
+
+/** "1:4,7:9" → does any span cover this column? */
+function spansCover(spans: string, c: number): boolean {
+  for (const part of spans.split(",")) {
+    const i = part.indexOf(":");
+    if (i < 0) continue;
+    if (c >= +part.slice(0, i) && c <= +part.slice(i + 1)) return true;
+  }
+  return false;
+}
 
 const GridRow = memo(function GridRow({
   rIdx,
@@ -206,7 +239,7 @@ const GridRow = memo(function GridRow({
    * pick from), as a comma-joined string so memo() compares it by value.
    */
   dropdownCols: string;
-  onCellMouseDown: (r: number, c: number, shift: boolean) => void;
+  onCellMouseDown: (r: number, c: number, shift: boolean, mod: boolean) => void;
   onCellMouseEnter: (r: number, c: number) => void;
   onCellDoubleClick: (r: number, c: number) => void;
   /** The chevron was clicked: select the cell and open its list. */
@@ -234,7 +267,7 @@ const GridRow = memo(function GridRow({
         {marker === "ready" ? "✓" : marker === "error" ? "!" : gutter}
       </td>
       {columns.map((col, c) => {
-        const selected = sel !== null && c >= sel.c1 && c <= sel.c2;
+        const selected = sel !== null && spansCover(sel.spans, c);
         const isAnchor = sel !== null && c === sel.anchorC;
         const isEditing = editing === c;
         const isDropdown = dropdownSet.has(c);
@@ -243,8 +276,24 @@ const GridRow = memo(function GridRow({
             key={col.key}
             data-cell={`${rIdx}-${c}`}
             onMouseDown={(e) => {
-              // Left button only; shift-click extends like Excel.
-              if (e.button === 0) onCellMouseDown(rIdx, c, e.shiftKey);
+              /**
+               * Shift-click extends, Ctrl/Cmd-click adds a separate rectangle,
+               * both as Excel does.
+               *
+               * macOS turns Ctrl+click into a secondary click, so depending on
+               * the browser it arrives as button 0 or button 2. Taking it
+               * either way means the shortcut the desk asked for works on a
+               * Mac as well as on Windows; a plain right-click (button 2 with
+               * no modifier) is still left alone.
+               */
+              const mod = e.ctrlKey || e.metaKey;
+              if (e.button === 0 || (e.button === 2 && mod)) {
+                onCellMouseDown(rIdx, c, e.shiftKey, mod);
+              }
+            }}
+            onContextMenu={(e) => {
+              // No menu over a selection the user is building.
+              if (e.ctrlKey || e.metaKey) e.preventDefault();
             }}
             onMouseEnter={() => onCellMouseEnter(rIdx, c)}
             onDoubleClick={() => onCellDoubleClick(rIdx, c)}
@@ -868,6 +917,16 @@ export function SheetGrid({
   const entryScrollRef = useRef<HTMLDivElement>(null);
   const [sel, setSel] = useState<CellPos | null>(null);
   const [ext, setExt] = useState<CellPos | null>(null);
+  /**
+   * Rectangles already put down by Ctrl+click, not counting the live one.
+   *
+   * Excel lets you collect scattered rows into one selection, and the desk
+   * wants it for the same reason: approving or deleting six rows that are not
+   * next to each other. The live rectangle stays in sel/ext so every existing
+   * behaviour — dragging, shift-extending, typing — is untouched; Ctrl+click
+   * simply parks the current one here and starts a new one.
+   */
+  const [heldRanges, setHeldRanges] = useState<Bounds[]>([]);
   const [editing, setEditing] = useState<Editing | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   /**
@@ -965,8 +1024,16 @@ export function SheetGrid({
   // scrollHeight snapshot taken when a chunk load starts, so the viewport can
   // be held still while older rows are prepended above it.
   const prevScrollHeightRef = useRef<number | null>(null);
-  // Cell to bring into view once the chunk containing it has rendered.
-  const pendingScrollRef = useRef<CellPos | null>(null);
+  /**
+   * Cell to bring into view once the chunk containing it has rendered.
+   *
+   * `edge` marks a deliberate jump to the very top or bottom. Those cannot be
+   * done by measuring a cell: arriving at the top wakes the sentinel that
+   * loads the next chunk, and the rows that mount above shift everything that
+   * was just measured. Pinning the scroller to 0 or to its full height is the
+   * one instruction that stays true however much loads in afterwards.
+   */
+  const pendingScrollRef = useRef<(CellPos & { edge?: "top" | "bottom" }) | null>(null);
 
   const flash = useCallback((msg: string) => {
     setNotice(msg);
@@ -991,30 +1058,108 @@ export function SheetGrid({
     };
   }, [sel, ext]);
 
-  const scrollCellIntoView = useCallback((r: number, c: number) => {
-    const el = containerRef.current?.querySelector(`[data-cell="${r}-${c}"]`);
-    if (!el) return;
-    el.scrollIntoView({ block: "nearest", inline: "nearest" });
-    // The row-number gutter is sticky at the left edge, so a cell that
-    // scrollIntoView aligns flush-left (e.g. column A after paging right then
-    // back) ends up hidden underneath it. Nudge left by the covered amount.
-    const GUTTER = 44;
-    const scroller = mainScrollRef.current?.contains(el)
-      ? mainScrollRef.current
-      : entryScrollRef.current?.contains(el)
-        ? entryScrollRef.current
-        : null;
-    if (!scroller) return;
-    const covered =
-      scroller.getBoundingClientRect().left + GUTTER - el.getBoundingClientRect().left;
-    if (covered > 0) scroller.scrollLeft -= covered;
-    // Same for the sticky header band: a row scrolled flush to the top would
-    // sit underneath it, so nudge down by however much the band covers.
-    const head = scroller.querySelector("thead");
-    if (head) {
-      const hidden = head.getBoundingClientRect().bottom - el.getBoundingClientRect().top;
-      if (hidden > 0) scroller.scrollTop -= hidden;
+  /** Everything selected: the rectangles held plus the live one. */
+  const allRanges = useMemo(
+    () => (bounds ? [...heldRanges, bounds] : heldRanges),
+    [heldRanges, bounds],
+  );
+
+  /**
+   * Which columns of each row are selected, as "c1:c2,c1:c2".
+   *
+   * Built once per selection change rather than per row: with a few hundred
+   * rows on screen, testing every rectangle against every row on every render
+   * is the kind of thing that makes typing feel heavy.
+   */
+  const spansByRow = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const b of allRanges) {
+      for (let r = b.r1; r <= b.r2; r++) {
+        const at = m.get(r);
+        m.set(r, at ? `${at},${b.c1}:${b.c2}` : `${b.c1}:${b.c2}`);
+      }
     }
+    return m;
+  }, [allRanges]);
+
+  /**
+   * Bring a cell into view, measuring rather than asking the browser.
+   *
+   * This used to call scrollIntoView({ block: "nearest" }), which reads a cell
+   * as already visible whenever it sits inside the scrollport — even when the
+   * sticky header or the sticky row-number gutter is painted on top of it. So
+   * Ctrl+↑ selected the first row and scrolled nowhere: the row was "visible"
+   * to the browser and underneath the header to the reader.
+   *
+   * Measuring against the header's bottom edge and the gutter's right edge
+   * instead means "in view" means what the desk means by it.
+   */
+  const scrollCellIntoView = useCallback((r: number, c: number) => {
+    const GUTTER = 44;
+    const attempt = () => {
+      const el = containerRef.current?.querySelector(
+        `[data-cell="${r}-${c}"]`,
+      ) as HTMLElement | null;
+      if (!el) return false;
+      const scroller = mainScrollRef.current?.contains(el)
+        ? mainScrollRef.current
+        : entryScrollRef.current?.contains(el)
+          ? entryScrollRef.current
+          : null;
+      if (!scroller) {
+        el.scrollIntoView({ block: "nearest", inline: "nearest" });
+        return true;
+      }
+      const box = scroller.getBoundingClientRect();
+      const cell = el.getBoundingClientRect();
+      const head = scroller.querySelector("thead");
+      const topEdge = head ? head.getBoundingClientRect().bottom : box.top;
+      if (cell.top < topEdge) scroller.scrollTop -= topEdge - cell.top;
+      else if (cell.bottom > box.bottom) scroller.scrollTop += cell.bottom - box.bottom;
+      const leftEdge = box.left + GUTTER;
+      if (cell.left < leftEdge) scroller.scrollLeft -= leftEdge - cell.left;
+      else if (cell.right > box.right) scroller.scrollLeft += cell.right - box.right;
+      return true;
+    };
+    /**
+     * Measure now, then once more after paint.
+     *
+     * The first pass keeps single-step arrows feeling immediate. The second
+     * catches the cases the first cannot see: a row that was not in the DOM
+     * yet, and a jump taken before React had re-rendered around it. The maths
+     * is a no-op when the cell is already in view, so running it twice costs
+     * nothing and never fights the user's own scrolling.
+     */
+    attempt();
+    requestAnimationFrame(() => void attempt());
+  }, []);
+
+  /**
+   * Pin the saved-rows scroller to its very top or bottom, and hold it there.
+   *
+   * Arriving at the top wakes the sentinel that loads the next chunk of older
+   * rows; those rows mount above and push everything down. A one-shot scroll
+   * lands correctly and is then dragged away, which is exactly what Ctrl+↑
+   * looked like — the selection was on the first row and the view was not.
+   *
+   * So the instruction is re-applied over the next few frames. It is an
+   * absolute position rather than a measurement, so repeating it is harmless,
+   * and it stops as soon as the user scrolls themselves — nothing here should
+   * be able to trap the viewport.
+   */
+  const scrollToEdge = useCallback((edge: "top" | "bottom") => {
+    const root = mainScrollRef.current;
+    if (!root) return;
+    let frames = 6;
+    let last = -1;
+    const pin = () => {
+      // Someone scrolled between frames — their intent wins, stop pinning.
+      if (last >= 0 && Math.abs(root.scrollTop - last) > 2) return;
+      root.scrollTop = edge === "top" ? 0 : root.scrollHeight;
+      last = root.scrollTop;
+      if (--frames > 0) requestAnimationFrame(pin);
+    };
+    pin();
   }, []);
 
   /** The dock's columns — its own when given, otherwise the list's. */
@@ -1035,19 +1180,36 @@ export function SheetGrid({
       if (extend) {
         setExt({ r: nr, c: nc });
       } else {
+        // Moving the cursor collapses the selection, scattered parts included.
+        setHeldRanges([]);
         setSel({ r: nr, c: nc });
         setExt(null);
       }
+      const edge = nr === 0 ? "top" : nr === draftStart - 1 ? "bottom" : undefined;
       if (nr < hiddenAbove) {
         // Target row isn't rendered yet (PageUp / Ctrl+A / Home runs) — load
         // enough older rows to include it, then scroll once they exist.
+        // Anchoring is cancelled: it exists to hold the viewport still while
+        // older rows arrive, which is the opposite of what a jump wants.
+        prevScrollHeightRef.current = null;
         setVisibleCount(Math.min(rows.length, rows.length - nr + 20));
-        pendingScrollRef.current = { r: nr, c: nc };
+        pendingScrollRef.current = { r: nr, c: nc, edge };
+      } else if (edge) {
+        scrollToEdge(edge);
       } else {
         scrollCellIntoView(nr, nc);
       }
     },
-    [nRows, nCols, hiddenAbove, rows.length, scrollCellIntoView, draftStart, entryColumns.length],
+    [
+      nRows,
+      nCols,
+      hiddenAbove,
+      rows.length,
+      scrollCellIntoView,
+      scrollToEdge,
+      draftStart,
+      entryColumns.length,
+    ],
   );
 
   // Load the next older chunk whenever the sentinel row scrolls into view.
@@ -1098,16 +1260,19 @@ export function SheetGrid({
   // the added height so the rows the user was looking at don't jump.
   useLayoutEffect(() => {
     const root = mainScrollRef.current;
+    const jump = pendingScrollRef.current;
+    // Holding the viewport still is right for a passive load and wrong for a
+    // jump the user asked for, so the jump wins and the anchor is dropped.
     if (root && prevScrollHeightRef.current !== null) {
-      root.scrollTop += root.scrollHeight - prevScrollHeightRef.current;
+      if (!jump) root.scrollTop += root.scrollHeight - prevScrollHeightRef.current;
       prevScrollHeightRef.current = null;
     }
-    if (pendingScrollRef.current) {
-      const { r, c } = pendingScrollRef.current;
+    if (jump) {
       pendingScrollRef.current = null;
-      scrollCellIntoView(r, c);
+      if (jump.edge) scrollToEdge(jump.edge);
+      else scrollCellIntoView(jump.r, jump.c);
     }
-  }, [visibleCount, scrollCellIntoView]);
+  }, [visibleCount, scrollCellIntoView, scrollToEdge]);
 
   // ---- draft mutation helpers ----
 
@@ -1401,13 +1566,20 @@ export function SheetGrid({
       if (mod && (e.key === "a" || e.key === "A")) {
         e.preventDefault();
         if (nRows) {
+          setHeldRanges([]);
           setSel({ r: 0, c: 0 });
           setExt({ r: nRows - 1, c: nCols - 1 });
         }
         return;
       }
-      // Copy/paste arrive via the clipboard events; don't swallow them here.
-      if (mod) return;
+      /**
+       * Copy/paste arrive via the clipboard events; don't swallow them here.
+       *
+       * The arrows are the exception: Ctrl+↑/↓ is a jump to the end of the
+       * block and has to reach the switch below. Bailing out on every modified
+       * key is what stopped it working the first time.
+       */
+      if (mod && e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
 
       if (!sel) {
         if (["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Tab", "Enter"].includes(e.key)) {
@@ -1432,13 +1604,19 @@ export function SheetGrid({
         case "ArrowDown":
           e.preventDefault();
           tabOriginRef.current = null;
-          if (e.shiftKey) moveTo((ext ?? sel).r + 1, (ext ?? sel).c, true);
+          // Ctrl+Down runs to the end of the block the cursor is in, as Excel
+          // does — the last saved row, or the last entry row if already in the
+          // dock. Landing on a blank entry row from the middle of the day's
+          // takings would be a jump to nowhere.
+          if (mod) moveTo(sel.r >= draftStart ? nRows - 1 : draftStart - 1, sel.c, e.shiftKey);
+          else if (e.shiftKey) moveTo((ext ?? sel).r + 1, (ext ?? sel).c, true);
           else moveTo(sel.r + 1, sel.c);
           break;
         case "ArrowUp":
           e.preventDefault();
           tabOriginRef.current = null;
-          if (e.shiftKey) moveTo((ext ?? sel).r - 1, (ext ?? sel).c, true);
+          if (mod) moveTo(sel.r >= draftStart ? draftStart : 0, sel.c, e.shiftKey);
+          else if (e.shiftKey) moveTo((ext ?? sel).r - 1, (ext ?? sel).c, true);
           else moveTo(sel.r - 1, sel.c);
           break;
         case "ArrowRight":
@@ -1507,6 +1685,8 @@ export function SheetGrid({
           }
           break;
         case "Escape":
+          // Back to just the cell under the cursor, scattered parts dropped.
+          setHeldRanges([]);
           setExt(null);
           break;
         default:
@@ -1527,17 +1707,45 @@ export function SheetGrid({
   // ---- mouse ----
 
   const onCellMouseDown = useCallback(
-    (r: number, c: number, shift: boolean) => {
+    (r: number, c: number, shift: boolean, mod: boolean) => {
       if (editing) commitEdit("none");
       tabOriginRef.current = null;
       draggingRef.current = true;
-      if (shift && sel) setExt({ r, c });
-      else {
+      if (shift && sel) {
+        // Extending grows the live rectangle; anything held stays held.
+        setExt({ r, c });
+      } else if (mod) {
+        /**
+         * Ctrl/Cmd+click picks whole rows, and picking the same row again
+         * drops it.
+         *
+         * Excel would take the single cell, but nobody here is gathering
+         * scattered cells — they are gathering rows to approve or delete, and
+         * a row lit across only one column reads as a mis-click. WHOLE_ROW as
+         * the right edge keeps it honest for both regions at once: saved rows
+         * and entry rows have different column counts, and this needs no
+         * arithmetic to cover either.
+         */
+        draggingRef.current = false; // picking rows, not dragging a range
+        setHeldRanges((held) => {
+          const at = held.findIndex((b) => b.r1 === r && b.r2 === r && b.c2 === WHOLE_ROW);
+          if (at >= 0) return held.filter((_, i) => i !== at);
+          const carried =
+            bounds && !held.length
+              ? [{ r1: bounds.r1, r2: bounds.r2, c1: 0, c2: WHOLE_ROW }]
+              : [];
+          return [...held, ...carried, { r1: r, r2: r, c1: 0, c2: WHOLE_ROW }];
+        });
+        setSel({ r, c });
+        setExt(null);
+      } else {
+        // A plain click is a fresh start — it drops the scattered selection.
+        setHeldRanges([]);
         setSel({ r, c });
         setExt(null);
       }
     },
-    [editing, commitEdit, sel],
+    [editing, commitEdit, sel, bounds],
   );
 
   const onCellMouseEnter = useCallback((r: number, c: number) => {
@@ -1581,20 +1789,27 @@ export function SheetGrid({
   const lastEmittedIdsRef = useRef("");
   useEffect(() => {
     if (!onSelectedRowsChange) return;
+    // Every rectangle, scattered ones included — the action bar acts on what
+    // is lit up, and a Ctrl+clicked row that looks selected but is not sent
+    // would quietly be left out of an approve or a delete.
+    const seen = new Set<number>();
     const ids: (string | number)[] = [];
-    if (bounds) {
-      for (let r = bounds.r1; r <= Math.min(bounds.r2, draftStart - 1); r++) {
+    for (const b of allRanges) {
+      for (let r = b.r1; r <= Math.min(b.r2, draftStart - 1); r++) {
+        if (seen.has(r)) continue;
+        seen.add(r);
         const row = rows[r];
         if (row) ids.push(row.id);
       }
     }
+    ids.sort((a, b) => String(a).localeCompare(String(b)));
     const key = ids.join(",");
     if (key === lastEmittedIdsRef.current) return;
     lastEmittedIdsRef.current = key;
     // Subscription-style notification; the parent's setState is in a callback.
      
     onSelectedRowsChange(ids);
-  }, [bounds, rows, draftStart, onSelectedRowsChange]);
+  }, [allRanges, rows, draftStart, onSelectedRowsChange]);
 
   // ---- selection stats (the Excel status bar) ----
 
@@ -1603,20 +1818,30 @@ export function SheetGrid({
     let count = 0;
     let numCount = 0;
     let sum = 0;
-    for (let r = bounds.r1; r <= bounds.r2; r++) {
-      for (let c = bounds.c1; c <= bounds.c2; c++) {
-        const v = cellValue(r, c);
-        if (!v) continue;
-        count++;
-        const n = columns[c]?.numeric ? parseNumeric(v) : null;
-        if (n !== null) {
-          numCount++;
-          sum += n;
+    // Overlapping rectangles share cells; counting one twice would inflate the
+    // sum the desk reads off the status bar to check a day's takings.
+    const counted = new Set<string>();
+    for (const b of allRanges) {
+      for (let r = b.r1; r <= b.r2; r++) {
+        // A whole-row range has no real right edge — clamp to this row's width
+        // or the loop runs to MAX_SAFE_INTEGER and takes the tab with it.
+        const lastC = Math.min(b.c2, colsFor(r).length - 1);
+        for (let c = b.c1; c <= lastC; c++) {
+          if (counted.has(`${r}:${c}`)) continue;
+          counted.add(`${r}:${c}`);
+          const v = cellValue(r, c);
+          if (!v) continue;
+          count++;
+          const n = columns[c]?.numeric ? parseNumeric(v) : null;
+          if (n !== null) {
+            numCount++;
+            sum += n;
+          }
         }
       }
     }
     return { count, numCount, sum, avg: numCount ? sum / numCount : 0 };
-  }, [bounds, cellValue, columns]);
+  }, [bounds, allRanges, cellValue, columns, colsFor]);
 
   const address = useMemo(() => {
     if (!sel) return "";
@@ -1753,10 +1978,9 @@ export function SheetGrid({
                 firstDraft={false}
                 showPlaceholder={false}
                 sel={
-                  bounds && r >= bounds.r1 && r <= bounds.r2
+                  spansByRow.has(r)
                     ? {
-                        c1: bounds.c1,
-                        c2: bounds.c2,
+                        spans: spansByRow.get(r)!,
                         anchorC: sel && sel.r === r ? sel.c : -1,
                       }
                     : null
@@ -1866,10 +2090,9 @@ export function SheetGrid({
                       firstDraft={false}
                       showPlaceholder={i === placeholderIndex}
                       sel={
-                        bounds && r >= bounds.r1 && r <= bounds.r2
+                        spansByRow.has(r)
                           ? {
-                              c1: bounds.c1,
-                              c2: bounds.c2,
+                              spans: spansByRow.get(r)!,
                               anchorC: sel && sel.r === r ? sel.c : -1,
                             }
                           : null
