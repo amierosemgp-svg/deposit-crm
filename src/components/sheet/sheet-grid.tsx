@@ -758,10 +758,16 @@ function CellEditor({
 function LabelHeaderRow({
   columns,
   offset,
+  widthOf,
+  onResizeStart,
+  onResetWidth,
 }: {
   columns: SheetColumn[];
   /** Sticky offset: under the letters row ("top-5") or flush ("top-0"). */
   offset: "top-0" | "top-5";
+  widthOf: (c: SheetColumn) => number;
+  onResizeStart: (key: string, startWidth: number, e: React.MouseEvent) => void;
+  onResetWidth: (key: string) => void;
 }) {
   return (
     <tr className="h-7">
@@ -776,15 +782,36 @@ function LabelHeaderRow({
           key={c.key}
           title={c.entry ? undefined : "Filled in by the CRM — not saved from entry rows"}
           className={cn(
-            "sticky z-20 select-none overflow-hidden whitespace-nowrap border-b border-r border-emerald-800 bg-emerald-700 px-1.5 text-left text-[12px] font-semibold text-white dark:border-emerald-700 dark:bg-emerald-800",
+            // No `relative` here: sticky is already a positioned element, so
+            // the grab strip anchors to it. Adding relative alongside sticky
+            // wins the position conflict and the header stops sticking — it
+            // scrolls away with the rows, which is exactly what it did.
+            "sticky z-20 select-none whitespace-nowrap border-b border-r border-emerald-800 bg-emerald-700 px-1.5 text-left text-[12px] font-semibold text-white dark:border-emerald-700 dark:bg-emerald-800",
             offset,
             c.align === "right" && "text-right",
             c.align === "center" && "text-center",
             !c.entry && "font-normal text-emerald-100/80",
           )}
         >
-          {c.label}
-          {c.required ? " *" : ""}
+          <span className="block overflow-hidden text-ellipsis">
+            {c.label}
+            {c.required ? " *" : ""}
+          </span>
+          {/* The divider, as Excel has it: drag to resize, double-click to put
+              the column back to the width it was designed with. Reaches a few
+              pixels either side of the border so it can be grabbed without
+              precision. */}
+          <span
+            role="separator"
+            aria-orientation="vertical"
+            aria-label={`Resize ${c.label}`}
+            onMouseDown={(e) => onResizeStart(c.key, widthOf(c), e)}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              onResetWidth(c.key);
+            }}
+            className="absolute inset-y-0 -right-1 z-30 w-2 cursor-col-resize hover:bg-white/30"
+          />
         </th>
       ))}
       {/* Filler keeps the green header band running edge to edge. */}
@@ -806,6 +833,7 @@ export function SheetGrid({
   draftStatus,
   onCommit,
   entryColumns: entryColumnsProp,
+  widthStorageKey,
   flushRef,
   readOnly = false,
   /** Changing this key re-scrolls to the entry area and selects its first cell. */
@@ -841,6 +869,15 @@ export function SheetGrid({
    * the array that matches the row it is looking at.
    */
   entryColumns?: SheetColumn[];
+  /**
+   * Where to remember column widths, once the user has dragged them.
+   *
+   * A width is a per-person habit, not data — the desk widens Bank Account
+   * because their account numbers are long, and expects it still wide tomorrow.
+   * Kept per sheet, so Deposit and Withdrawal can each be shaped for what they
+   * hold. Omit it and resizing still works, it just will not be remembered.
+   */
+  widthStorageKey?: string;
   /**
    * Handed a function that commits whatever cell is mid-edit, and returns what
    * it wrote so a save firing in the same tick can see it.
@@ -1161,6 +1198,106 @@ export function SheetGrid({
     };
     pin();
   }, []);
+
+  /**
+   * Column widths the user has dragged, by column key.
+   *
+   * Only the changed ones are held; everything else falls back to the width
+   * the column was declared with, so a new column added later arrives at its
+   * intended size rather than inheriting a stale number.
+   */
+  const [widths, setWidths] = useState<Record<string, number>>(() => {
+    if (!widthStorageKey || typeof window === "undefined") return {};
+    try {
+      const raw = window.localStorage.getItem(`sheet-widths:${widthStorageKey}`);
+      return raw ? (JSON.parse(raw) as Record<string, number>) : {};
+    } catch {
+      // Private windows and blocked site data throw on read; a sheet at its
+      // default widths is a perfectly good sheet.
+      return {};
+    }
+  });
+  const widthOf = useCallback(
+    (c: SheetColumn) => widths[c.key] ?? c.width,
+    [widths],
+  );
+
+  const MIN_COL_W = 48;
+
+  /**
+   * Drag the divider between two column headers, as Excel does.
+   *
+   * The live drag writes straight to the <col> elements instead of going
+   * through React: the sheet can hold hundreds of rows, and re-rendering all
+   * of them on every mousemove turns a smooth drag into a stutter. State is
+   * updated once on release, which is also when the width is remembered.
+   */
+  const startResize = useCallback(
+    (key: string, startWidth: number, e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const startX = e.clientX;
+      const cols = Array.from(
+        containerRef.current?.querySelectorAll<HTMLElement>(
+          `col[data-col-key="${CSS.escape(key)}"]`,
+        ) ?? [],
+      );
+      let w = startWidth;
+      const onMove = (ev: MouseEvent) => {
+        w = Math.max(MIN_COL_W, Math.round(startWidth + ev.clientX - startX));
+        for (const col of cols) col.style.width = `${w}px`;
+      };
+      const onUp = () => {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+        setWidths((at) => {
+          const next = { ...at, [key]: w };
+          if (widthStorageKey) {
+            try {
+              window.localStorage.setItem(
+                `sheet-widths:${widthStorageKey}`,
+                JSON.stringify(next),
+              );
+            } catch {
+              // Not being able to remember it is not a reason to refuse it.
+            }
+          }
+          return next;
+        });
+      };
+      // Held on the body so the drag survives the pointer leaving the header.
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    },
+    [widthStorageKey],
+  );
+
+  /** Double-click the divider: back to the width the column was declared with. */
+  const resetWidth = useCallback(
+    (key: string) => {
+      setWidths((at) => {
+        if (!(key in at)) return at;
+        const next = { ...at };
+        delete next[key];
+        if (widthStorageKey) {
+          try {
+            window.localStorage.setItem(
+              `sheet-widths:${widthStorageKey}`,
+              JSON.stringify(next),
+            );
+          } catch {
+            /* nothing to do */
+          }
+        }
+        return next;
+      });
+    },
+    [widthStorageKey],
+  );
 
   /** The dock's columns — its own when given, otherwise the list's. */
   const entryColumns = entryColumnsProp ?? columns;
@@ -1931,7 +2068,7 @@ export function SheetGrid({
           <colgroup>
             <col style={{ width: 44 }} />
             {columns.map((c) => (
-              <col key={c.key} style={{ width: c.width }} />
+              <col key={c.key} data-col-key={c.key} style={{ width: widthOf(c) }} />
             ))}
             {/* Unsized filler column — takes whatever width is left. */}
             <col />
@@ -1951,7 +2088,13 @@ export function SheetGrid({
               ))}
               <th className="sticky top-0 z-20 border-b border-border bg-muted" />
             </tr>
-            <LabelHeaderRow columns={columns} offset="top-5" />
+            <LabelHeaderRow
+              columns={columns}
+              offset="top-5"
+              widthOf={widthOf}
+              onResizeStart={startResize}
+              onResetWidth={resetWidth}
+            />
           </thead>
           <tbody>
             {hiddenAbove > 0 && (
@@ -2051,13 +2194,19 @@ export function SheetGrid({
           <colgroup>
             <col style={{ width: 44 }} />
             {entryColumns.map((c) => (
-              <col key={c.key} style={{ width: c.width }} />
+              <col key={c.key} data-col-key={c.key} style={{ width: widthOf(c) }} />
             ))}
             {/* Unsized filler column — takes whatever width is left. */}
             <col />
           </colgroup>
               <thead>
-                <LabelHeaderRow columns={entryColumns} offset="top-0" />
+                <LabelHeaderRow
+                  columns={entryColumns}
+                  offset="top-0"
+                  widthOf={widthOf}
+                  onResizeStart={startResize}
+                  onResetWidth={resetWidth}
+                />
               </thead>
               <tbody>
                 {(() => {

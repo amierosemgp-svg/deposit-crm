@@ -4335,6 +4335,9 @@ export default function TransactionsPage() {
       {/* The grid fills everything that's left. */}
       <SheetGrid
         key={tab}
+        // Widths are remembered per sheet: Deposit and Withdrawal hold
+        // different things and get shaped differently.
+        widthStorageKey={`transactions:${tab}`}
         columns={columns}
         rows={rows}
         drafts={drafts}

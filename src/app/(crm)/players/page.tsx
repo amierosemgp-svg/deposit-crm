@@ -1334,6 +1334,7 @@ export default function PlayersPage() {
       )}
 
       <SheetGrid
+        widthStorageKey={`players:${tab}`}
         onLoadMore={tab === "players" ? loadMore : undefined}
         hasMore={tab === "players" && pageRows.length < total}
         loadingMore={loadingPage}
