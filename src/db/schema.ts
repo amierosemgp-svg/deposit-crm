@@ -657,6 +657,23 @@ export const bankAccounts = pgTable("bank_accounts", {
   })
     .notNull()
     .default(0),
+  /**
+   * What the account held before the first recorded movement, so that
+   * `opening + in - out = current_balance` holds and the bank cards can be
+   * checked rather than taken on trust. Accounts opened inside the recorded
+   * history sit at 0 with a null date, which is the truth and not a gap.
+   */
+  opening_balance: numeric("opening_balance", {
+    precision: 14,
+    scale: 2,
+    mode: "number",
+  })
+    .notNull()
+    .default(0),
+  opening_balance_at: timestamp("opening_balance_at", {
+    withTimezone: true,
+    mode: "string",
+  }),
   status: activeStatusEnum("status").notNull().default("active"),
   created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
     .notNull()

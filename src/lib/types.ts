@@ -453,8 +453,68 @@ export type BankAccount = {
   device_id?: string | null;
   last_heartbeat_at?: string | null;
   current_balance: number;
+  /** Held before the first recorded movement; 0 for an account opened since. */
+  opening_balance?: number;
+  opening_balance_at?: string | null;
   status: "active" | "inactive";
   created_at: string;
+};
+
+/**
+ * One account's movement over a period, from /api/bank-movements.
+ *
+ * `in` and `out` are every source that moves a balance, not just deposits and
+ * withdrawals: Clear Bank alone is around a third of money leaving the banks,
+ * and expenses, leader transfers and internal bank transfers move it too.
+ * With the opening balance recorded, the account reads as an equation —
+ * `opening + in - out = balance` — over an all-time range.
+ */
+export type BankMovement = {
+  account_id: number;
+  entity_id: number;
+  bank_name: string;
+  label: string | null;
+  role: BankAccountRole;
+  balance: number;
+  opening_balance: number;
+  opening_balance_at: string | null;
+  in_amount: number;
+  out_amount: number;
+  in_count: number;
+  out_count: number;
+};
+
+/** Where the money moved from, for the period's breakdown. */
+export type BankMovementSource =
+  | "deposit"
+  | "withdrawal"
+  | "expense"
+  | "clear_bank"
+  | "leader_transfer"
+  | "bank_transfer";
+
+export const BANK_MOVEMENT_LABEL: Record<BankMovementSource, string> = {
+  deposit: "Deposits",
+  withdrawal: "Withdrawals",
+  expense: "Expenses",
+  clear_bank: "Clear Bank",
+  leader_transfer: "Leader transfers",
+  bank_transfer: "Bank transfers",
+};
+
+/** One source's contribution over the period, split by direction. */
+export type BankMovementTotal = {
+  source: BankMovementSource;
+  direction: "in" | "out";
+  count: number;
+  amount: number;
+  /** Bonus given on those deposits; zero for every other source. */
+  bonus: number;
+};
+
+export type BankMovements = {
+  accounts: BankMovement[];
+  totals: BankMovementTotal[];
 };
 
 /** Cash a leader took out of a company bank account, as recorded by CS. */

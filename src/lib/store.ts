@@ -7,6 +7,7 @@ import type {
   ApiKeyRow,
   BankAccount,
   BankAccountRole,
+  BankMovements,
   BankTransfer,
   BonusOption,
   BonusPlan,
@@ -136,6 +137,17 @@ type Store = {
   gameAccountStock: GameAccountStock[];
   settings: ServerSettings;
   notifications: Notification[];
+  /**
+   * Bumped on every successful poll or mutation.
+   *
+   * Most screens re-render on their own because they read the arrays this
+   * store holds. Anything that fetches its own figures from another endpoint
+   * has nothing to react to — it would sit on stale numbers until the page was
+   * reloaded, which is what the bank cards did after a deposit was saved or
+   * deleted. Depending on this counter puts them back in step with everything
+   * else on screen.
+   */
+  dataVersion: number;
 
   /** Sidebar collapsed to an icon rail (toggled from the top nav). */
   sidebarCollapsed: boolean;
@@ -439,6 +451,16 @@ type Store = {
   loadCodeSeries: (
     companyId?: number | null,
   ) => Promise<{ prefix: string; next: number; width: number; members: number }[]>;
+  /**
+   * What moved through each bank account over a period — every source, not
+   * just deposits and withdrawals. Aggregated server-side because the
+   * deposits held here are only the most recent few hundred.
+   */
+  loadBankMovements: (opts: {
+    from?: string | null;
+    to?: string | null;
+    companyId?: number | null;
+  }) => Promise<BankMovements>;
   deleteExpense: (expenseId: number) => Promise<MutationResult>;
   /**
    * Remove a worksheet row keyed wrong — a mistyped figure, or the same one
@@ -583,6 +605,7 @@ export const useStore = create<Store>((set, get) => {
     gameAccountStock: [],
     settings: {},
     notifications: [],
+    dataVersion: 0,
     sidebarCollapsed: false,
     toggleSidebar: () =>
       set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
@@ -649,7 +672,12 @@ export const useStore = create<Store>((set, get) => {
       knownDepositIds = incoming;
       // `data` carries no players, and zustand merges shallowly, so the cache
       // of members we have already looked at survives the poll untouched.
-      set({ ...data, deposits: flagged, hydrated: true });
+      set({
+        ...data,
+        deposits: flagged,
+        hydrated: true,
+        dataVersion: get().dataVersion + 1,
+      });
     },
 
     startPolling: () => {
@@ -1189,6 +1217,20 @@ export const useStore = create<Store>((set, get) => {
         series: { prefix: string; next: number; width: number; members: number }[];
       }>(`/api/players/code-series${qs}`);
       return res.ok && res.data ? res.data.series : [];
+    },
+
+    loadBankMovements: async ({ from, to, companyId }) => {
+      const qs = new URLSearchParams();
+      if (from) qs.set("from", from);
+      if (to) qs.set("to", to);
+      if (companyId != null) qs.set("company", String(companyId));
+      const q = qs.toString();
+      const res = await api<BankMovements>(
+        `/api/bank-movements${q ? `?${q}` : ""}`,
+      );
+      return res.ok && res.data
+        ? res.data
+        : { accounts: [], totals: [] };
     },
 
     deleteExpense: (expenseId) =>

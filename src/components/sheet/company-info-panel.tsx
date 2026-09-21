@@ -2,28 +2,39 @@
 
 /**
  * The block the client keeps at the top of every sheet in their workbook:
- * bank balances, game/kiosk credits, and the running month totals — always
- * visible while rows scroll underneath. Each collection account also carries
- * the number of deposits it took over the period, so the balance is read
- * next to the traffic behind it.
+ * what moved through the banks, game/kiosk credits, and the period's net —
+ * always visible while rows scroll underneath. Each account shows the money
+ * that moved through it with its balance alongside, so "how busy was this
+ * account" and "can it cover the next payout" are answered together.
+ *
+ * The two bank cards are money IN and money OUT, not "deposit accounts" and
+ * "withdrawal accounts". Every account at this operator is role `both`, so
+ * splitting by role printed the same list twice — and printed the balance
+ * where the flow belonged. The account named "HLB Payout" has taken deposits
+ * and paid no withdrawals; the role simply does not describe what an account
+ * does. See /api/bank-movements, which asks the transactions instead.
  *
  * Presented as the dashboard's cards (same Card chrome, uppercase muted
  * titles, figure + bordered account list) so the sheet page and the dashboard
- * read as one product. Sourced live: bank balances from the accounts the
- * agent heartbeats, game credits from the kiosk back-offices, totals from the
- * month's deposits/withdrawals in the CRM.
+ * read as one product. Kiosk credits still come from the store; the bank
+ * figures are aggregated server-side because the store holds only the most
+ * recent few hundred deposits.
  */
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
-import { inRange, rangeLabel, type DateRange } from "@/lib/date-range";
+import { rangeLabel, type DateRange } from "@/lib/date-range";
 import { formatRM, isBotOnline } from "@/lib/format";
 import { botForName } from "@/lib/bot-category";
 import { byBankOrder } from "@/lib/bank-order";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Banknote, Coins, Landmark, Wallet } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { takesDeposits, paysWithdrawals } from "@/lib/types";
+import {
+  BANK_MOVEMENT_LABEL,
+  type BankMovementSource,
+  type BankMovements,
+} from "@/lib/types";
 
 /**
  * The order the client's own workbook lists kiosks in.
@@ -91,6 +102,13 @@ function InfoCard({
     /** Transactions in the period, shown next to the name ("10 dep"). */
     count?: number;
     countSuffix?: string;
+    /**
+     * A quieter second figure under the name — the account's balance, read
+     * beneath the money that moved through it. The desk needs both at once:
+     * the flow answers "how much went through here this month", the balance
+     * answers "can I pay the next withdrawal out of it".
+     */
+    note?: string;
   }[];
   totalClassName?: string;
 }) {
@@ -118,7 +136,7 @@ function InfoCard({
           {rows.map((r, i) => (
             <div
               key={`${r.label}-${i}`}
-              className="flex items-center justify-between gap-2 text-[12px]"
+              className="flex items-baseline justify-between gap-2 text-[12px]"
             >
               <span className="flex min-w-0 items-center gap-1.5">
                 {r.online !== undefined && (
@@ -136,6 +154,11 @@ function InfoCard({
                 {r.count !== undefined && (
                   <span className="shrink-0 rounded-full bg-muted px-1.5 text-[10px] font-medium tabular-nums text-muted-foreground">
                     {r.count} {r.countSuffix ?? ""}
+                  </span>
+                )}
+                {r.note && (
+                  <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/80">
+                    {r.note}
                   </span>
                 )}
               </span>
@@ -157,65 +180,151 @@ function InfoCard({
 }
 
 export function CompanyInfoPanel({ range }: { range: DateRange }) {
-  const bankAccounts = useStore((s) => s.bankAccounts);
   const boAccounts = useStore((s) => s.boAccounts);
   const botHealth = useStore((s) => s.botHealth);
-  const deposits = useStore((s) => s.deposits);
-  const withdrawals = useStore((s) => s.withdrawals);
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
   const companyInScope = useStore((s) => s.companyInScope);
-  useStore((s) => s.selectedLeaderId);
+  const loadBankMovements = useStore((s) => s.loadBankMovements);
+  const selectedLeaderId = useStore((s) => s.selectedLeaderId);
+  const bankAccounts = useStore((s) => s.bankAccounts);
+  // Re-reads whenever anything else on the page does — see store.dataVersion.
+  const dataVersion = useStore((s) => s.dataVersion);
 
-  const inMonth = (iso: string) => inRange(iso, range);
+  /**
+   * Bank figures come from the server, not from the store.
+   *
+   * They used to be computed here out of `deposits`, which /api/state caps at
+   * the most recent 500 rows — so a card claiming to cover the month was
+   * really covering the last day or two, and said "33 dep" where the real
+   * figure was 1,393. Anything totalled across a period has to be totalled
+   * where every row is.
+   */
+  const [movements, setMovements] = useState<BankMovements>({
+    accounts: [],
+    totals: [],
+  });
+  useEffect(() => {
+    let live = true;
+    void loadBankMovements({
+      from: range.from,
+      to: range.to,
+      companyId: selectedCompanyId,
+    }).then((m) => {
+      if (live) setMovements(m);
+    });
+    return () => {
+      live = false;
+    };
+    // selectedLeaderId narrows which companies count, through companyInScope;
+    // dataVersion is what makes a saved or deleted row show up here at once
+    // rather than on the next page load.
+  }, [
+    loadBankMovements,
+    range.from,
+    range.to,
+    selectedCompanyId,
+    selectedLeaderId,
+    dataVersion,
+  ]);
 
   const scope = useMemo(() => {
-    // Sorted here, once: everything below derives from this list, and an
-    // unsorted one reshuffled the card every time a row was saved.
-    const depositAccounts = bankAccounts
-      .filter((a) => a.status === "active" && takesDeposits(a.role) && companyInScope(a.entity_id))
-      .sort(byBankOrder);
-
     /**
-     * How many deposits each collection account took in over the period —
-     * "Maybank 10, CIMB 15" — so the balance is read next to the traffic that
-     * produced it, and a quiet bank is obvious at a glance.
+     * Money in and money out, per account, over the period.
      *
-     * A deposit names its account outright when the agent matched one. The
-     * older rows only carry a bank name, so those fall back to the single
-     * in-scope account of that bank; when two accounts share a bank name
-     * there's no way to tell them apart, and the row is left uncounted rather
-     * than counted twice.
+     * Not "deposit accounts" and "withdrawal accounts": every account here is
+     * role `both`, and the account named "HLB Payout" has taken deposits and
+     * paid no withdrawals, so the role says nothing about what an account
+     * does. An account appears on whichever card it actually moved money on.
+     *
+     * The balance rides along beside the flow — the flow says how busy the
+     * account was, the balance says whether it can cover the next payout.
      */
-    const accountById = new Map(depositAccounts.map((a) => [a.account_id, a]));
-    const soleAccountOfBank = new Map<string, number | null>();
-    for (const a of depositAccounts) {
-      const key = a.bank_name.toLowerCase();
-      // Second account on the same bank ⇒ ambiguous, so record null.
-      soleAccountOfBank.set(key, soleAccountOfBank.has(key) ? null : a.account_id);
-    }
-    const depositCount = new Map<number, number>();
+    const visible = movements.accounts
+      .filter((m) => companyInScope(m.entity_id))
+      .map((m) => {
+        const account = bankAccounts.find((a) => a.account_id === m.account_id);
+        return {
+          ...m,
+          name: m.label || m.bank_name,
+          online: isBotOnline(botForName(botHealth, m.bank_name)?.last_heartbeat_at),
+          sortKey: account,
+        };
+      });
+    const ordered = [...visible].sort((a, b) =>
+      a.sortKey && b.sortKey
+        ? byBankOrder(a.sortKey, b.sortKey)
+        : a.name.localeCompare(b.name),
+    );
+
+    const row = (m: (typeof ordered)[number], dir: "in" | "out") => ({
+      label: m.name,
+      value: dir === "in" ? m.in_amount : m.out_amount,
+      count: dir === "in" ? m.in_count : m.out_count,
+      countSuffix: dir,
+      note: `bal ${formatRM(m.balance)}`,
+      online: m.online,
+    });
+
+    // A card lists the accounts that actually moved money that way. An account
+    // that took nothing in is noise on the "in" card, not information.
+    const banksIn = ordered.filter((m) => m.in_count > 0).map((m) => row(m, "in"));
+    const banksOut = ordered.filter((m) => m.out_count > 0).map((m) => row(m, "out"));
+
+    const totalIn = visible.reduce((a, m) => a + m.in_amount, 0);
+    const totalOut = visible.reduce((a, m) => a + m.out_amount, 0);
 
     /**
-     * A hybrid account is listed on both cards, because it really is available
-     * for both — but it is the same money twice, so it says so. Without the
-     * mark, reading the two totals as a sum would count it once too often.
+     * The period's breakdown, in the order the desk thinks about it: what came
+     * in, then each way it went out. Clear Bank is about a third of the money
+     * leaving the banks and expenses are real too — a net that counted only
+     * withdrawals understated the outflow by roughly a quarter.
      */
-    const roleMark = (a: { role: string }) => (a.role === "both" ? " · both" : "");
+    const bySource = new Map<string, { amount: number; count: number; bonus: number }>();
+    for (const t of movements.totals) {
+      const key = `${t.source}:${t.direction}`;
+      const at = bySource.get(key) ?? { amount: 0, count: 0, bonus: 0 };
+      bySource.set(key, {
+        amount: at.amount + t.amount,
+        count: at.count + t.count,
+        bonus: at.bonus + t.bonus,
+      });
+    }
+    const of = (source: BankMovementSource, direction: "in" | "out") =>
+      bySource.get(`${source}:${direction}`) ?? { amount: 0, count: 0, bonus: 0 };
 
-    const banksDeposit = depositAccounts.map((a) => ({
-      label: (a.label || `${a.bank_name}`) + roleMark(a),
-      value: a.current_balance,
-      online: isBotOnline(botForName(botHealth, a.bank_name)?.last_heartbeat_at),
-      accountId: a.account_id,
-    }));
-    const banksWithdrawal = bankAccounts
-      .filter((a) => a.status === "active" && paysWithdrawals(a.role) && companyInScope(a.entity_id))
-      .sort(byBankOrder)
-      .map((a) => ({
-        label: (a.label || `${a.bank_name}`) + roleMark(a),
-        value: a.current_balance,
-        online: isBotOnline(botForName(botHealth, a.bank_name)?.last_heartbeat_at),
-      }));
+    const deposits = of("deposit", "in");
+    const netRows: {
+      label: string;
+      value: number;
+      dim?: boolean;
+    }[] = [
+      { label: `Deposits (${deposits.count})`, value: deposits.amount },
+      { label: "Bonus given", value: deposits.bonus, dim: true },
+    ];
+    for (const source of [
+      "withdrawal",
+      "clear_bank",
+      "expense",
+      "leader_transfer",
+      "bank_transfer",
+    ] as const) {
+      const out = of(source, "out");
+      const inward = of(source, "in");
+      // A source nobody used this period is left off rather than shown as zero.
+      if (out.count > 0) {
+        netRows.push({
+          label: `${BANK_MOVEMENT_LABEL[source]} (${out.count})`,
+          value: -out.amount,
+        });
+      }
+      if (inward.count > 0) {
+        netRows.push({
+          label: `${BANK_MOVEMENT_LABEL[source]} in (${inward.count})`,
+          value: inward.amount,
+        });
+      }
+    }
+
     const activeKiosks = boAccounts.filter(
       (b) => b.status === "active" && companyInScope(b.company_entity_id),
     );
@@ -239,76 +348,32 @@ export function CompanyInfoPanel({ range }: { range: DateRange }) {
       }))
       .sort((a, b) => a.rank - b.rank || a.label.localeCompare(b.label));
 
-    let depTotal = 0;
-    let depBonus = 0;
-    let depCount = 0;
-    for (const d of deposits) {
-      if (!companyInScope(d.company_entity_id) && d.company_entity_id !== null) continue;
-      if (!inMonth(d.deposit_date)) continue;
-      if (d.status === "failed") continue;
-      depTotal += d.deposit_amount;
-      depBonus += d.bonus_amount;
-      depCount++;
-
-      const matched =
-        d.received_into_account_id != null && accountById.has(d.received_into_account_id)
-          ? d.received_into_account_id
-          : (soleAccountOfBank.get(d.bank_name?.toLowerCase() ?? "") ?? null);
-      if (matched != null) {
-        depositCount.set(matched, (depositCount.get(matched) ?? 0) + 1);
-      }
-    }
-    // The company rides on the withdrawal row now — see /api/state.
-    let wdTotal = 0;
-    let wdCount = 0;
-    for (const w of withdrawals) {
-      if (w.status === "failed") continue;
-      if (!inMonth(w.created_at)) continue;
-      if (!companyInScope(w.company_entity_id ?? null)) continue;
-      wdTotal += w.status === "paid" ? w.credit_pulled_amount || w.requested_amount : w.requested_amount;
-      wdCount++;
-    }
-    return {
-      banksDeposit: banksDeposit.map(({ accountId, ...row }) => ({
-        ...row,
-        count: depositCount.get(accountId) ?? 0,
-        countSuffix: "dep",
-      })),
-      banksWithdrawal,
-      games,
-      depTotal,
-      depBonus,
-      depCount,
-      wdTotal,
-      wdCount,
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bankAccounts, boAccounts, botHealth, deposits, withdrawals, range, selectedCompanyId, companyInScope]);
+    return { banksIn, banksOut, totalIn, totalOut, netRows, games };
+  }, [movements, bankAccounts, boAccounts, botHealth, companyInScope]);
 
   const monthLabel = rangeLabel(range);
-
-  const sum = (rows: { value: number }[]) => rows.reduce((a, r) => a + r.value, 0);
-  const net = scope.depTotal - scope.wdTotal;
+  const net = scope.totalIn - scope.totalOut;
 
   return (
     <div className="grid shrink-0 grid-cols-2 gap-3 xl:grid-cols-4">
       <InfoCard
-        title="Bank · Deposit"
-        hint={`${monthLabel} count`}
+        title="Bank · Money In"
+        hint={monthLabel}
         icon={Landmark}
-        total={sum(scope.banksDeposit)}
-        rows={scope.banksDeposit}
+        total={scope.totalIn}
+        rows={scope.banksIn}
       />
       <InfoCard
-        title="Bank · Withdrawal"
+        title="Bank · Money Out"
+        hint={monthLabel}
         icon={Banknote}
-        total={sum(scope.banksWithdrawal)}
-        rows={scope.banksWithdrawal}
+        total={scope.totalOut}
+        rows={scope.banksOut}
       />
       <InfoCard
         title="Game · Kiosk Credit"
         icon={Coins}
-        total={sum(scope.games)}
+        total={scope.games.reduce((a, r) => a + r.value, 0)}
         rows={scope.games}
       />
       <InfoCard
@@ -316,11 +381,7 @@ export function CompanyInfoPanel({ range }: { range: DateRange }) {
         icon={Wallet}
         total={net}
         totalClassName={net < 0 ? "text-red-600 dark:text-red-400" : undefined}
-        rows={[
-          { label: `Deposits (${scope.depCount})`, value: scope.depTotal },
-          { label: "Bonus given", value: scope.depBonus, dim: true },
-          { label: `Withdrawals (${scope.wdCount})`, value: scope.wdTotal },
-        ]}
+        rows={scope.netRows}
       />
     </div>
   );
