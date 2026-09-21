@@ -52,14 +52,17 @@ export default function SettingsPage() {
   const me = useStore((s) => s.me);
   const [tab, setTab] = useState<TabKey>("account");
 
+  // A leader or a CS agent comes here for one thing — their own password — so
+  // that is all they are shown. Everything else on this page administers other
+  // people's logins, the sign-in policy, the keys and the system itself, and
+  // none of it is theirs. Leaders still manage their CS desks on Hierarchy.
+  const isAdmin = me?.role === "super_admin";
   const tabs: { key: TabKey; label: string; show: boolean }[] = [
     { key: "account", label: "My Account", show: true },
-    // Two-factor and this browser's device entry are everyone's; the policy
-    // and IP controls inside are gated to the super admin.
-    { key: "security", label: "Security", show: true },
-    { key: "team", label: "Team", show: me?.role === "super_admin" || me?.role === "company_leader" },
-    { key: "keys", label: "API Keys", show: me?.role === "super_admin" },
-    { key: "system", label: "System", show: me?.role === "super_admin" },
+    { key: "security", label: "Security", show: isAdmin },
+    { key: "team", label: "Team", show: isAdmin },
+    { key: "keys", label: "API Keys", show: isAdmin },
+    { key: "system", label: "System", show: isAdmin },
   ];
   const visible = tabs.filter((t) => t.show);
 
@@ -76,11 +79,14 @@ export default function SettingsPage() {
       <div>
         <h1 className="text-2xl font-semibold">Settings</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Manage your account, sign-in security, team, integration keys and system configuration.
+          {isAdmin
+            ? "Manage your account, sign-in security, team, integration keys and system configuration."
+            : "Your account details, and where you change your password."}
         </p>
       </div>
 
-      <div className="flex gap-1 border-b border-border">
+      {/* One tab is not a choice — the strip appears only when there are two. */}
+      <div className={`flex gap-1 border-b border-border ${visible.length < 2 ? "hidden" : ""}`}>
         {visible.map((t) => (
           <button
             key={t.key}

@@ -112,12 +112,10 @@ const NAV: NavGroup[] = [
         icon: ScrollText,
         roles: ["super_admin", "company_leader"],
       },
-      {
-        href: "/settings",
-        label: "Settings",
-        icon: Settings,
-        roles: ["super_admin"],
-      },
+      // Everyone, because everyone has a password to change. The page shows a
+      // leader or a CS agent their own account and nothing else; the team,
+      // key and system tabs stay the super admin's.
+      { href: "/settings", label: "Settings", icon: Settings },
     ],
   },
 ];
