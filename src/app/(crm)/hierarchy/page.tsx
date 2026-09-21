@@ -50,14 +50,28 @@ function RoleBadge({ role }: { role: UserRole }) {
   );
 }
 
-function EntityUserChips({ users }: { users: User[] }) {
+/**
+ * The logins on an entity, with a way to take one away.
+ *
+ * Removing is offered to the super admin only, and never on their own account —
+ * the server enforces both, plus the rule that the last super admin cannot go.
+ * Deleting the only login on a CS desk removes the empty desk with it, which is
+ * why that case is spelled out in the confirmation.
+ */
+function EntityUserChips({
+  users,
+  onRemove,
+}: {
+  users: User[];
+  onRemove?: (u: User) => void;
+}) {
   if (users.length === 0) return null;
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">
       {users.map((u) => (
         <div
           key={u.user_id}
-          className="flex items-center gap-2 rounded-md border bg-muted/20 px-2.5 py-2"
+          className="group flex items-center gap-2 rounded-md border bg-muted/20 px-2.5 py-2"
         >
           <Avatar className="h-7 w-7">
             <AvatarFallback className="text-[10px]">
@@ -71,6 +85,17 @@ function EntityUserChips({ users }: { users: User[] }) {
             </div>
           </div>
           <RoleBadge role={u.role} />
+          {onRemove && (
+            <button
+              type="button"
+              aria-label={`Remove ${u.username}`}
+              title={`Remove ${u.username}`}
+              onClick={() => onRemove(u)}
+              className="cursor-pointer rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-red-500/10 hover:text-red-600 focus-visible:opacity-100 group-hover:opacity-100 dark:hover:text-red-400"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
       ))}
     </div>
@@ -491,6 +516,8 @@ export default function HierarchyPage() {
 
   const [ownerDialog, setOwnerDialog] = useState<Entity | null>(null);
   const [restructure, setRestructure] = useState<Entity | null>(null);
+  /** The login the super admin has asked to remove, pending confirmation. */
+  const [removing, setRemoving] = useState<User | null>(null);
 
   const mains = entities
     .filter((e) => e.entity_type === "main_company")
@@ -664,7 +691,10 @@ export default function HierarchyPage() {
             </CardHeader>
             {(usersByEntity.get(main.entity_id) ?? []).length > 0 && (
               <CardContent className="pt-0">
-                <EntityUserChips users={usersByEntity.get(main.entity_id) ?? []} />
+                <EntityUserChips
+                  users={usersByEntity.get(main.entity_id) ?? []}
+                  onRemove={isSuper ? setRemoving : undefined}
+                />
               </CardContent>
             )}
           </Card>
@@ -740,7 +770,10 @@ export default function HierarchyPage() {
                       </CardHeader>
                       <CardContent className="pt-0 space-y-3">
                         {leaderUsers.length > 0 && (
-                          <EntityUserChips users={leaderUsers} />
+                          <EntityUserChips
+                            users={leaderUsers}
+                            onRemove={isSuper ? setRemoving : undefined}
+                          />
                         )}
 
                         {leaderCompanies.length === 0 ? (
@@ -832,7 +865,10 @@ export default function HierarchyPage() {
                                       csDesks.length > 0) && (
                                       <div className="space-y-2.5 border-t px-3.5 py-3">
                                         {companyUsers.length > 0 && (
-                                          <EntityUserChips users={companyUsers} />
+                                          <EntityUserChips
+                                          users={companyUsers}
+                                          onRemove={isSuper ? setRemoving : undefined}
+                                        />
                                         )}
                                         {csDesks.map((cs) => {
                                           const csUsers =
@@ -873,7 +909,10 @@ export default function HierarchyPage() {
                                               </div>
                                               {csUsers.length > 0 && (
                                                 <div className="border-t px-2.5 py-2">
-                                                  <EntityUserChips users={csUsers} />
+                                                  <EntityUserChips
+                                                  users={csUsers}
+                                                  onRemove={isSuper ? setRemoving : undefined}
+                                                />
                                                 </div>
                                               )}
                                             </div>
@@ -902,6 +941,14 @@ export default function HierarchyPage() {
         <CompanyLeadersDialog
           company={ownerDialog}
           onClose={() => setOwnerDialog(null)}
+        />
+      )}
+      {removing && (
+        <RemoveUserDialog
+          user={removing}
+          entities={entities}
+          users={users}
+          onClose={() => setRemoving(null)}
         />
       )}
       {restructure && (
@@ -1090,6 +1137,109 @@ function CompanyLeadersDialog({
         <div className="mt-4 flex justify-end">
           <Button variant="outline" className="cursor-pointer" onClick={onClose}>
             Done
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * Remove a login.
+ *
+ * Deliberately a dialog rather than a bare confirm(): what happens depends on
+ * who is being removed, and the reader should see it before agreeing. A CS
+ * desk with only this login goes with them — an empty desk is not a thing the
+ * tree should keep — and a leader's companies stay put, which is the part
+ * people assume wrongly.
+ *
+ * The server is the authority: it refuses your own account, refuses the last
+ * super admin, and confines a leader to CS agents in their own companies. This
+ * only explains and asks.
+ */
+function RemoveUserDialog({
+  user,
+  entities,
+  users,
+  onClose,
+}: {
+  user: User;
+  entities: Entity[];
+  users: User[];
+  onClose: () => void;
+}) {
+  const deleteUser = useStore((s) => s.deleteUser);
+  const [busy, setBusy] = useState(false);
+
+  const entity = entities.find((e) => e.entity_id === user.entity_id);
+  const siblings = users.filter(
+    (u) => u.entity_id === user.entity_id && u.user_id !== user.user_id,
+  ).length;
+  const deskGoesToo = entity?.entity_type === "cs" && siblings === 0;
+
+  async function submit() {
+    if (busy) return;
+    setBusy(true);
+    const res = await deleteUser(user.user_id);
+    setBusy(false);
+    if (!res.ok) {
+      toast.error(res.error ?? "Could not remove the login");
+      return;
+    }
+    toast.success(`${user.username} removed`);
+    onClose();
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogTitle>Remove {user.full_name}?</DialogTitle>
+
+        <div className="mt-3 space-y-3 text-sm">
+          <div className="rounded-md border bg-muted/20 px-3 py-2">
+            <div className="font-medium">@{user.username}</div>
+            <div className="text-[11px] text-muted-foreground">
+              {user.role.replace("_", " ")}
+              {entity ? ` · ${entity.name}` : ""}
+            </div>
+          </div>
+
+          <ul className="list-disc space-y-1 pl-5 text-[12px] text-muted-foreground">
+            <li>They can no longer sign in. The login is deleted, not disabled.</li>
+            <li>
+              Nothing they recorded moves — deposits, withdrawals and expenses keep
+              their history and still name them.
+            </li>
+            {deskGoesToo ? (
+              <li className="text-amber-700 dark:text-amber-400">
+                This is the only login on <strong>{entity?.name}</strong>, so that CS
+                desk is removed with them.
+              </li>
+            ) : entity?.entity_type === "cs" ? (
+              <li>
+                The <strong>{entity.name}</strong> desk stays — {siblings} other
+                {siblings === 1 ? " login" : " logins"} remain on it.
+              </li>
+            ) : null}
+            {user.role === "company_leader" && (
+              <li>
+                Their companies stay where they are. To hand those over, use
+                <strong> Restructure</strong> instead.
+              </li>
+            )}
+          </ul>
+        </div>
+
+        <div className="mt-4 flex justify-end gap-2">
+          <Button variant="outline" className="cursor-pointer" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button
+            className="cursor-pointer bg-red-600 text-white hover:bg-red-700"
+            onClick={submit}
+            disabled={busy}
+          >
+            {busy ? "Removing…" : "Remove login"}
           </Button>
         </div>
       </DialogContent>
