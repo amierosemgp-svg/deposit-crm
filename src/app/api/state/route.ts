@@ -7,6 +7,7 @@ import {
   botCommands,
   botHealth,
   companyLeaders,
+  leaderMemberships,
   deposits,
   expenses,
   gameCredits,
@@ -111,6 +112,25 @@ export async function GET() {
             ),
           )
       : [];
+    /**
+     * Which leaders hold which extra companies.
+     *
+     * A handful of rows — one per grant beyond the company a leader was created
+     * under — so the hierarchy can show a leader on every company they hold
+     * without asking per user.
+     */
+    const memberships = entityTree.length
+      ? await db
+          .select()
+          .from(leaderMemberships)
+          .where(
+            inArray(
+              leaderMemberships.leader_entity_id,
+              entityTree.map((e) => e.entity_id),
+            ),
+          )
+      : [];
+
     const entityIds = await visibleEntityIds(user);
     const companyIds =
       user.companyIds ??
@@ -461,6 +481,7 @@ export async function GET() {
       me: user,
       entities: entityTree,
       companyLeaders: ownership,
+      leaderMemberships: memberships,
       users: allUsers,
       // Per-company member counts, in place of the roster itself.
       playerCounts,

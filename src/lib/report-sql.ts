@@ -111,6 +111,10 @@ export function parseReportParams(
 export const searchAcross = (columns: SQL, q: string) =>
   sql`lower(${columns}) LIKE ${"%" + q + "%"}`;
 
+/** Every company a leader holds; falls back to the one they sit on. */
+const leaderEntitiesOf = (user: AuthedUser): number[] =>
+  user.leaderEntityIds?.length ? user.leaderEntityIds : [user.entity_id];
+
 /**
  * A leader's scope, resolved at each row's own date.
  *
@@ -126,14 +130,20 @@ export const searchAcross = (columns: SQL, q: string) =>
  * already paid keep matching the report that justified it.
  */
 function leaderOwnedAt(
-  leaderEntityId: number,
+  leaderEntityIds: number[],
   companyColumn: SQL,
   dateColumn: SQL,
 ): SQL {
+  // A leader may hold several companies (see leader_memberships), so the test
+  // is "any of theirs owned it then", not "that one did".
+  if (!leaderEntityIds.length) return sql`false`;
   return sql`EXISTS (
     SELECT 1 FROM company_leaders cl
      WHERE cl.company_entity_id = ${companyColumn}
-       AND cl.leader_entity_id = ${leaderEntityId}
+       AND cl.leader_entity_id IN (${sql.join(
+         leaderEntityIds.map((id) => sql`${id}`),
+         sql`, `,
+       )})
        AND cl.valid_from <= ${dateColumn}
        AND (cl.valid_to IS NULL OR cl.valid_to > ${dateColumn})
   )`;
@@ -152,7 +162,7 @@ export function scopeDepositsAsOf(
 ): SQL[] {
   const col = sql.raw(`${alias}.company_entity_id`);
   if (user.role === "company_leader") {
-    return [leaderOwnedAt(user.entity_id, col, dateColumn)];
+    return [leaderOwnedAt(leaderEntitiesOf(user), col, dateColumn)];
   }
   return scopeDeposits(user, alias);
 }
@@ -165,7 +175,7 @@ export function scopeByPlayerAsOf(
 ): SQL[] {
   const col = sql.raw(`${alias}.company_entity_id`);
   if (user.role === "company_leader") {
-    return [leaderOwnedAt(user.entity_id, col, dateColumn)];
+    return [leaderOwnedAt(leaderEntitiesOf(user), col, dateColumn)];
   }
   return scopeByPlayer(user, alias);
 }

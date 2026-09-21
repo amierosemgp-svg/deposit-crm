@@ -195,8 +195,8 @@ const LOGIN_PAIRS: Record<TabKey, Array<{ userCol: number; gameCol: number }>> =
 /** One leader-to-leader settlement, as GET /api/leader-transfers returns it. */
 type LeaderTransferRow = {
   transfer_id: number;
-  from_leader_entity_id: number;
-  to_leader_entity_id: number;
+  from_leader_user_id: number;
+  to_leader_user_id: number;
   amount: number;
   /** Where the money came from / went: an account, cash, or unrecorded. */
   from_account_id: number | null;
@@ -534,9 +534,9 @@ const ENTRY_HINT: Record<TabKey, string> = {
   freecredit:
     "Entry: Member Code · Product · Amount · Mode (bot / manual) · Remark — credit with no deposit behind it",
   transfer: "Entry: Member Code · From · To · Amount (or ALL) — the rest fills itself",
-  expense: "Entry: Date · Category · Description · Amount · Company · Notes",
+  expense: "Entry: Date · Category · Description · Amount · Casino · Notes",
   leaderwithdrawal:
-    "Entry: Date · Time · Bank Account · Amount · Taken By · Notes — cash a leader took out at the bank; the account is debited on save",
+    "Entry: Date · Time · Bank Account · Amount · Taken By · Notes — cash a company took out at the bank; the account is debited on save",
   rebate: "Generated on the Rebates page — select rows here to pay, skip or unskip them",
   leadertransfer:
     "Entry: From Leader · To Leader · Amount — name the bank account each end used, or Cash",
@@ -584,6 +584,8 @@ export default function TransactionsPage() {
   const deleteDeposit = useStore((s) => s.deleteDeposit);
   const deleteWithdrawal = useStore((s) => s.deleteWithdrawal);
   const deleteFreeCredit = useStore((s) => s.deleteFreeCredit);
+  const deleteCashOut = useStore((s) => s.deleteCashOut);
+  const deleteLeaderTransfer = useStore((s) => s.deleteLeaderTransfer);
   const fetchBonusOptions = useStore((s) => s.fetchBonusOptions);
   const gamesFn = useStore((s) => s.games);
   const banksFn = useStore((s) => s.banks);
@@ -591,6 +593,7 @@ export default function TransactionsPage() {
   const userName = useStore((s) => s.userName);
   const bankAccounts = useStore((s) => s.bankAccounts);
   const entities = useStore((s) => s.entities);
+  const users = useStore((s) => s.users);
   const entityName = useStore((s) => s.entityName);
   const reverseBankCashOut = useStore((s) => s.reverseBankCashOut);
   const bonusPlans = useStore((s) => s.bonusPlans);
@@ -848,6 +851,8 @@ export default function TransactionsPage() {
       | "delete-deposit"
       | "delete-withdrawal"
       | "delete-freecredit"
+      | "delete-cashout"
+      | "delete-leadertransfer"
       | "reverse-cashout"
       | "pay-rebate"
       | "pay-rebate-manual";
@@ -1001,20 +1006,48 @@ export default function TransactionsPage() {
     [bankAccounts, companyInScope],
   );
 
+  /**
+   * The leaders themselves — people, not companies.
+   *
+   * A settlement is Tiong paying KC; a company is only where the money sits.
+   * The hint names the company they hold so two people with similar names stay
+   * apart.
+   */
+  const leaderMemberships = useStore((s) => s.leaderMemberships);
+
   const LEADER_SUGGESTIONS = useMemo<SheetSuggestion[]>(
     () =>
-      entities
-        .filter((e) => e.entity_type === "leader" && e.status === "active")
-        .map((e) => ({ value: e.name })),
-    [entities],
+      users
+        .filter((u) => u.role === "company_leader" && u.status === "active")
+        .map((u) => ({ value: u.full_name, hint: entityName(u.entity_id) })),
+    [users, entityName],
   );
-  const leaderByName = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const e of entities) {
-      if (e.entity_type === "leader") m.set(e.name.trim().toLowerCase(), e.entity_id);
+  /**
+   * The companies a leader holds — the one they sit on, plus any granted.
+   * Used to offer only the accounts a settlement could legitimately come from.
+   */
+  const companiesOfLeader = useMemo(() => {
+    const m = new Map<number, number[]>();
+    for (const u of users) {
+      if (u.role !== "company_leader") continue;
+      m.set(u.user_id, [
+        u.entity_id,
+        ...leaderMemberships
+          .filter((x) => x.user_id === u.user_id)
+          .map((x) => x.leader_entity_id),
+      ]);
     }
     return m;
-  }, [entities]);
+  }, [users, leaderMemberships]);
+
+  /** A typed leader name → their user id. */
+  const leaderByName = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const u of users) {
+      if (u.role === "company_leader") m.set(u.full_name.trim().toLowerCase(), u.user_id);
+    }
+    return m;
+  }, [users]);
   const accountByLabel = useMemo(() => {
     const m = new Map<string, (typeof bankAccounts)[number]>();
     for (const a of bankAccounts) {
@@ -1136,7 +1169,7 @@ export default function TransactionsPage() {
         time: { label: "Time", width: 64, align: "center", entry: true, placeholder: "14:30" },
         account: { label: "Bank Account", width: 220, entry: true, required: true, options: ACCOUNT_SUGGESTIONS, placeholder: "bank account" },
         amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "500" },
-        takenby: { label: "Taken By", width: 160, entry: true, required: true, options: LEADER_SUGGESTIONS, placeholder: "leader" },
+        takenby: { label: "Taken By", width: 160, entry: true, required: true, options: LEADER_SUGGESTIONS, placeholder: "company" },
         notes: { label: "Notes", width: 240, entry: true, placeholder: "receipt no. (optional)" },
         status: { label: "Status", width: 100 },
       }),
@@ -1173,8 +1206,10 @@ export default function TransactionsPage() {
         category: { label: "Category", width: 130, entry: true, required: true, options: EXPENSE_CATEGORIES.map((c) => EXPENSE_CATEGORY_LABEL[c]), placeholder: "category" },
         description: { label: "Description", width: 260, entry: true, required: true, placeholder: "what it's for" },
         amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "100" },
-        company: { label: "Company", width: 150, entry: true, options: companies.map((c) => c.company_name), placeholder: "company" },
-        paidfrom: { label: "Paid From", width: 190, entry: true, options: PAID_FROM_SUGGESTIONS, placeholder: "bank account / leader cash" },
+        // Key stays `company` — it is the column id the parser and the saved
+        // rows use. The label is what the desk reads, and these are casinos.
+        company: { label: "Casino", width: 150, entry: true, options: companies.map((c) => c.company_name), placeholder: "casino" },
+        paidfrom: { label: "Paid From", width: 190, entry: true, options: PAID_FROM_SUGGESTIONS, placeholder: "bank account / company cash" },
         notes: { label: "Notes", width: 240, entry: true, placeholder: "notes (optional)" },
       }),
     };
@@ -1803,16 +1838,16 @@ export default function TransactionsPage() {
           assign: assignCell(t.created_by_user_id),
           date: sheetDate(t.created_at),
           time: formatClock(t.created_at),
-          from: entityName(t.from_leader_entity_id),
+          from: userName(t.from_leader_user_id),
           fromaccount: transferEndLabel(t.from_account_id, t.from_cash),
-          to: entityName(t.to_leader_entity_id),
+          to: userName(t.to_leader_user_id),
           toaccount: transferEndLabel(t.to_account_id, t.to_cash),
           amount: fmtAmount(t.amount),
           note: t.note ?? "",
         }),
       }))
       .filter((r) => matchesSearch(r.cells));
-  }, [leaderTransfers, range, matchesSearch, assignCell, entityName, transferEndLabel, inRangeOr]);
+  }, [leaderTransfers, range, matchesSearch, assignCell, userName, transferEndLabel, inRangeOr]);
 
   const rowsByTab: Record<TabKey, SheetRow[]> = {
     deposit: depositRows,
@@ -1947,6 +1982,48 @@ export default function TransactionsPage() {
   const draftSuggestions = useCallback(
     (draftIndex: number, colIndex: number) => {
       const d = drafts[draftIndex];
+      /**
+       * Leader Transfer account cells: only accounts that leader may use.
+       *
+       * The server refuses a settlement paid out of a company the leader does
+       * not hold, so offering every account in the house meant the sheet
+       * suggested rows it would then reject. The list narrows to the companies
+       * on that side of the row — plus Cash, which belongs to nobody.
+       */
+      if (
+        tab === "leadertransfer" &&
+        (colIndex === COL.leadertransfer.fromaccount ||
+          colIndex === COL.leadertransfer.toaccount)
+      ) {
+        const leaderCell =
+          d?.[
+            colIndex === COL.leadertransfer.fromaccount
+              ? COL.leadertransfer.from
+              : COL.leadertransfer.to
+          ]
+            ?.trim()
+            .toLowerCase() ?? "";
+        const leaderId = leaderCell ? leaderByName.get(leaderCell) : undefined;
+        // No leader named yet — the full list, rather than an empty dead end.
+        if (!leaderId) return undefined;
+        const held = companiesOfLeader.get(leaderId) ?? [];
+        const allowed = bankAccounts.filter(
+          (a) =>
+            a.status === "active" &&
+            (held.includes(a.entity_id) ||
+              held.includes(
+                entities.find((e) => e.entity_id === a.entity_id)?.parent_entity_id ?? -1,
+              )),
+        );
+        return [
+          { value: CASH, hint: "changed hands as cash — no account involved" },
+          ...allowed.map((a) => ({
+            value: a.label ?? `${a.bank_name} ${a.account_number}`,
+            hint: `${entityName(a.entity_id)} · ${fmtAmount(a.current_balance)}`,
+          })),
+        ];
+      }
+
       // Login picker: the player's linked logins for the row's game, so CS can
       // choose which account under that game the transaction hits.
       const loginCfg = LOGIN_PAIRS[tab].find((pair) => pair.userCol === colIndex);
@@ -2042,7 +2119,8 @@ export default function TransactionsPage() {
         houseRates,
       );
     },
-    [tab, drafts, playerByCode, bonusOptionsCache, buildBonusSuggestions, houseRates],
+    [tab, drafts, playerByCode, bonusOptionsCache, buildBonusSuggestions, houseRates,
+     bankAccounts, companiesOfLeader, entities, entityName, leaderByName],
   );
 
   // ---- validation ----
@@ -2340,7 +2418,16 @@ export default function TransactionsPage() {
         return { ok: false, error: `Exceeds the account balance (${fmtAmount(account.current_balance)})` };
       const takenCell = (d[c.takenby] ?? "").trim();
       if (!takenCell) return { ok: false, error: "Say who took the cash" };
-      const leaderId = leaderByName.get(takenCell.toLowerCase()) ?? null;
+      /**
+       * Who physically took the cash — a person.
+       *
+       * Sent as a name, not an id: bank_cash_outs.taken_by is the name field
+       * the workbook always used ("kc"), while taken_by_entity_id expects a
+       * `leader` entity, which a person is not. A leader picked from the list
+       * arrives as their full name; anything else typed is kept as written, so
+       * a runner who has no login can still be named.
+       */
+      if (!takenCell) return { ok: false, error: "Say who took the cash" };
       const dateCell = (d[c.date] ?? "").trim();
       const ymd = dateCell ? parseSheetDate(dateCell) : new Date().toISOString().slice(0, 10);
       if (!ymd) return { ok: false, error: `Bad date "${dateCell}" (use 31/8/2026)` };
@@ -2361,13 +2448,13 @@ export default function TransactionsPage() {
         payload: {
           account_id: account.account_id,
           amount: amt,
-          ...(leaderId ? { taken_by_entity_id: leaderId } : { taken_by: takenCell }),
+          taken_by: takenCell,
           occurred_at: occurred.toISOString(),
           ...(notes ? { notes } : {}),
         },
       };
     },
-    [accountByLabel, leaderByName, companyInScope],
+    [accountByLabel, companyInScope],
   );
 
   /**
@@ -2429,8 +2516,8 @@ export default function TransactionsPage() {
       return {
         ok: true,
         payload: {
-          from_leader_entity_id: fromId,
-          to_leader_entity_id: toId,
+          from_leader_user_id: fromId,
+          to_leader_user_id: toId,
           amount: amt,
           ...(fromEnd.account_id ? { from_account_id: fromEnd.account_id } : {}),
           ...(fromEnd.cash ? { from_cash: true } : {}),
@@ -2900,6 +2987,15 @@ export default function TransactionsPage() {
         : [],
     [tab, selectedNumericIds, cashOutById],
   );
+  const selectedLeaderTransfers = useMemo(
+    () =>
+      tab === "leadertransfer"
+        ? selectedNumericIds
+            .map((id) => leaderTransfers.find((t) => t.transfer_id === id))
+            .filter((t): t is LeaderTransferRow => !!t)
+        : [],
+    [tab, selectedNumericIds, leaderTransfers],
+  );
   const rebateById = useMemo(() => {
     const m = new Map<number, RebatePayoutLedgerRow>();
     for (const r of rebatePayouts) m.set(r.payout_id, r);
@@ -2933,13 +3029,22 @@ export default function TransactionsPage() {
       }
       setActing(false);
       setSelectedIds([]);
+      /**
+       * Redraw the sheet now, rather than on its next heartbeat.
+       *
+       * The rows come from /api/worksheet/rows, which polls every ten seconds;
+       * the store's own refresh does not touch them. Without this a deleted row
+       * sat on screen for up to ten seconds after the toast said it was gone,
+       * which reads as the action having failed.
+       */
+      await loadRangeRows(tab);
       if (errors.length) {
         toast.error(`${label}: ${ok} done, ${errors.length} failed — ${errors[0]}`);
       } else {
         toast.success(`${label}: ${ok} done`);
       }
     },
-    [acting],
+    [acting, loadRangeRows, tab],
   );
 
   const assignKind =
@@ -3042,6 +3147,8 @@ export default function TransactionsPage() {
       delWd: tab === "withdrawal" && deletableWd.length > 0,
       delWdMine: deletableWd.length > 0 && deletableWd.every((w) => mine(w.assigned_to_user_id)),
       delFc: tab === "freecredit" && selectedFreeCredits.length > 0,
+      delCash: tab === "leaderwithdrawal" && selectedCashOuts.length > 0,
+      delLt: tab === "leadertransfer" && selectedLeaderTransfers.length > 0,
       delFcMine:
         selectedFreeCredits.length > 0 && selectedFreeCredits.every((f) => mine(f.user_id)),
       // Reversing a cash-out is a leader's call; paying/skipping a rebate is CS work.
@@ -3057,6 +3164,7 @@ export default function TransactionsPage() {
     [
       tab, me, selectedNumericIds, selectedDeposits, selectedWithdrawals, selectedTransfers,
       selectedExpenses, selectedCashOuts, selectedRebates, selectedFreeCredits,
+      selectedLeaderTransfers,
       deletableDep, deletableWd,
     ],
   );
@@ -3197,6 +3305,22 @@ export default function TransactionsPage() {
       }),
     [selectedFreeCredits, me],
   );
+  const handleDeleteCashOuts = useCallback(
+    () =>
+      setConfirming({
+        kind: "delete-cashout",
+        ids: selectedCashOuts.map((c) => c.cash_out_id),
+      }),
+    [selectedCashOuts],
+  );
+  const handleDeleteLeaderTransfers = useCallback(
+    () =>
+      setConfirming({
+        kind: "delete-leadertransfer",
+        ids: selectedLeaderTransfers.map((t) => t.transfer_id),
+      }),
+    [selectedLeaderTransfers],
+  );
   const handleReverseCashOuts = useCallback(
     () =>
       setConfirming({
@@ -3288,6 +3412,8 @@ export default function TransactionsPage() {
         else if (tab === "withdrawal" && can.delWd) run = handleDeleteWithdrawals;
         else if (tab === "freecredit" && can.delFc) run = handleDeleteFreeCredits;
         else if (tab === "expense" && can.delExp) run = handleDeleteExpenses;
+        else if (tab === "leaderwithdrawal" && can.delCash) run = handleDeleteCashOuts;
+        else if (tab === "leadertransfer" && can.delLt) run = handleDeleteLeaderTransfers;
       }
       if (run) {
         e.preventDefault();
@@ -3303,6 +3429,7 @@ export default function TransactionsPage() {
     handleAssignToMe, handleApprove, handleComplete, handleRetryDeposits,
     handlePull, handleMarkPaid, handleRetryTransfers, handleDeleteExpenses,
     handleDeleteDeposits, handleDeleteWithdrawals, handleDeleteFreeCredits,
+    handleDeleteCashOuts, handleDeleteLeaderTransfers,
   ]);
 
   // Shift+Cmd/Ctrl+Left/Right cycles the worksheet tabs — global, so it works
@@ -3660,6 +3787,71 @@ export default function TransactionsPage() {
         },
       };
     }
+    if (confirming.kind === "delete-cashout") {
+      const list = confirming.ids
+        .map((id) => cashOutById.get(id))
+        .filter((c): c is BankCashOut => !!c);
+      const stillDebited = list.filter((c) => !c.reversed_at);
+      return {
+        title: `Delete ${list.length} clear bank row${list.length === 1 ? "" : "s"}?`,
+        description:
+          "For a row that should not exist — mistyped, or entered twice. The money " +
+          "goes back on the account and the row is gone. To record that the cash " +
+          "really was returned, use Reverse instead: that keeps the row.",
+        confirmLabel: "Delete",
+        summary: [
+          { label: "Rows", value: String(list.length) },
+          {
+            label: "Back on the banks",
+            value: fmtAmount(stillDebited.reduce((a, c) => a + c.amount, 0)),
+            emphasis: true,
+          },
+        ] as SummaryRow[],
+        items: list.map((c) => {
+          const a = accountById.get(c.account_id);
+          return {
+            key: c.cash_out_id,
+            label: c.taken_by,
+            meta: a ? `${a.bank_name} ${a.account_number}` : `#${c.account_id}`,
+            value: fmtAmount(c.amount),
+          };
+        }),
+        run: async () => {
+          await runBulk("Delete", list.map((c) => c.cash_out_id), deleteCashOut);
+          await loadCashOuts();
+        },
+      };
+    }
+    if (confirming.kind === "delete-leadertransfer") {
+      const list = confirming.ids
+        .map((id) => leaderTransfers.find((t) => t.transfer_id === id))
+        .filter((t): t is LeaderTransferRow => !!t);
+      return {
+        title: `Delete ${list.length} settlement${list.length === 1 ? "" : "s"}?`,
+        description:
+          "The row goes and both banks go back: the sending account is refunded " +
+          "and the receiving one gives it up. Cash ends moved nothing and need nothing.",
+        confirmLabel: "Delete",
+        summary: [
+          { label: "Settlements", value: String(list.length) },
+          {
+            label: "Total amount",
+            value: fmtAmount(list.reduce((a, t) => a + t.amount, 0)),
+            emphasis: true,
+          },
+        ] as SummaryRow[],
+        items: list.map((t) => ({
+          key: t.transfer_id,
+          label: `${userName(t.from_leader_user_id)} → ${userName(t.to_leader_user_id)}`,
+          meta: `${transferEndLabel(t.from_account_id, t.from_cash)} → ${transferEndLabel(t.to_account_id, t.to_cash)}`,
+          value: fmtAmount(t.amount),
+        })),
+        run: async () => {
+          await runBulk("Delete", list.map((t) => t.transfer_id), deleteLeaderTransfer);
+          await loadLeaderTransfers();
+        },
+      };
+    }
     if (confirming.kind === "reverse-cashout") {
       const list = confirming.ids
         .map((id) => cashOutById.get(id))
@@ -3761,8 +3953,9 @@ export default function TransactionsPage() {
     confirming, depositById, withdrawalById, expenseById, playerById,
     cashOutById, rebateById, accountById, freeCreditById,
     runBulk, rejectDeposit, rejectWithdrawal, deleteExpense, reverseBankCashOut,
-    deleteDeposit, deleteWithdrawal, deleteFreeCredit,
-    loadCashOuts, loadRebatePayouts, loadFreeCredits,
+    deleteDeposit, deleteWithdrawal, deleteFreeCredit, deleteCashOut, deleteLeaderTransfer,
+    leaderTransfers, userName, transferEndLabel,
+    loadCashOuts, loadRebatePayouts, loadFreeCredits, loadLeaderTransfers,
   ]);
 
   // ---- Crawl banks (deposit tab): ask the agent to re-read the banks now ----
@@ -4315,6 +4508,20 @@ export default function TransactionsPage() {
                 <RotateCcw className="h-3 w-3" />
                 Retry
                 <Kbd k={`${MOD_LABEL}I`} />
+              </Button>
+            )}
+            {(can.delCash || can.delLt) && (
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={acting}
+                onClick={can.delCash ? handleDeleteCashOuts : handleDeleteLeaderTransfers}
+                title="Delete these rows and put the money back"
+                className="cursor-pointer gap-1 border-red-300 text-red-700 hover:bg-red-50 dark:text-red-300"
+              >
+                <Trash2 className="h-3 w-3" />
+                Delete
+                <Kbd k={`${DEL_LABEL}D`} />
               </Button>
             )}
             {(can.delDep || can.delWd || can.delFc) && (

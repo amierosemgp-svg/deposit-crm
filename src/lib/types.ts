@@ -571,6 +571,18 @@ export const EXPENSE_CATEGORIES = [
   "other",
 ] as const;
 
+/**
+ * An extra company a leader holds, beyond the one they were created under.
+ * A `leader` entity is a COMPANY on screen; the leader is the person.
+ */
+export type LeaderMembership = {
+  id: number;
+  user_id: number;
+  leader_entity_id: number;
+  granted_by_user_id: number | null;
+  created_at: string;
+};
+
 /** Who currently runs a company. See lib/company-leaders.ts. */
 export type CompanyLeader = {
   id: number;

@@ -68,7 +68,7 @@ export function BankCashOutModal({ open, onOpenChange, account, onRecorded }: Pr
     () => [
       ...leaders.map((l) => ({
         value: String(l.entity_id),
-        label: l.entity_id === ownLeaderId ? `${l.name} · this company's leader` : l.name,
+        label: l.entity_id === ownLeaderId ? `${l.name} · your own company` : l.name,
       })),
       { value: OTHER, label: "Someone else…" },
     ],

@@ -590,6 +590,38 @@ export const companyLeaders = pgTable(
   },
 );
 
+/**
+ * The extra companies a leader holds.
+ *
+ * Watch the vocabulary: a `leader` entity IS a company on screen (Abdullah
+ * Club, ICON); a `company` entity is a casino (Pokercity). A *leader* is a
+ * person — a users row with role company_leader.
+ *
+ * That person used to sit on exactly one company via users.entity_id, so Tiong
+ * could hold Abdullah Club or ICON but never both. This table holds the extras.
+ * users.entity_id is left alone as the company they were created under, so no
+ * existing login needed backfilling and one with no rows here behaves as it
+ * always did.
+ */
+export const leaderMemberships = pgTable(
+  "leader_memberships",
+  {
+    id: serial("id").primaryKey(),
+    user_id: integer("user_id")
+      .notNull()
+      .references(() => users.user_id, { onDelete: "cascade" }),
+    /** The `leader` entity — a COMPANY on screen. */
+    leader_entity_id: integer("leader_entity_id")
+      .notNull()
+      .references(() => entities.entity_id, { onDelete: "cascade" }),
+    granted_by_user_id: integer("granted_by_user_id").references(() => users.user_id),
+    created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [unique("leader_memberships_unique").on(t.user_id, t.leader_entity_id)],
+);
+
 // ---------- Money ----------
 
 export const bankAccounts = pgTable("bank_accounts", {
@@ -1344,12 +1376,20 @@ export const expenses = pgTable("expenses", {
  */
 export const leaderTransfers = pgTable("leader_transfers", {
   transfer_id: serial("transfer_id").primaryKey(),
-  from_leader_entity_id: integer("from_leader_entity_id")
+  /**
+   * The two people settling up.
+   *
+   * A leader is a person — a users row with role company_leader. The ends were
+   * `leader` entities (companies) until the sheet could only say "Abdullah Club
+   * paid ICON"; what the desk records is "Tiong paid KC". The company is where
+   * the money sits, not who is settling.
+   */
+  from_leader_user_id: integer("from_leader_user_id")
     .notNull()
-    .references(() => entities.entity_id),
-  to_leader_entity_id: integer("to_leader_entity_id")
+    .references(() => users.user_id),
+  to_leader_user_id: integer("to_leader_user_id")
     .notNull()
-    .references(() => entities.entity_id),
+    .references(() => users.user_id),
   amount: numeric("amount", { precision: 14, scale: 2, mode: "number" }).notNull(),
   /**
    * Where the money physically came from, and where it landed. Each end is

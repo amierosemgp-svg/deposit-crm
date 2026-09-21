@@ -203,8 +203,10 @@ export async function GET(request: Request) {
         scope: visible === null
           ? sql`true`
           : visible.length
-            ? sql`(t.from_leader_entity_id IN (${sql.join(visible.map((id) => sql`${id}`), sql`, `)})
-                   OR t.to_leader_entity_id IN (${sql.join(visible.map((id) => sql`${id}`), sql`, `)}))`
+            // The ends are people; their scope is the company they sit on.
+            ? sql`EXISTS (SELECT 1 FROM users u
+                           WHERE u.user_id IN (t.from_leader_user_id, t.to_leader_user_id)
+                             AND u.entity_id IN (${sql.join(visible.map((id) => sql`${id}`), sql`, `)}))`
             : sql`false`,
         date: sql`t.created_at`,
         numerics: ["amount"],

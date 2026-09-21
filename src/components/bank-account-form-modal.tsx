@@ -211,15 +211,17 @@ export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
         <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
           <div className="min-h-0 flex-1 space-y-3.5 overflow-y-auto p-5">
             <div className="space-y-1.5">
+              {/* A `leader` entity is a Company on screen, a `company` entity
+                  is a Casino — an account belongs to one or the other. */}
               <Label>
-                Entity <span className="text-rose-600 dark:text-rose-400">*</span>
+                Owner <span className="text-rose-600 dark:text-rose-400">*</span>
               </Label>
               <Select
                 value={form.entity_id}
                 onValueChange={(v) => update("entity_id", v ?? "")}
                 items={eligibleEntities.map((e) => ({
                   value: String(e.entity_id),
-                  label: `${e.name} (${e.entity_type === "leader" ? "Leader" : "Company"})`,
+                  label: `${e.name} (${e.entity_type === "leader" ? "Company" : "Casino"})`,
                 }))}
               >
                 <SelectTrigger
@@ -240,7 +242,7 @@ export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
                       value={String(e.entity_id)}
                       className="cursor-pointer"
                     >
-                      {e.name} ({e.entity_type === "leader" ? "Leader" : "Company"})
+                      {e.name} ({e.entity_type === "leader" ? "Company" : "Casino"})
                     </SelectItem>
                   ))}
                 </SelectContent>

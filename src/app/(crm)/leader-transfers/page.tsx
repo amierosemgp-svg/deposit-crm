@@ -30,8 +30,8 @@ import { cn } from "@/lib/utils";
 
 type LeaderTransfer = {
   transfer_id: number;
-  from_leader_entity_id: number;
-  to_leader_entity_id: number;
+  from_leader_user_id: number;
+  to_leader_user_id: number;
   amount: number;
   from_account_id: number | null;
   to_account_id: number | null;
@@ -45,6 +45,7 @@ type LeaderTransfer = {
 export default function LeaderTransfersPage() {
   const me = useStore((s) => s.me);
   const entities = useStore((s) => s.entities);
+  const users = useStore((s) => s.users);
   const entityName = useStore((s) => s.entityName);
   const userName = useStore((s) => s.userName);
   const bankAccounts = useStore((s) => s.bankAccounts);
@@ -59,9 +60,14 @@ export default function LeaderTransfersPage() {
     [bankAccounts],
   );
 
+  /**
+   * The leaders themselves — people, not companies.
+   *
+   * A settlement is Tiong paying KC; the company is only where the money sits.
+   */
   const leaders = useMemo(
-    () => entities.filter((e) => e.entity_type === "leader" && e.status === "active"),
-    [entities],
+    () => users.filter((u) => u.role === "company_leader" && u.status === "active"),
+    [users],
   );
 
   const [rows, setRows] = useState<LeaderTransfer[]>([]);
@@ -90,34 +96,34 @@ export default function LeaderTransfersPage() {
   // Per-leader net flow — the report: sent, received, and net for each leader.
   const summary = useMemo(() => {
     const m = new Map<number, { sent: number; received: number }>();
-    for (const l of leaders) m.set(l.entity_id, { sent: 0, received: 0 });
+    for (const l of leaders) m.set(l.user_id, { sent: 0, received: 0 });
     for (const r of rows) {
-      const f = m.get(r.from_leader_entity_id) ?? { sent: 0, received: 0 };
+      const f = m.get(r.from_leader_user_id) ?? { sent: 0, received: 0 };
       f.sent += r.amount;
-      m.set(r.from_leader_entity_id, f);
-      const t = m.get(r.to_leader_entity_id) ?? { sent: 0, received: 0 };
+      m.set(r.from_leader_user_id, f);
+      const t = m.get(r.to_leader_user_id) ?? { sent: 0, received: 0 };
       t.received += r.amount;
-      m.set(r.to_leader_entity_id, t);
+      m.set(r.to_leader_user_id, t);
     }
     return [...m.entries()].map(([id, v]) => ({
       id,
-      name: entityName(id),
+      name: userName(id),
       sent: v.sent,
       received: v.received,
       net: v.received - v.sent,
     }));
-  }, [rows, leaders, entityName]);
+  }, [rows, leaders, userName]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return rows;
     return rows.filter(
       (r) =>
-        entityName(r.from_leader_entity_id).toLowerCase().includes(q) ||
-        entityName(r.to_leader_entity_id).toLowerCase().includes(q) ||
+        userName(r.from_leader_user_id).toLowerCase().includes(q) ||
+        userName(r.to_leader_user_id).toLowerCase().includes(q) ||
         (r.note ?? "").toLowerCase().includes(q),
     );
-  }, [rows, search, entityName]);
+  }, [rows, search, userName]);
 
   const total = useMemo(() => rows.reduce((a, r) => a + r.amount, 0), [rows]);
 
@@ -224,7 +230,7 @@ export default function LeaderTransfersPage() {
                     {formatDateTime(r.created_at)}
                   </td>
                   <td className="whitespace-nowrap px-4 py-2">
-                    {entityName(r.from_leader_entity_id)}
+                    {userName(r.from_leader_user_id)}
                   </td>
                   <td className="whitespace-nowrap px-4 py-2 text-muted-foreground">
                     {accountLabel(r.from_account_id, r.from_cash)}
@@ -232,7 +238,7 @@ export default function LeaderTransfersPage() {
                   <td className="whitespace-nowrap px-4 py-2">
                     <span className="inline-flex items-center gap-1.5">
                       <ArrowRight className="h-3 w-3 text-muted-foreground" />
-                      {entityName(r.to_leader_entity_id)}
+                      {userName(r.to_leader_user_id)}
                     </span>
                   </td>
                   <td className="whitespace-nowrap px-4 py-2 text-muted-foreground">
@@ -265,7 +271,7 @@ export default function LeaderTransfersPage() {
 
       {open && (
         <NewTransferDialog
-          leaders={leaders.map((l) => ({ id: l.entity_id, name: l.name }))}
+          leaders={leaders.map((l) => ({ id: l.user_id, name: l.full_name }))}
           onClose={() => setOpen(false)}
           onDone={() => {
             setOpen(false);
@@ -340,8 +346,8 @@ function NewTransferDialog({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          from_leader_entity_id: Number(from),
-          to_leader_entity_id: Number(to),
+          from_leader_user_id: Number(from),
+          to_leader_user_id: Number(to),
           amount: amt,
           ...endFields(fromEnd, "from"),
           ...endFields(toEnd, "to"),

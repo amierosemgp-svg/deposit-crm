@@ -3,6 +3,7 @@
 import { create } from "zustand";
 import type {
   CompanyLeader,
+  LeaderMembership,
   ApiKeyRow,
   BankAccount,
   BankAccountRole,
@@ -74,6 +75,8 @@ type StateResponse = {
   me: Me;
   entities: Entity[];
   companyLeaders: CompanyLeader[];
+  /** Extra companies leaders hold — see LeaderMembership. */
+  leaderMemberships: LeaderMembership[];
   users: User[];
   /** Members per company. The roster itself is no longer sent — see below. */
   playerCounts: { company_entity_id: number; members: number }[];
@@ -100,6 +103,8 @@ type Store = {
   entities: Entity[];
   /** Who currently runs each company — a company may have more than one. */
   companyLeaders: CompanyLeader[];
+  /** Extra companies leaders hold — see LeaderMembership. */
+  leaderMemberships: LeaderMembership[];
   users: User[];
   /**
    * Members we have actually looked at — NOT the roster.
@@ -444,6 +449,10 @@ type Store = {
   deleteWithdrawal: (withdrawalId: number) => Promise<MutationResult>;
   /** Keyed on the ledger row's transaction_id — that row IS the sheet's row. */
   deleteFreeCredit: (transactionId: number) => Promise<MutationResult>;
+  /** A clear-bank row that should not exist; the money goes back on the account. */
+  deleteCashOut: (cashOutId: number) => Promise<MutationResult>;
+  /** A settlement keyed wrong; both banks go back. */
+  deleteLeaderTransfer: (transferId: number) => Promise<MutationResult>;
   addEntity: (input: {
     parent_entity_id: number;
     entity_type: "leader" | "company" | "cs";
@@ -554,6 +563,7 @@ export const useStore = create<Store>((set, get) => {
     me: null,
     entities: [],
     companyLeaders: [],
+    leaderMemberships: [],
     users: [],
     players: [],
     playerCounts: [],
@@ -1190,6 +1200,10 @@ export const useStore = create<Store>((set, get) => {
       mutate(`/api/withdrawals/${withdrawalId}`, { method: "DELETE" }),
     deleteFreeCredit: (transactionId) =>
       mutate(`/api/free-credits/${transactionId}`, { method: "DELETE" }),
+    deleteCashOut: (cashOutId) =>
+      mutate(`/api/bank-accounts/cash-outs/${cashOutId}`, { method: "DELETE" }),
+    deleteLeaderTransfer: (transferId) =>
+      mutate(`/api/leader-transfers/${transferId}`, { method: "DELETE" }),
 
     addEntity: (input) =>
       mutate("/api/entities", { method: "POST", body: JSON.stringify(input) }),

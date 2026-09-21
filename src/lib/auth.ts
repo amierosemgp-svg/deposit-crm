@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "@/db";
-import { companyLeaders, entities, users } from "@/db/schema";
+import { companyLeaders, entities, leaderMemberships, users } from "@/db/schema";
 import { DuplicateGameAccountError } from "./game-name";
 import {
   SESSION_COOKIE,
@@ -25,6 +25,15 @@ export type AuthedUser = SessionPayload & {
   companyIds: number[] | null;
   /** Entity IDs (companies + leader itself) whose bank accounts this user manages. */
   ownedEntityIds: number[] | null;
+  /**
+   * For a leader: every COMPANY they hold — the `leader` entities.
+   *
+   * A leader used to have exactly one, users.entity_id. They can now hold
+   * several (see leader_memberships), and reports judge ownership per row and
+   * per date, so the question is no longer "which company" but "which of
+   * theirs". Empty for every other role.
+   */
+  leaderEntityIds: number[];
 };
 
 export async function createSession(payload: SessionPayload) {
@@ -102,20 +111,30 @@ export async function resolveScope(session: SessionPayload): Promise<AuthedUser>
         .filter((e) => e.type === "company" && subtree.has(e.id))
         .map((e) => e.id),
       ownedEntityIds: [...subtree],
+      leaderEntityIds: [],
     };
   }
   if (session.role === "company_leader") {
-    // Every company they run *now*, which is no longer the same question as
-    // "every company sitting under them in the tree": a company can be run by
-    // two leaders, and ownership moves without the tree being rewritten.
-    // Reports that look backwards ask companyLeaders for the date in question
-    // instead — see lib/company-leaders.ts.
+    /**
+     * Which companies this leader holds: the one they were created under, plus
+     * any granted since. One person can run Abdullah Club and ICON both.
+     */
+    const extra = await db
+      .select({ id: leaderMemberships.leader_entity_id })
+      .from(leaderMemberships)
+      .where(eq(leaderMemberships.user_id, session.user_id));
+    const leaderEntityIds = [...new Set([session.entity_id, ...extra.map((e) => e.id)])];
+
+    // Every casino those companies run *now* — not "every casino sitting under
+    // them in the tree": a casino can be run by two companies, and ownership
+    // moves without the tree being rewritten. Reports that look backwards ask
+    // companyLeaders for the date in question instead — see lib/company-leaders.ts.
     const companies = await db
       .select({ id: companyLeaders.company_entity_id })
       .from(companyLeaders)
       .where(
         and(
-          eq(companyLeaders.leader_entity_id, session.entity_id),
+          inArray(companyLeaders.leader_entity_id, leaderEntityIds),
           isNull(companyLeaders.valid_to),
         ),
       );
@@ -123,7 +142,8 @@ export async function resolveScope(session: SessionPayload): Promise<AuthedUser>
     return {
       ...session,
       companyIds,
-      ownedEntityIds: [session.entity_id, ...companyIds],
+      ownedEntityIds: [...leaderEntityIds, ...companyIds],
+      leaderEntityIds,
     };
   }
   // cs_agent — their entity is a cs node whose parent is the company
@@ -136,6 +156,7 @@ export async function resolveScope(session: SessionPayload): Promise<AuthedUser>
     ...session,
     companyIds: companyId ? [companyId] : [],
     ownedEntityIds: companyId ? [companyId] : [],
+    leaderEntityIds: [],
   };
 }
 

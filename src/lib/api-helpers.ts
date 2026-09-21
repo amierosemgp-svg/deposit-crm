@@ -47,6 +47,10 @@ export function depositScopeFilter(user: AuthedUser): SQL | undefined {
 }
 
 /** Entity IDs whose bank accounts / players / BO accounts the user can see. */
+/** Every company a leader holds; falls back to the one they sit on. */
+const leaderEntitiesOf = (user: AuthedUser): number[] =>
+  user.leaderEntityIds?.length ? user.leaderEntityIds : [user.entity_id];
+
 export async function visibleEntityIds(user: AuthedUser): Promise<number[] | null> {
   if (user.companyIds === null) return null; // unrestricted
   // super_admin / viewer: their whole organisation, main company and leaders
@@ -55,7 +59,8 @@ export async function visibleEntityIds(user: AuthedUser): Promise<number[] | nul
     return user.ownedEntityIds ?? user.companyIds;
   }
   if (user.role === "company_leader") {
-    return [user.entity_id, ...user.companyIds];
+    // Every company they hold, not just the one they sit on.
+    return [...leaderEntitiesOf(user), ...user.companyIds];
   }
   return user.companyIds; // cs_agent: just their company
 }
@@ -69,11 +74,11 @@ export async function visibleEntityTree(user: AuthedUser) {
     user.role === "super_admin" || user.role === "viewer"
       ? (user.ownedEntityIds ?? [...user.companyIds])
       : user.role === "company_leader"
-        // The leader itself *and* every company they run. A company shared
-        // with another leader is not their child in the tree, so walking
+        // Every company they hold *and* every casino those run. A casino shared
+        // with another company is not their child in the tree, so walking
         // downwards alone would leave them scoped to its players and deposits
         // while its name rendered as "#34".
-        ? [user.entity_id, ...user.companyIds]
+        ? [...leaderEntitiesOf(user), ...user.companyIds]
         : [...user.companyIds];
   const byId = new Map(all.map((e) => [e.entity_id, e]));
 

@@ -10,13 +10,13 @@ import { companyOfEntity, logActivity } from "@/lib/activity-log";
 const createSchema = z.object({
   username: z.string().min(2).regex(/^[a-z0-9_]+$/i, "Letters, numbers, underscores only"),
   /**
-   * Both optional for an account on the main company.
+   * Optional for everyone now.
    *
-   * Those are the operator's own logins — they sign in with a username and
-   * nobody emails them. Insisting on an address produced made-up ones, which
-   * is worse than not asking: a fake address in a unique column is a real
-   * collision waiting to happen. Defaults below are derived and never shown as
-   * something to contact.
+   * Nobody in this system is emailed — every login signs in with a username.
+   * Asking for an address produced invented ones, which is worse than not
+   * asking: a made-up address in a unique column is a collision waiting to
+   * happen. One is derived below and never shown as something to contact.
+   * Still accepted, so an operator who does keep real addresses can send them.
    */
   email: z.string().email().optional(),
   full_name: z.string().min(1).optional(),
@@ -49,10 +49,10 @@ export async function POST(request: Request) {
       .from(entities)
       .where(eq(entities.entity_id, body.entity_id));
     if (!entity) return jsonError("Entity not found", 404);
-    // Everyone else still has to give both: a leader or CS agent is a person
-    // somebody needs to be able to name and reach.
-    if (entity.entity_type !== "main_company" && (!body.email || !body.full_name)) {
-      return jsonError("Email and full name are required outside the main company");
+    // A leader or CS agent is still a person somebody needs to be able to name;
+    // an address is not required of anyone.
+    if (entity.entity_type !== "main_company" && !body.full_name) {
+      return jsonError("Full name is required outside the main company");
     }
     if (!ROLE_ENTITY[body.role].includes(entity.entity_type)) {
       return jsonError(
@@ -85,9 +85,9 @@ export async function POST(request: Request) {
       .insert(users)
       .values({
         username: body.username.toLowerCase(),
-        // Derived, not invented, when the main company left them out: scoped by
-        // entity so two organisations can each have an "admin" without
-        // colliding on the unique email column.
+        // Derived, not invented, whenever one was not given: scoped by entity so
+        // two organisations can each have an "admin" without colliding on the
+        // unique email column.
         email:
           body.email?.toLowerCase() ??
           `${body.username.toLowerCase()}@e${entity.entity_id}.local`,

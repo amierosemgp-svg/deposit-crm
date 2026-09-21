@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { entities } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
+import { assignCompanyToLeader } from "@/lib/company-leaders";
 import { logActivity } from "@/lib/activity-log";
 
 const createSchema = z.object({
@@ -59,7 +60,33 @@ export async function POST(request: Request) {
       throw new AuthError(403, "Parent entity belongs to another organisation");
     }
 
-    const [created] = await db.insert(entities).values(body).returning();
+    /**
+     * A casino needs an owner the moment it exists.
+     *
+     * The hierarchy draws casinos from company_leaders, not from
+     * parent_entity_id — a casino can be run by more than one company, so
+     * ownership is its own table. Creating one without that row left it real
+     * but invisible: saved, reported as created, and shown under nobody.
+     *
+     * So the company it was created under becomes its primary owner, in the
+     * same transaction. The parent is already checked above.
+     */
+    const created = await db.transaction(async (txn) => {
+      const [row] = await txn.insert(entities).values(body).returning();
+      if (row.entity_type === "company") {
+        await assignCompanyToLeader(
+          {
+            companyEntityId: row.entity_id,
+            leaderEntityId: body.parent_entity_id,
+            primary: true,
+            note: "Created under this company",
+            byUserId: user.user_id,
+          },
+          txn,
+        );
+      }
+      return row;
+    });
 
     await logActivity({
       category: "entity",

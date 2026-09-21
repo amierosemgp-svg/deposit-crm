@@ -76,8 +76,9 @@ function RoleBadge({ role }: { role: BankAccount["role"] }) {
 }
 
 function EntityTypeChip({ type }: { type: string }) {
+  // On screen a `leader` entity is a Company and a `company` entity is a Casino.
   const label =
-    type === "leader" ? "Leader" : type === "company" ? "Company" : type;
+    type === "leader" ? "Company" : type === "company" ? "Casino" : type;
   return (
     <span className="inline-flex items-center rounded-md border bg-muted/50 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
       {label}

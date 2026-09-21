@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import { useStore } from "@/lib/store";
-import type { Entity, User, UserRole } from "@/lib/types";
+import type { Entity, LeaderMembership, User, UserRole } from "@/lib/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -34,7 +34,7 @@ import {
 
 const ROLE_BADGE: Record<UserRole, { label: string; cls: string }> = {
   super_admin: { label: "Super Admin", cls: "bg-primary/10 text-primary" },
-  company_leader: { label: "Company", cls: "bg-amber-500/10 text-amber-700 dark:text-amber-300" },
+  company_leader: { label: "Leader", cls: "bg-amber-500/10 text-amber-700 dark:text-amber-300" },
   cs_agent: { label: "CS Agent", cls: "bg-blue-500/10 text-blue-700 dark:text-blue-300" },
   viewer: { label: "Viewer", cls: "bg-zinc-500/10 text-zinc-600 dark:text-zinc-400" },
 };
@@ -60,10 +60,22 @@ function RoleBadge({ role }: { role: UserRole }) {
  */
 function EntityUserChips({
   users,
+  entityId,
   onRemove,
+  onEditCompanies,
 }: {
   users: User[];
-  onRemove?: (u: User) => void;
+  /**
+   * The entity these chips are drawn under.
+   *
+   * A leader shows on every company they hold, so "remove" has to know which
+   * card it was clicked from — taking them off this company is a different act
+   * from deleting their login.
+   */
+  entityId: number;
+  onRemove?: (u: User, fromEntityId: number) => void;
+  /** Offered on leaders: which companies they hold. */
+  onEditCompanies?: (u: User) => void;
 }) {
   if (users.length === 0) return null;
   return (
@@ -85,12 +97,23 @@ function EntityUserChips({
             </div>
           </div>
           <RoleBadge role={u.role} />
+          {onEditCompanies && u.role === "company_leader" && (
+            <button
+              type="button"
+              aria-label={`Companies held by ${u.username}`}
+              title={`Companies held by ${u.username}`}
+              onClick={() => onEditCompanies(u)}
+              className="cursor-pointer rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-amber-500/10 hover:text-amber-600 focus-visible:opacity-100 group-hover:opacity-100 dark:hover:text-amber-400"
+            >
+              <Building2 className="h-3.5 w-3.5" />
+            </button>
+          )}
           {onRemove && (
             <button
               type="button"
               aria-label={`Remove ${u.username}`}
               title={`Remove ${u.username}`}
-              onClick={() => onRemove(u)}
+              onClick={() => onRemove(u, entityId)}
               className="cursor-pointer rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-red-500/10 hover:text-red-600 focus-visible:opacity-100 group-hover:opacity-100 dark:hover:text-red-400"
             >
               <Trash2 className="h-3.5 w-3.5" />
@@ -230,7 +253,6 @@ function AddEntityDialog({
 
 const EMPTY_USER_FORM = {
   username: "",
-  email: "",
   full_name: "",
   password: "",
 };
@@ -249,7 +271,7 @@ function AddUserDialog({
 
   const isValid =
     form.username.trim() &&
-    (state?.isMain || (form.email.trim() && form.full_name.trim())) &&
+    (state?.isMain || form.full_name.trim()) &&
     form.password.length >= 6;
 
   function update<K extends keyof typeof EMPTY_USER_FORM>(
@@ -274,7 +296,7 @@ function AddUserDialog({
       // main-company account, and rejects an empty string for anyone else.
       ...(state.isMain
         ? {}
-        : { email: form.email.trim(), full_name: form.full_name.trim() }),
+        : { full_name: form.full_name.trim() }),
       password: form.password,
       role: state.role,
       entity_id: state.entityId,
@@ -291,7 +313,10 @@ function AddUserDialog({
   return (
     <Dialog open={open} onOpenChange={(o) => !o && close()}>
       <DialogContent className="sm:max-w-md">
-        <DialogTitle>Add User</DialogTitle>
+        {/* Named for what is being created, matching the button that opened it. */}
+        <DialogTitle>
+          {state ? `Add New ${ROLE_BADGE[state.role].label}` : "Add User"}
+        </DialogTitle>
         {state && (
           <p className="text-xs text-muted-foreground -mt-2 flex items-center gap-1.5">
             Attached to{" "}
@@ -327,20 +352,6 @@ function AddUserDialog({
               </div>
             )}
           </div>
-          {!state?.isMain && (
-            <div className="space-y-1.5">
-              <Label htmlFor="user-email">
-                Email <span className="text-rose-600 dark:text-rose-400">*</span>
-              </Label>
-              <Input
-                id="user-email"
-                type="email"
-                value={form.email}
-                onChange={(e) => update("email", e.target.value)}
-                placeholder="john@example.com"
-              />
-            </div>
-          )}
           <div className="space-y-1.5">
             <Label htmlFor="user-password">
               Password <span className="text-rose-600 dark:text-rose-400">*</span>
@@ -437,6 +448,7 @@ export default function HierarchyPage() {
   const companyLeaders = useStore((s) => s.companyLeaders);
   const users = useStore((s) => s.users);
   const playerCounts = useStore((s) => s.playerCounts);
+  const leaderMemberships = useStore((s) => s.leaderMemberships);
 
   const [entityDialog, setEntityDialog] = useState<EntityDialogState>(null);
   const [userDialog, setUserDialogState] = useState<UserDialogState>(null);
@@ -464,6 +476,17 @@ export default function HierarchyPage() {
 
   // Counted by the server — one grouped query, rather than shipping every
   // member to be tallied in the browser.
+  /** user_id → the companies they have been granted beyond their own. */
+  const grantedCompanies = useMemo(() => {
+    const map = new Map<number, Set<number>>();
+    for (const m of leaderMemberships) {
+      const set = map.get(m.user_id) ?? new Set<number>();
+      set.add(m.leader_entity_id);
+      map.set(m.user_id, set);
+    }
+    return map;
+  }, [leaderMemberships]);
+
   const playerCountByCompany = useMemo(
     () => new Map(playerCounts.map((c) => [c.company_entity_id, c.members])),
     [playerCounts],
@@ -515,9 +538,15 @@ export default function HierarchyPage() {
   }, [companyLeaders]);
 
   const [ownerDialog, setOwnerDialog] = useState<Entity | null>(null);
+  /** Editing one company's whole list of casinos, from the company's side. */
+  const [companyCasinosDialog, setCompanyCasinosDialog] = useState<Entity | null>(null);
   const [restructure, setRestructure] = useState<Entity | null>(null);
   /** The login the super admin has asked to remove, pending confirmation. */
-  const [removing, setRemoving] = useState<User | null>(null);
+  const [removing, setRemoving] = useState<{ user: User; fromEntityId: number } | null>(
+    null,
+  );
+  /** The leader whose list of companies is being edited. */
+  const [leaderCompanies, setLeaderCompanies] = useState<User | null>(null);
 
   const mains = entities
     .filter((e) => e.entity_type === "main_company")
@@ -567,6 +596,21 @@ export default function HierarchyPage() {
       : entity.entity_type === "cs"
         ? "cs_agent"
         : "viewer";
+
+  /**
+   * What the button makes, in the words the screen uses.
+   *
+   * Derived from derivedRole rather than written per button, so the label can
+   * never promise one thing while the form submits another: a company takes a
+   * Leader, a CS desk takes a CS agent, and a casino or the group takes a
+   * read-only Viewer.
+   */
+  const addUserLabel = (entity: Entity) =>
+    ({
+      company_leader: "Add Leader",
+      cs_agent: "Add CS",
+      viewer: "Add Viewer",
+    })[derivedRole(entity)];
 
   const openAddUser = (entity: Entity) =>
     setUserDialogState({
@@ -670,7 +714,7 @@ export default function HierarchyPage() {
                 {isSuper && (
                   <>
                     <NodeActionButton
-                      label="Leader"
+                      label="Company"
                       icon={Plus}
                       onClick={() =>
                         setEntityDialog({
@@ -681,7 +725,7 @@ export default function HierarchyPage() {
                       }
                     />
                     <NodeActionButton
-                      label="Add User"
+                      label={addUserLabel(main)}
                       icon={UserPlus}
                       onClick={() => openAddUser(main)}
                     />
@@ -693,7 +737,11 @@ export default function HierarchyPage() {
               <CardContent className="pt-0">
                 <EntityUserChips
                   users={usersByEntity.get(main.entity_id) ?? []}
-                  onRemove={isSuper ? setRemoving : undefined}
+                  entityId={main.entity_id}
+                  onRemove={
+                    isSuper ? (u, fromEntityId) => setRemoving({ user: u, fromEntityId }) : undefined
+                  }
+                  onEditCompanies={isSuper ? setLeaderCompanies : undefined}
                 />
               </CardContent>
             )}
@@ -715,7 +763,18 @@ export default function HierarchyPage() {
               {leaders.map((leader) => {
                 const owned = companiesByLeader.get(leader.entity_id) ?? [];
                 const leaderCompanies = owned.map((o) => o.company);
-                const leaderUsers = usersByEntity.get(leader.entity_id) ?? [];
+                /**
+                 * Everyone who leads this company: those created under it, plus
+                 * anyone granted it since. One person can lead several.
+                 */
+                const leaderUsers = [
+                  ...(usersByEntity.get(leader.entity_id) ?? []),
+                  ...users.filter(
+                    (u) =>
+                      u.entity_id !== leader.entity_id &&
+                      grantedCompanies.get(u.user_id)?.has(leader.entity_id),
+                  ),
+                ];
 
                 return (
                   <div key={leader.entity_id} className="relative">
@@ -732,8 +791,8 @@ export default function HierarchyPage() {
                               <InactiveTag entity={leader} />
                             </div>
                             <p className="text-[11px] text-muted-foreground">
-                              Leader · {leaderCompanies.length}{" "}
-                              {leaderCompanies.length === 1 ? "company" : "companies"}
+                              Company · {leaderCompanies.length}{" "}
+                              {leaderCompanies.length === 1 ? "casino" : "casinos"}
                             </p>
                           </div>
                         </div>
@@ -741,7 +800,7 @@ export default function HierarchyPage() {
                           {canEditEntity(leader) && <EditEntityLink entity={leader} />}
                           {canAddCompanyOn(leader.entity_id) && (
                             <NodeActionButton
-                              label="Company"
+                              label="Casino"
                               icon={Plus}
                               onClick={() =>
                                 setEntityDialog({
@@ -754,9 +813,16 @@ export default function HierarchyPage() {
                           )}
                           {isSuper && (
                             <NodeActionButton
-                              label="Add User"
+                              label={addUserLabel(leader)}
                               icon={UserPlus}
                               onClick={() => openAddUser(leader)}
+                            />
+                          )}
+                          {isSuper && (
+                            <NodeActionButton
+                              label="Casinos"
+                              icon={Building2}
+                              onClick={() => setCompanyCasinosDialog(leader)}
                             />
                           )}
                           {isSuper && leaders.length > 1 && (
@@ -772,13 +838,17 @@ export default function HierarchyPage() {
                         {leaderUsers.length > 0 && (
                           <EntityUserChips
                             users={leaderUsers}
-                            onRemove={isSuper ? setRemoving : undefined}
+                            entityId={leader.entity_id}
+                            onRemove={
+                              isSuper ? (u, fromEntityId) => setRemoving({ user: u, fromEntityId }) : undefined
+                            }
+                  onEditCompanies={isSuper ? setLeaderCompanies : undefined}
                           />
                         )}
 
                         {leaderCompanies.length === 0 ? (
                           <p className="text-xs text-muted-foreground">
-                            No companies under this leader yet.
+                            No casinos under this company yet.
                           </p>
                         ) : (
                           <div className="relative pl-5 space-y-3">
@@ -809,7 +879,7 @@ export default function HierarchyPage() {
                                             <InactiveTag entity={company} />
                                             {(leaderCountOf.get(company.entity_id) ?? 1) > 1 && (
                                               <span
-                                                title="Run by more than one leader — it appears under each of them"
+                                                title="Run by more than one company — it appears under each of them"
                                                 className="rounded-full bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 dark:text-violet-300"
                                               >
                                                 Shared ×{leaderCountOf.get(company.entity_id)}
@@ -846,14 +916,14 @@ export default function HierarchyPage() {
                                         )}
                                         {isSuper && (
                                           <NodeActionButton
-                                            label="Leaders"
+                                            label="Companies"
                                             icon={Crown}
                                             onClick={() => setOwnerDialog(company)}
                                           />
                                         )}
                                         {isSuper && (
                                           <NodeActionButton
-                                            label="Add User"
+                                            label={addUserLabel(company)}
                                             icon={UserPlus}
                                             onClick={() => openAddUser(company)}
                                           />
@@ -867,7 +937,11 @@ export default function HierarchyPage() {
                                         {companyUsers.length > 0 && (
                                           <EntityUserChips
                                           users={companyUsers}
-                                          onRemove={isSuper ? setRemoving : undefined}
+                                          entityId={company.entity_id}
+                                          onRemove={
+                              isSuper ? (u, fromEntityId) => setRemoving({ user: u, fromEntityId }) : undefined
+                            }
+                  onEditCompanies={isSuper ? setLeaderCompanies : undefined}
                                         />
                                         )}
                                         {csDesks.map((cs) => {
@@ -900,7 +974,7 @@ export default function HierarchyPage() {
                                                   )}
                                                   {canAddUserOn(cs) && (
                                                     <NodeActionButton
-                                                      label="Add User"
+                                                      label={addUserLabel(cs)}
                                                       icon={UserPlus}
                                                       onClick={() => openAddUser(cs)}
                                                     />
@@ -911,7 +985,11 @@ export default function HierarchyPage() {
                                                 <div className="border-t px-2.5 py-2">
                                                   <EntityUserChips
                                                   users={csUsers}
-                                                  onRemove={isSuper ? setRemoving : undefined}
+                                                  entityId={cs.entity_id}
+                                                  onRemove={
+                              isSuper ? (u, fromEntityId) => setRemoving({ user: u, fromEntityId }) : undefined
+                            }
+                  onEditCompanies={isSuper ? setLeaderCompanies : undefined}
                                                 />
                                                 </div>
                                               )}
@@ -943,11 +1021,25 @@ export default function HierarchyPage() {
           onClose={() => setOwnerDialog(null)}
         />
       )}
+      {companyCasinosDialog && (
+        <CompanyCasinosDialog
+          company={companyCasinosDialog}
+          onClose={() => setCompanyCasinosDialog(null)}
+        />
+      )}
+      {leaderCompanies && (
+        <LeaderCompaniesDialog
+          leader={leaderCompanies}
+          onClose={() => setLeaderCompanies(null)}
+        />
+      )}
       {removing && (
         <RemoveUserDialog
-          user={removing}
+          user={removing.user}
+          fromEntityId={removing.fromEntityId}
           entities={entities}
           users={users}
+          leaderMemberships={leaderMemberships}
           onClose={() => setRemoving(null)}
         />
       )}
@@ -982,6 +1074,181 @@ export default function HierarchyPage() {
  * button stays visible with the reason, because a disabled control with no
  * explanation reads as a bug rather than a rule.
  */
+/**
+ * The casinos one company runs — CompanyLeadersDialog from the other end.
+ *
+ * Mind the vocabulary: on screen a `leader` entity is a COMPANY (ICON, Abdullah
+ * Club) and a `company` entity is a CASINO (Pokercity). The table is called
+ * company_leaders because the database kept the old words; see
+ * ENTITY_TYPE_LABEL.
+ *
+ * The relationship is many-to-many both ways: a casino can be run by more than
+ * one company, and a company runs as many casinos as it likes. It could only be
+ * edited casino by casino before, so putting one company over five casinos
+ * meant opening five dialogs. This edits the company's whole list at once.
+ *
+ * A casino is offered whatever it currently sits under: ownership is what this
+ * table records, not the parent it was created beneath.
+ */
+function CompanyCasinosDialog({
+  company,
+  onClose,
+}: {
+  /** A `leader` entity — a COMPANY on screen. */
+  company: Entity;
+  onClose: () => void;
+}) {
+  const entities = useStore((s) => s.entities);
+  const companyLeaders = useStore((s) => s.companyLeaders);
+  const refresh = useStore((s) => s.refresh);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [adding, setAdding] = useState("");
+
+  const current = companyLeaders.filter((r) => r.leader_entity_id === company.entity_id);
+  const currentIds = new Set(current.map((r) => r.company_entity_id));
+  const available = entities.filter(
+    (e) =>
+      e.entity_type === "company" && e.status === "active" && !currentIds.has(e.entity_id),
+  );
+
+  async function act(
+    action: "assign" | "end" | "set_primary",
+    casinoId: number,
+    key: string,
+  ) {
+    setBusy(key);
+    try {
+      const res = await fetch("/api/company-leaders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action,
+          company_entity_id: casinoId,
+          leader_entity_id: company.entity_id,
+        }),
+      });
+      const data = (await res.json().catch(() => null)) as { error?: string } | null;
+      if (!res.ok) {
+        toast.error(data?.error ?? "Could not change which casinos this company runs");
+        return;
+      }
+      await refresh();
+      if (action === "assign") setAdding("");
+      toast.success(
+        action === "assign"
+          ? "Casino added"
+          : action === "end"
+            ? "Casino removed"
+            : "Set as the primary company",
+      );
+    } catch {
+      toast.error("Network error");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogTitle>Casinos run by {company.name}</DialogTitle>
+        <p className="mt-1 text-xs text-muted-foreground">
+          A company runs any number of casinos, and a casino can be run by more than
+          one company. Primary decides which company it appears under in the tree.
+        </p>
+
+        <div className="mt-3 space-y-2">
+          {current.map((row) => {
+            const casino = entities.find((e) => e.entity_id === row.company_entity_id);
+            return (
+              <div
+                key={row.id}
+                className="flex items-center justify-between rounded-md border px-3 py-2"
+              >
+                <div className="flex items-center gap-2">
+                  <Building2 className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span className="text-sm">
+                    {casino?.name ?? `#${row.company_entity_id}`}
+                  </span>
+                  {row.is_primary && (
+                    <span className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                      Primary
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-1">
+                  {!row.is_primary && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      title="Make this company the primary for that casino"
+                      className="h-7 cursor-pointer px-2"
+                      disabled={busy !== null}
+                      onClick={() => act("set_primary", row.company_entity_id, `p${row.id}`)}
+                    >
+                      {busy === `p${row.id}` ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Star className="h-3 w-3" />
+                      )}
+                    </Button>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    title="Take this casino off the company"
+                    className="h-7 cursor-pointer px-2 text-destructive"
+                    disabled={busy !== null}
+                    onClick={() => act("end", row.company_entity_id, `e${row.id}`)}
+                  >
+                    {busy === `e${row.id}` ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Trash2 className="h-3 w-3" />
+                    )}
+                  </Button>
+                </div>
+              </div>
+            );
+          })}
+          {current.length === 0 && (
+            <p className="rounded-md border border-dashed px-3 py-4 text-center text-xs text-muted-foreground">
+              This company runs no casinos yet.
+            </p>
+          )}
+        </div>
+
+        {available.length > 0 && (
+          <div className="mt-3 flex items-end gap-2">
+            <div className="flex-1 space-y-1.5">
+              <Label>Add a casino</Label>
+              <select
+                value={adding}
+                onChange={(e) => setAdding(e.target.value)}
+                className="h-9 w-full cursor-pointer rounded-md border border-input bg-background px-2 text-sm"
+              >
+                <option value="">Pick a casino…</option>
+                {available.map((c) => (
+                  <option key={c.entity_id} value={String(c.entity_id)}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <Button
+              className="cursor-pointer"
+              disabled={!adding || busy !== null}
+              onClick={() => act("assign", Number(adding), "add")}
+            >
+              {busy === "add" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Add"}
+            </Button>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function CompanyLeadersDialog({
   company,
   onClose,
@@ -1022,17 +1289,17 @@ function CompanyLeadersDialog({
       });
       const data = (await res.json().catch(() => null)) as { error?: string } | null;
       if (!res.ok) {
-        toast.error(data?.error ?? "Could not change who runs this company");
+        toast.error(data?.error ?? "Could not change who runs this casino");
         return;
       }
       await refresh();
       if (action === "assign") setAdding("");
       toast.success(
         action === "assign"
-          ? "Leader added"
+          ? "Company added"
           : action === "end"
-            ? "Leader removed"
-            : "Primary leader set",
+            ? "Company removed"
+            : "Primary company set",
       );
     } catch {
       toast.error("Network error");
@@ -1044,10 +1311,10 @@ function CompanyLeadersDialog({
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-md">
-        <DialogTitle>Leaders running {company.name}</DialogTitle>
+        <DialogTitle>Companies running {company.name}</DialogTitle>
         <p className="mt-1 text-xs text-muted-foreground">
-          Each of these can see and act on this company. The primary is the one
-          it appears under in the hierarchy.
+          Each of these can see and act on this casino. The primary is the one it
+          appears under in the hierarchy.
         </p>
 
         <div className="mt-3 space-y-2">
@@ -1102,7 +1369,7 @@ function CompanyLeadersDialog({
           })}
           {current.length === 0 && (
             <p className="rounded-md border border-dashed px-3 py-4 text-center text-xs text-muted-foreground">
-              Nobody runs this company.
+              No company runs this casino.
             </p>
           )}
         </div>
@@ -1110,13 +1377,13 @@ function CompanyLeadersDialog({
         {available.length > 0 && (
           <div className="mt-3 flex items-end gap-2">
             <div className="flex-1 space-y-1.5">
-              <Label>Add a leader</Label>
+              <Label>Add a company</Label>
               <select
                 value={adding}
                 onChange={(e) => setAdding(e.target.value)}
                 className="h-9 w-full cursor-pointer rounded-md border border-input bg-background px-2 text-sm"
               >
-                <option value="">Pick a leader…</option>
+                <option value="">Pick a company…</option>
                 {available.map((l) => (
                   <option key={l.entity_id} value={String(l.entity_id)}>
                     {l.name}
@@ -1145,49 +1412,232 @@ function CompanyLeadersDialog({
 }
 
 /**
- * Remove a login.
+ * Which companies a leader holds.
  *
- * Deliberately a dialog rather than a bare confirm(): what happens depends on
- * who is being removed, and the reader should see it before agreeing. A CS
- * desk with only this login goes with them — an empty desk is not a thing the
- * tree should keep — and a leader's companies stay put, which is the part
- * people assume wrongly.
+ * A leader is a person; a company is Abdullah Club or ICON (a `leader` entity
+ * in the database). One person can hold several — Tiong can lead Abdullah Club
+ * and ICON — and everything they see follows: the casinos those companies run,
+ * their banks, their reports, for the dates each company actually owned them.
  *
- * The server is the authority: it refuses your own account, refuses the last
- * super admin, and confines a leader to CS agents in their own companies. This
- * only explains and asks.
+ * The company they were created under is always theirs and cannot be taken away
+ * here; moving that is a different operation with different consequences.
+ */
+function LeaderCompaniesDialog({
+  leader,
+  onClose,
+}: {
+  leader: User;
+  onClose: () => void;
+}) {
+  const entities = useStore((s) => s.entities);
+  const leaderMemberships = useStore((s) => s.leaderMemberships);
+  const refresh = useStore((s) => s.refresh);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [adding, setAdding] = useState("");
+
+  const granted = leaderMemberships
+    .filter((m) => m.user_id === leader.user_id)
+    .map((m) => m.leader_entity_id);
+  const held = [...new Set([leader.entity_id, ...granted])];
+  const companies = entities.filter((e) => e.entity_type === "leader");
+  const available = companies.filter(
+    (c) => c.status === "active" && !held.includes(c.entity_id),
+  );
+
+  async function act(action: "grant" | "revoke", entityId: number, key: string) {
+    setBusy(key);
+    try {
+      const res = await fetch(`/api/users/${leader.user_id}/companies`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, leader_entity_id: entityId }),
+      });
+      const data = (await res.json().catch(() => null)) as { error?: string } | null;
+      if (!res.ok) {
+        toast.error(data?.error ?? "Could not change which companies they hold");
+        return;
+      }
+      await refresh();
+      if (action === "grant") setAdding("");
+      toast.success(action === "grant" ? "Company added" : "Company removed");
+    } catch {
+      toast.error("Network error");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogTitle>Companies led by {leader.full_name}</DialogTitle>
+        <p className="mt-1 text-xs text-muted-foreground">
+          A leader can hold more than one company. They see every casino those
+          companies run, and their reports cover each company for the dates it
+          actually owned it.
+        </p>
+
+        <div className="mt-3 space-y-2">
+          {held.map((entityId) => {
+            const company = entities.find((e) => e.entity_id === entityId);
+            const isHome = entityId === leader.entity_id;
+            return (
+              <div
+                key={entityId}
+                className="flex items-center justify-between rounded-md border px-3 py-2"
+              >
+                <div className="flex items-center gap-2">
+                  <Crown className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+                  <span className="text-sm">{company?.name ?? `#${entityId}`}</span>
+                  {isHome && (
+                    <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                      Created under
+                    </span>
+                  )}
+                </div>
+                {!isHome && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    title="Take this company off them"
+                    className="h-7 cursor-pointer px-2 text-destructive"
+                    disabled={busy !== null}
+                    onClick={() => act("revoke", entityId, `r${entityId}`)}
+                  >
+                    {busy === `r${entityId}` ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Trash2 className="h-3 w-3" />
+                    )}
+                  </Button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {available.length > 0 && (
+          <div className="mt-3 flex items-end gap-2">
+            <div className="flex-1 space-y-1.5">
+              <Label>Add a company</Label>
+              <select
+                value={adding}
+                onChange={(e) => setAdding(e.target.value)}
+                className="h-9 w-full cursor-pointer rounded-md border border-input bg-background px-2 text-sm"
+              >
+                <option value="">Pick a company…</option>
+                {available.map((c) => (
+                  <option key={c.entity_id} value={String(c.entity_id)}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <Button
+              className="cursor-pointer"
+              disabled={!adding || busy !== null}
+              onClick={() => act("grant", Number(adding), "add")}
+            >
+              {busy === "add" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Add"}
+            </Button>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * Take a leader off one company, or delete their login altogether.
+ *
+ * Two different acts, and until a leader could hold several companies they were
+ * the same one. Taking them off ICON leaves them running Abdullah Club; deleting
+ * the login ends their access everywhere. The dialog offers whichever apply and
+ * defaults to the gentler one.
+ *
+ * The company a leader was created under cannot be taken away here — that is
+ * users.entity_id, and moving it is a different operation with different
+ * consequences — so for that card only the delete is offered.
+ *
+ * The server is the authority either way: it refuses your own account, refuses
+ * the last super admin, and confines a leader to CS agents in their own
+ * companies. This explains and asks.
  */
 function RemoveUserDialog({
   user,
+  fromEntityId,
   entities,
   users,
+  leaderMemberships,
   onClose,
 }: {
   user: User;
+  /** The entity card the remove was clicked from. */
+  fromEntityId: number;
   entities: Entity[];
   users: User[];
+  leaderMemberships: LeaderMembership[];
   onClose: () => void;
 }) {
   const deleteUser = useStore((s) => s.deleteUser);
+  const refresh = useStore((s) => s.refresh);
   const [busy, setBusy] = useState(false);
 
-  const entity = entities.find((e) => e.entity_id === user.entity_id);
+  const fromEntity = entities.find((e) => e.entity_id === fromEntityId);
+  const homeEntity = entities.find((e) => e.entity_id === user.entity_id);
   const siblings = users.filter(
     (u) => u.entity_id === user.entity_id && u.user_id !== user.user_id,
   ).length;
-  const deskGoesToo = entity?.entity_type === "cs" && siblings === 0;
+  const deskGoesToo = homeEntity?.entity_type === "cs" && siblings === 0;
+
+  /** Companies they hold: the one they sit on, plus anything granted. */
+  const held = [
+    ...new Set([
+      user.entity_id,
+      ...leaderMemberships
+        .filter((m) => m.user_id === user.user_id)
+        .map((m) => m.leader_entity_id),
+    ]),
+  ];
+  // Only a granted company can be given back here — never the home one.
+  const canDetach =
+    user.role === "company_leader" &&
+    fromEntityId !== user.entity_id &&
+    held.includes(fromEntityId);
+
+  const [mode, setMode] = useState<"detach" | "delete">(canDetach ? "detach" : "delete");
 
   async function submit() {
     if (busy) return;
     setBusy(true);
-    const res = await deleteUser(user.user_id);
-    setBusy(false);
-    if (!res.ok) {
-      toast.error(res.error ?? "Could not remove the login");
-      return;
+    try {
+      if (mode === "detach") {
+        const res = await fetch(`/api/users/${user.user_id}/companies`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "revoke", leader_entity_id: fromEntityId }),
+        });
+        const data = (await res.json().catch(() => null)) as { error?: string } | null;
+        if (!res.ok) {
+          toast.error(data?.error ?? "Could not take them off this company");
+          return;
+        }
+        await refresh();
+        toast.success(`${user.username} taken off ${fromEntity?.name ?? "the company"}`);
+      } else {
+        const res = await deleteUser(user.user_id);
+        if (!res.ok) {
+          toast.error(res.error ?? "Could not remove the login");
+          return;
+        }
+        toast.success(`${user.username} removed`);
+      }
+      onClose();
+    } catch {
+      toast.error("Network error");
+    } finally {
+      setBusy(false);
     }
-    toast.success(`${user.username} removed`);
-    onClose();
   }
 
   return (
@@ -1199,35 +1649,75 @@ function RemoveUserDialog({
           <div className="rounded-md border bg-muted/20 px-3 py-2">
             <div className="font-medium">@{user.username}</div>
             <div className="text-[11px] text-muted-foreground">
-              {user.role.replace("_", " ")}
-              {entity ? ` · ${entity.name}` : ""}
+              {ROLE_BADGE[user.role].label}
+              {fromEntity ? ` · on ${fromEntity.name}` : ""}
             </div>
           </div>
 
-          <ul className="list-disc space-y-1 pl-5 text-[12px] text-muted-foreground">
-            <li>They can no longer sign in. The login is deleted, not disabled.</li>
-            <li>
-              Nothing they recorded moves — deposits, withdrawals and expenses keep
-              their history and still name them.
-            </li>
-            {deskGoesToo ? (
-              <li className="text-amber-700 dark:text-amber-400">
-                This is the only login on <strong>{entity?.name}</strong>, so that CS
-                desk is removed with them.
-              </li>
-            ) : entity?.entity_type === "cs" ? (
+          {canDetach && (
+            <div className="space-y-2">
+              <label className="flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2">
+                <input
+                  type="radio"
+                  className="mt-0.5 cursor-pointer"
+                  checked={mode === "detach"}
+                  onChange={() => setMode("detach")}
+                />
+                <span>
+                  <span className="font-medium">Take off {fromEntity?.name}</span>
+                  <span className="block text-[11px] text-muted-foreground">
+                    They keep their login and still run{" "}
+                    {held.length - 1 === 1
+                      ? (entities.find((e) => e.entity_id === user.entity_id)?.name ??
+                        "their other company")
+                      : `${held.length - 1} other companies`}
+                    .
+                  </span>
+                </span>
+              </label>
+              <label className="flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2">
+                <input
+                  type="radio"
+                  className="mt-0.5 cursor-pointer"
+                  checked={mode === "delete"}
+                  onChange={() => setMode("delete")}
+                />
+                <span>
+                  <span className="font-medium">Delete the login</span>
+                  <span className="block text-[11px] text-muted-foreground">
+                    Ends their access to every company they hold.
+                  </span>
+                </span>
+              </label>
+            </div>
+          )}
+
+          {mode === "delete" && (
+            <ul className="list-disc space-y-1 pl-5 text-[12px] text-muted-foreground">
+              <li>They can no longer sign in. The login is deleted, not disabled.</li>
               <li>
-                The <strong>{entity.name}</strong> desk stays — {siblings} other
-                {siblings === 1 ? " login" : " logins"} remain on it.
+                Nothing they recorded moves — deposits, withdrawals and expenses keep
+                their history and still name them.
               </li>
-            ) : null}
-            {user.role === "company_leader" && (
-              <li>
-                Their companies stay where they are. To hand those over, use
-                <strong> Restructure</strong> instead.
-              </li>
-            )}
-          </ul>
+              {deskGoesToo ? (
+                <li className="text-amber-700 dark:text-amber-400">
+                  This is the only login on <strong>{homeEntity?.name}</strong>, so that
+                  CS desk is removed with them.
+                </li>
+              ) : homeEntity?.entity_type === "cs" ? (
+                <li>
+                  The <strong>{homeEntity.name}</strong> desk stays — {siblings} other
+                  {siblings === 1 ? " login" : " logins"} remain on it.
+                </li>
+              ) : null}
+              {user.role === "company_leader" && (
+                <li>
+                  The casinos their companies run stay where they are. To hand those
+                  over, use <strong>Restructure</strong> instead.
+                </li>
+              )}
+            </ul>
+          )}
         </div>
 
         <div className="mt-4 flex justify-end gap-2">
@@ -1235,17 +1725,26 @@ function RemoveUserDialog({
             Cancel
           </Button>
           <Button
-            className="cursor-pointer bg-red-600 text-white hover:bg-red-700"
+            className={
+              mode === "delete"
+                ? "cursor-pointer bg-red-600 text-white hover:bg-red-700"
+                : "cursor-pointer"
+            }
             onClick={submit}
             disabled={busy}
           >
-            {busy ? "Removing…" : "Remove login"}
+            {busy
+              ? "Working…"
+              : mode === "detach"
+                ? `Take off ${fromEntity?.name ?? "company"}`
+                : "Delete login"}
           </Button>
         </div>
       </DialogContent>
     </Dialog>
   );
 }
+
 
 /**
  * Merge a leader into another, or downgrade them.
