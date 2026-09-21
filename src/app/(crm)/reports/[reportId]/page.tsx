@@ -5,12 +5,14 @@ import { useParams } from "next/navigation";
 import {
   AlertTriangle,
   ArrowLeft,
+  CalendarDays,
   CheckCircle2,
   ChevronRight,
   Download,
   Gift,
   Hash,
   Search,
+  TrendingUp,
   Users,
   Wallet,
 } from "lucide-react";
@@ -226,6 +228,45 @@ type PayoutRow = {
 
 const REPORT_PAGE_SIZE = 100;
 
+/**
+ * One column per tile above a phone. Spelled out rather than interpolated
+ * because Tailwind only ships the classes it can see written down.
+ */
+const TILE_COLUMNS: Record<number, string> = {
+  3: "sm:grid-cols-3",
+  4: "sm:grid-cols-4",
+  5: "sm:grid-cols-5",
+};
+
+/**
+ * The reports whose rows open into something narrower, and how.
+ *
+ * `into` writes the drill onto the request — what that means is the report's
+ * own business: Bonus Payout narrows to one game, Sales Report re-groups one
+ * company by day. Keeping it here rather than in the table builders means the
+ * fetch, the CSV and the back button cannot disagree about which view is on
+ * screen, which is how the export ends up holding a different table from the
+ * one that was exported.
+ */
+const DRILL: Record<
+  string,
+  { into: (sp: URLSearchParams, value: string) => void; back: string } | undefined
+> = {
+  bonus_payout: {
+    into: (sp, game) => sp.set("game", game),
+    back: "All games",
+  },
+  sales_report: {
+    into: (sp, companyId) => {
+      // Overrides the company filter on purpose: inside a company, that is
+      // the company being looked at.
+      sp.set("company", companyId);
+      sp.set("group", "day");
+    },
+    back: "All companies",
+  },
+};
+
 type Row = {
   key: React.Key;
   cells: Cell[];
@@ -313,11 +354,26 @@ export default function ReportDetailPage() {
   const [status, setStatus] = useState("all");
   const [query, setQuery] = useState("");
   /**
-   * Bonus Payout only: the game being drilled into, or null for the summary.
-   * Cleared whenever a filter moves — a game that no longer has payouts would
-   * otherwise strand you on an empty table.
+   * The row being drilled into, or null for the summary.
+   *
+   * Two reports drill: Bonus Payout into a game's payouts, Sales Report into a
+   * company's days. `drill` is what the URL needs (a game name, a company id)
+   * and `drillLabel` is what the heading shows — kept beside it because once
+   * you are inside a company the rows are days and no longer carry its name.
+   *
+   * Cleared whenever a filter moves: the thing drilled into may no longer be
+   * in range, and an empty table with no explanation reads as a bug.
    */
-  const [drillGame, setDrillGame] = useState<string | null>(null);
+  const [drill, setDrill] = useState<string | null>(null);
+  const [drillLabel, setDrillLabel] = useState<string | null>(null);
+  const openDrill = useCallback((value: string, label: string) => {
+    setDrill(value);
+    setDrillLabel(label);
+  }, []);
+  const closeDrill = useCallback(() => {
+    setDrill(null);
+    setDrillLabel(null);
+  }, []);
   /** Bonus Payout only: deposit bonuses, recommend bonuses, or both. */
   const [payoutKind, setPayoutKind] = useState<
     "all" | "Deposit" | "Recommend" | "Free Credit"
@@ -352,17 +408,17 @@ export default function ReportDetailPage() {
   const [prevQuery, setPrevQuery] = useState(reportQuery);
   if (reportQuery !== prevQuery) {
     setPrevQuery(reportQuery);
-    if (drillGame !== null) setDrillGame(null);
+    if (drill !== null) closeDrill();
     if (offset !== 0) setOffset(0);
   }
 
   /** The URL for one view, so the fetch and the CSV can't diverge. */
   const reportUrl = useCallback(
-    (game: string | null, at: number, limit: number) => {
+    (into: string | null, at: number, limit: number) => {
       const endpoint = def ? REPORT_ENDPOINT[def.id] : null;
       if (!endpoint) return null;
       const sp = new URLSearchParams(reportQuery);
-      if (game !== null) sp.set("game", game);
+      if (into !== null && def) DRILL[def.id]?.into(sp, into);
       sp.set("limit", String(limit));
       sp.set("offset", String(at));
       return `/api/reports/${endpoint}?${sp}`;
@@ -373,7 +429,7 @@ export default function ReportDetailPage() {
   // The view being asked for, and the one already answered. Loading is the gap
   // between them — a derived value rather than a flag an effect has to set,
   // which keeps the fetch from triggering a render before it has any news.
-  const want = reportUrl(drillGame, offset, REPORT_PAGE_SIZE);
+  const want = reportUrl(drill, offset, REPORT_PAGE_SIZE);
   const [have, setHave] = useState<string | null>(null);
   const loading = want !== null && want !== have;
 
@@ -630,9 +686,16 @@ export default function ReportDetailPage() {
           csv: n,
         });
         const rows = report.rows as SalesRow[];
+        /**
+         * Drilled in, the same columns are a company's days — the server
+         * re-groups the identical arithmetic, so the days always add back up
+         * to the row that was clicked. Only the first column differs: a
+         * company name at the top level, a date underneath it.
+         */
+        const intoDays = drill !== null;
         return {
           headers: [
-            { label: "Company" },
+            { label: intoDays ? "Day" : "Company" },
             { label: "Deposits", align: "right" },
             { label: "AP", align: "right" },
             { label: "NP", align: "right" },
@@ -645,7 +708,19 @@ export default function ReportDetailPage() {
           rows: rows.map((r) => ({
             key: r.company_id,
             cells: [
-              text(r.company_name),
+              intoDays
+                ? { node: dayLabel(r.company_name), csv: r.company_name }
+                : {
+                    // The chevron is the only thing saying the row opens —
+                    // same mark Bonus Payout uses on its games.
+                    node: (
+                      <span className="flex items-center gap-1.5 font-medium">
+                        {r.company_name}
+                        <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                      </span>
+                    ),
+                    csv: r.company_name,
+                  },
               money(r.deposits),
               { node: r.ap.toLocaleString(), csv: r.ap },
               { node: r.np.toLocaleString(), csv: r.np },
@@ -655,6 +730,13 @@ export default function ReportDetailPage() {
               money(r.withdrawals),
               signed(r.sales),
             ],
+            // Top level only: a day has nothing narrower to open into.
+            ...(intoDays
+              ? {}
+              : {
+                  onClick: () =>
+                    openDrill(String(r.company_id), r.company_name),
+                }),
           })),
           totals: [
             "Totals",
@@ -667,9 +749,10 @@ export default function ReportDetailPage() {
             formatRM(report.summary.withdrawals),
             formatRM(report.summary.sales),
           ],
-          summary:
-            report.summary.days > 0
-              ? `${formatRM(report.summary.sales_per_day)} a day over ${report.summary.days} days.`
+          summary: intoDays
+            ? `${drillLabel} day by day — these ${rows.length.toLocaleString()} rows add up to its line on the summary.`
+            : report.summary.days > 0
+              ? `${formatRM(report.summary.sales_per_day)} a day over ${report.summary.days} days. Click a company for its days.`
               : "Same arithmetic as the Daily Report, by company instead of by day.",
         };
       }
@@ -797,7 +880,7 @@ export default function ReportDetailPage() {
         // browser, so the table cannot drift from the cards above it.
 
         // ---- Level 1: one row per game. Click a row to drill in. ----
-        if (drillGame === null) {
+        if (drill === null) {
           return {
             headers: [
               { label: "Game" },
@@ -810,7 +893,7 @@ export default function ReportDetailPage() {
             ],
             rows: (report.games ?? []).map((g) => ({
               key: `game-${g.game}`,
-              onClick: () => setDrillGame(g.game),
+              onClick: () => openDrill(g.game, g.game),
               cells: [
                 {
                   node: (
@@ -914,8 +997,8 @@ export default function ReportDetailPage() {
           ],
           summary:
             report.total > shown.length
-              ? `Bonus payouts for ${drillGame} · ${(offset + 1).toLocaleString()}–${last.toLocaleString()} of ${report.total.toLocaleString()}.`
-              : `Bonus payouts for ${drillGame}.`,
+              ? `Bonus payouts for ${drillLabel} · ${(offset + 1).toLocaleString()}–${last.toLocaleString()} of ${report.total.toLocaleString()}.`
+              : `Bonus payouts for ${drillLabel}.`,
         };
       }
 
@@ -989,7 +1072,7 @@ export default function ReportDetailPage() {
       default:
         return null;
     }
-  }, [def, report, offset, drillGame]);
+  }, [def, report, offset, drill, drillLabel, openDrill]);
 
   // Summary tiles shown above the table for the transaction-style reports.
   const summaryTiles: {
@@ -1044,6 +1127,73 @@ export default function ReportDetailPage() {
           },
         ];
       }
+      case "sales_report": {
+        if (!report) return [];
+        /**
+         * The server's own summary, from the same request that drew the table.
+         * It covers every row the filters admit, not the page on screen, and
+         * drilled into a company it narrows to that company — so the tiles
+         * always describe exactly what is underneath them.
+         */
+        const { summary } = report;
+        const givenAway = summary.bonus + summary.free_credit + summary.recommend;
+        // Inside a company the rows are its days, so the scope is worth saying
+        // out loud — the figures have narrowed and the tiles should admit it.
+        const scope = drillLabel ? `${drillLabel} · ` : "";
+        const tiles = [
+          {
+            title: "Sales",
+            value: formatRM(summary.sales),
+            sub:
+              summary.days > 0
+                ? `${scope}${formatRM(summary.sales_per_day)} a day over ${summary.days} day${summary.days === 1 ? "" : "s"}`
+                : `${scope}deposits less everything paid out`,
+            icon: TrendingUp,
+          },
+          {
+            title: "Deposits",
+            value: formatRM(summary.deposits),
+            sub: `${formatRM(summary.withdrawals)} withdrawn`,
+            icon: Wallet,
+          },
+          {
+            title: "Players",
+            value: summary.ap.toLocaleString(),
+            sub: `active · ${summary.np.toLocaleString()} new`,
+            icon: Users,
+          },
+          {
+            title: "Given Away",
+            value: formatRM(givenAway),
+            sub: `${formatRM(summary.bonus)} bonus · ${formatRM(summary.recommend)} recommend · ${formatRM(summary.free_credit)} free credit`,
+            icon: Gift,
+          },
+        ];
+        if (drill === null) return tiles;
+
+        /**
+         * One tile the summary cannot have: which day carried the company.
+         *
+         * Taken from the rows rather than asked of the server, and safe to do
+         * here only because this report is never paged — every day in the
+         * period is on screen, so the best of them really is the best.
+         */
+        const days = report.rows as SalesRow[];
+        const best = days.reduce<SalesRow | null>(
+          (top, d) => (top === null || d.sales > top.sales ? d : top),
+          null,
+        );
+        return [
+          ...tiles,
+          {
+            title: "Best Day",
+            value: best ? dayLabel(best.company_name) : "—",
+            sub: best ? `${formatRM(best.sales)} sales` : "no days in range",
+            icon: CalendarDays,
+          },
+        ];
+      }
+
       case "bonus_payout": {
         // The same summary object the table's footer uses, scoped by the same
         // request — so a card can never quietly disagree with the rows beneath
@@ -1056,7 +1206,7 @@ export default function ReportDetailPage() {
           summary.deposit_count +
           summary.recommend_count +
           summary.free_credit_count;
-        const scope = drillGame ? ` · ${drillGame}` : "";
+        const scope = drillLabel ? ` · ${drillLabel}` : "";
         return [
           {
             title: "Total Bonus Amount",
@@ -1071,7 +1221,7 @@ export default function ReportDetailPage() {
             icon: Users,
           },
           {
-            title: drillGame ? "Payouts" : "Bonus Transactions",
+            title: drill ? "Payouts" : "Bonus Transactions",
             value: count.toLocaleString(),
             sub: `${summary.deposit_count.toLocaleString()} deposit · ${summary.recommend_count.toLocaleString()} recommend · ${summary.free_credit_count.toLocaleString()} free credit`,
             icon: Hash,
@@ -1081,7 +1231,7 @@ export default function ReportDetailPage() {
       default:
         return [];
     }
-  }, [def, report, drillGame]);
+  }, [def, report, drill, drillLabel]);
 
   if (!def || !table) {
     return (
@@ -1122,7 +1272,7 @@ export default function ReportDetailPage() {
   async function fetchAllRows(): Promise<Record<string, unknown>[]> {
     const out: Record<string, unknown>[] = [];
     for (let at = 0; ; at += 500) {
-      const url = reportUrl(drillGame, at, 500);
+      const url = reportUrl(drill, at, 500);
       if (!url) return out;
       const res = await fetch(url);
       if (!res.ok) throw new Error(String(res.status));
@@ -1189,19 +1339,19 @@ export default function ReportDetailPage() {
             <div>
               <h1 className="text-xl font-semibold leading-tight">
                 {def.title}
-                {drillGame && (
-                  <span className="text-muted-foreground"> · {drillGame}</span>
+                {drillLabel && (
+                  <span className="text-muted-foreground"> · {drillLabel}</span>
                 )}
               </h1>
-              {drillGame ? (
+              {drill ? (
                 // A way back out. Without it the only route to the summary is a
                 // full page reload, since the drill lives in component state.
                 <button
-                  onClick={() => setDrillGame(null)}
+                  onClick={closeDrill}
                   className="mt-0.5 inline-flex cursor-pointer items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
                 >
                   <ArrowLeft className="h-3.5 w-3.5" />
-                  All games
+                  {DRILL[def.id]?.back ?? "Back"}
                 </button>
               ) : (
                 <p className="mt-0.5 text-sm text-muted-foreground">
@@ -1399,7 +1549,14 @@ export default function ReportDetailPage() {
 
       {/* Summary tiles */}
       {summaryTiles.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        // Two up on a phone, then one column per tile — four tiles in a
+        // three-column grid left one stranded on its own row.
+        <div
+          className={cn(
+            "grid grid-cols-2 gap-3",
+            TILE_COLUMNS[summaryTiles.length] ?? "sm:grid-cols-3",
+          )}
+        >
           {summaryTiles.map((t) => (
             <StatTile
               key={t.title}
@@ -1407,6 +1564,7 @@ export default function ReportDetailPage() {
               value={t.value}
               sub={t.sub}
               icon={t.icon}
+              compact
             />
           ))}
         </div>

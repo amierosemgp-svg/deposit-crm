@@ -13,6 +13,10 @@ const TONE_CLASSES: Record<StatTone, string> = {
 /**
  * A KPI/summary tile — an uppercase label, a big value, an optional sub-line,
  * and a tinted icon. Shared by the dashboard, reports, and player profile.
+ *
+ * `compact` is the same tile with the air taken out, for places that show four
+ * of them above a table the reader actually came for. The dashboard keeps the
+ * roomy one: there the tiles are the page, here they are a caption to it.
  */
 export function StatTile({
   title,
@@ -21,6 +25,7 @@ export function StatTile({
   icon: Icon,
   tone = "default",
   valueClassName,
+  compact = false,
 }: {
   title: string;
   value: string;
@@ -29,22 +34,54 @@ export function StatTile({
   tone?: StatTone;
   /** Optional extra classes for the value text (e.g. green/red for profit). */
   valueClassName?: string;
+  compact?: boolean;
 }) {
   return (
-    <Card className="gap-2 py-4">
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1 px-5">
-        <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+    <Card className={compact ? "gap-0.5 py-2.5" : "gap-2 py-4"}>
+      <CardHeader
+        className={cn(
+          "flex flex-row items-center justify-between space-y-0",
+          compact ? "px-3.5 pb-0" : "px-5 pb-1",
+        )}
+      >
+        <CardTitle
+          className={cn(
+            "font-medium text-muted-foreground uppercase tracking-wide",
+            compact ? "text-[10px]" : "text-xs",
+          )}
+        >
           {title}
         </CardTitle>
         <div
-          className={`flex h-8 w-8 items-center justify-center rounded-md ${TONE_CLASSES[tone]}`}
+          className={cn(
+            "flex items-center justify-center rounded-md",
+            TONE_CLASSES[tone],
+            compact ? "h-6 w-6" : "h-8 w-8",
+          )}
         >
-          <Icon className="h-4 w-4" />
+          <Icon className={compact ? "h-3.5 w-3.5" : "h-4 w-4"} />
         </div>
       </CardHeader>
-      <CardContent className="px-5">
-        <div className={cn("text-2xl font-bold", valueClassName)}>{value}</div>
-        {sub && <p className="text-[11px] text-muted-foreground mt-0.5">{sub}</p>}
+      <CardContent className={compact ? "px-3.5" : "px-5"}>
+        <div
+          className={cn(
+            "font-bold tabular-nums",
+            compact ? "text-lg leading-tight" : "text-2xl",
+            valueClassName,
+          )}
+        >
+          {value}
+        </div>
+        {sub && (
+          <p
+            className={cn(
+              "text-muted-foreground",
+              compact ? "text-[10px] leading-tight" : "text-[11px] mt-0.5",
+            )}
+          >
+            {sub}
+          </p>
+        )}
       </CardContent>
     </Card>
   );
