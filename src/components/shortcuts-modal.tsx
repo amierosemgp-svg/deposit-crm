@@ -75,7 +75,7 @@ const GROUPS: Group[] = [
     hint: "Transactions & Players",
     items: [
       { keys: [MOD, "S"], label: "Save the ready (✓) entry rows" },
-      { keys: ["Shift", MOD, "→"], label: "Next worksheet tab (Deposit… / Players / Leads)" },
+      { keys: ["Shift", MOD, "→"], label: "Next worksheet tab (Deposit… / Players / Leads / Archived)" },
       { keys: ["Shift", MOD, "←"], label: "Previous worksheet tab" },
     ],
   },
@@ -90,6 +90,11 @@ const GROUPS: Group[] = [
       { keys: [MOD, "B"], label: "Complete a deposit · Mark a withdrawal paid" },
       { keys: [MOD, "I"], label: "Retry a failed deposit / transfer" },
       { keys: [MOD, "D"], label: "Delete an expense" },
+      // Literal Ctrl on both platforms: ⌘⇧D is Chrome's "bookmark all tabs".
+      {
+        keys: ["Ctrl", "Shift", "D"],
+        label: "Archive a member · restores one on the Archived tab (Players page)",
+      },
       { keys: ["Esc"], label: "Clear the selection" },
     ],
   },

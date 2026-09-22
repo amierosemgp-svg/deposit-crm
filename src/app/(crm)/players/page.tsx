@@ -45,6 +45,8 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
   Gamepad2,
+  Archive,
+  ArchiveRestore,
   Loader2,
   RefreshCw,
   Save,
@@ -56,7 +58,7 @@ import {
   X,
 } from "lucide-react";
 
-type TabKey = "players" | "leads" | "winloss";
+type TabKey = "players" | "leads" | "winloss" | "archived";
 
 /** One member's standing against the house, from /api/players/win-loss. */
 type WinLossRow = {
@@ -202,6 +204,7 @@ const LEAD_COLUMNS: SheetColumn[] = [
 
 export default function PlayersPage() {
   const listPlayers = useStore((s) => s.listPlayers);
+  const updatePlayer = useStore((s) => s.updatePlayer);
   const loadCodeSeries = useStore((s) => s.loadCodeSeries);
   const gameCredits = useStore((s) => s.gameCredits);
   const hydrated = useStore((s) => s.hydrated);
@@ -231,14 +234,17 @@ export default function PlayersPage() {
   const canEnterPlayers = !isViewer && entryCompanyId != null;
 
   const [tab, setTab] = useState<TabKey>("players");
+  /**
+   * Players and Archived are the same roster sheet asking the server a
+   * different question, so everything that reads "the member list" — columns,
+   * rows, filters, paging, the action bar — keys off this rather than
+   * repeating the pair. Entry, import and New player stay on Players alone:
+   * the archive is somewhere you take members out of, not put them in.
+   */
+  const isRoster = tab === "players" || tab === "archived";
   const [search, setSearch] = useState("");
   // Filter by member-code prefix (Players) / lead list (Leads). "all" = off.
   const [prefixFilter, setPrefixFilter] = useState("all");
-  /**
-   * The roster hides archived members; this is how you get at them to put one
-   * back. "live" is the default everywhere else in the app.
-   */
-  const [archiveFilter, setArchiveFilter] = useState<"live" | "archived">("live");
   /**
    * How long since a member last deposited. The buckets are the questions CS
    * actually asks — who is active, who is going cold, who has never paid at
@@ -266,6 +272,7 @@ export default function PlayersPage() {
   const PAGE_SIZE = 100;
   /** Bumped after a save so the page and the code series are re-read. */
   const [savedAt, setSavedAt] = useState(0);
+  const [archivingId, setArchivingId] = useState<number | null>(null);
   /**
    * How many pages of the current filter we have pulled in, and the filters
    * they belong to.
@@ -343,20 +350,20 @@ export default function PlayersPage() {
   const [draftsByTab, setDraftsByTab] = useState<Record<TabKey, string[][]>>(() => ({
     players: padDrafts([], PLAYER_ENTRY_COLUMNS.length),
     leads: padDrafts([], LEAD_COLUMNS.length),
-    // Win/Loss is a read-only view: no entry row, so no drafts to hold.
+    // Win/Loss and Archived are read-only views: no entry row, no drafts.
     winloss: [],
+    archived: [],
   }));
 
   /** The dock's shape — what drafts are padded to and parsed by. */
   const entryColumns = tab === "players" ? PLAYER_ENTRY_COLUMNS : undefined;
   const draftWidth = (entryColumns ?? PLAYER_COLUMNS).length;
 
-  const columns =
-    tab === "players"
-      ? PLAYER_COLUMNS
-      : tab === "winloss"
-        ? WINLOSS_COLUMNS
-        : LEAD_COLUMNS;
+  const columns = isRoster
+    ? PLAYER_COLUMNS
+    : tab === "winloss"
+      ? WINLOSS_COLUMNS
+      : LEAD_COLUMNS;
   const drafts = draftsByTab[tab];
   const draftKey = useCallback((d: string[]) => d.join(""), []);
 
@@ -542,7 +549,7 @@ export default function PlayersPage() {
    * cannot leave the previous result's rows underneath the new one.
    */
   useEffect(() => {
-    if (tab !== "players") return;
+    if (!isRoster) return;
     let live = true;
     const offset = (pages - 1) * PAGE_SIZE;
     const run = async () => {
@@ -553,7 +560,7 @@ export default function PlayersPage() {
         limit: PAGE_SIZE,
         offset,
         prefix: prefixFilter === "all" ? undefined : prefixFilter,
-        status: archiveFilter === "archived" ? "archived" : undefined,
+        status: tab === "archived" ? "archived" : undefined,
         lastDep:
           lastDepDir === "any"
             ? undefined
@@ -581,8 +588,8 @@ export default function PlayersPage() {
       clearTimeout(timer);
     };
   }, [
-    tab, listPlayers, search, selectedCompanyId, pages, prefixFilter,
-    lastDepDir, lastDepDays, savedAt, archiveFilter,
+    tab, isRoster, listPlayers, search, selectedCompanyId, pages, prefixFilter,
+    lastDepDir, lastDepDays, savedAt,
   ]);
 
   const memberRows = useMemo<SheetRow[]>(() => {
@@ -700,18 +707,21 @@ export default function PlayersPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [winLoss, companyInScope, matches, matchesLastDep, selectedCompanyId, selectedLeaderId]);
 
-  const rows =
-    tab === "players" ? memberRows : tab === "winloss" ? winLossRows : leadRows;
+  const rows = isRoster
+    ? memberRows
+    : tab === "winloss"
+      ? winLossRows
+      : leadRows;
 
   // ---- entry-row typeahead ----
   const draftSuggestions = useCallback(
     (draftIndex: number, colIndex: number): SheetSuggestion[] | undefined => {
       // The Prefix cell offers the series this casino already runs, each
       // showing the code it would issue next.
-      if (tab === "players" && colIndex === 1) {
+      if (isRoster && colIndex === 1) {
         return prefixSuggestions.length ? prefixSuggestions : undefined;
       }
-      if (tab === "players" && colIndex === 3) {
+      if (isRoster && colIndex === 3) {
         return games.length ? games.map((g) => ({ value: g })) : undefined;
       }
 
@@ -791,7 +801,7 @@ export default function PlayersPage() {
         figure: h.dist_id != null ? (h.next_code ?? undefined) : undefined,
       }));
     },
-    [tab, drafts, leadCache, leadListsData, leadsData, prefixSuggestions, games],
+    [tab, isRoster, drafts, leadCache, leadListsData, leadsData, prefixSuggestions, games],
   );
 
   const handleEditStart = useCallback(
@@ -971,14 +981,62 @@ export default function PlayersPage() {
       // Win/Loss rows are keyed by player too, so ⌘↵ opens the profile from
       // there as well — the tab exists to find a member worth looking at, and
       // stopping at the number would leave the reader nowhere to go.
-      (tab === "players" || tab === "winloss") && selectedIds.length === 1
+      (isRoster || tab === "winloss") && selectedIds.length === 1
         ? Number(selectedIds[0])
         : null,
-    [tab, selectedIds],
+    [tab, isRoster, selectedIds],
   );
   const handleViewPlayer = useCallback(() => {
     if (selectedPlayerId) openPlayer(selectedPlayerId);
   }, [selectedPlayerId, openPlayer]);
+  /**
+   * Ctrl+Shift+D — archive the selected member, or restore one already archived.
+   *
+   * Deliberately Ctrl rather than the ⌘ the other row actions use: on macOS
+   * ⌘⇧D is Chrome's "bookmark all tabs", and a shortcut that fights the
+   * browser is one CS stops trusting. Ctrl+Shift+D is free on both platforms.
+   *
+   * It confirms first. Archiving is reversible, but it pulls the member out of
+   * every picker and search at once, and a stray keypress on a selected row is
+   * exactly how that happens by accident.
+   */
+  const handleArchiveToggle = useCallback(async () => {
+    if (isViewer || !selectedPlayerId || archivingId !== null) return;
+    const p = pageRows.find((r) => r.player_id === selectedPlayerId);
+    if (!p) return;
+    const archived = p.status === "archived";
+    if (!archived) {
+      const moved = p.total_deposits > 0 || p.total_withdrawals > 0;
+      const history = moved
+        ? `\n\n${p.full_name} has money on record (${formatRM(p.total_deposits)} in, ${formatRM(p.total_withdrawals)} out). Past rows keep their name — they just stop being offered for new ones.`
+        : "";
+      if (
+        !confirm(
+          `Archive ${p.full_name} (${p.username})?${history}\n\nThey drop out of player search, the pickers and the worksheet. Restore them from the Archived filter.`,
+        )
+      ) {
+        return;
+      }
+    }
+    setArchivingId(p.player_id);
+    const res = await updatePlayer(p.player_id, {
+      status: archived ? "active" : "archived",
+    });
+    setArchivingId(null);
+    if (!res.ok) {
+      toast.error(res.error ?? "Could not change archive status");
+      return;
+    }
+    toast.success(
+      archived
+        ? `${p.username} restored`
+        : `${p.username} archived — no longer selectable`,
+    );
+    // The row has just left (or joined) whichever list is on screen.
+    setSelectedIds([]);
+    setSavedAt(Date.now());
+  }, [isViewer, selectedPlayerId, archivingId, pageRows, updatePlayer]);
+
   /**
    * ⌘G — straight from the selected member to their game accounts, with the
    * "link a game" form already open. Linking a kiosk login is the edit CS
@@ -1003,6 +1061,15 @@ export default function PlayersPage() {
         setSelectedIds([]);
         return;
       }
+      // Ctrl+Shift+D archives — literal Ctrl on both platforms, so it has to
+      // be read before the ⌘ block below rejects it for holding Shift.
+      if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && k === "d") {
+        if (!selectedPlayerId || isViewer) return;
+        e.preventDefault();
+        e.stopPropagation();
+        void handleArchiveToggle();
+        return;
+      }
       const mod = IS_MAC ? e.metaKey : e.ctrlKey;
       const wrongMod = IS_MAC ? e.ctrlKey : e.metaKey;
       if (!mod || wrongMod || e.altKey || e.shiftKey) return;
@@ -1019,14 +1086,24 @@ export default function PlayersPage() {
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [selectedIds.length, selectedPlayerId, handleViewPlayer, handleGameAccounts]);
+  }, [
+    selectedIds.length,
+    selectedPlayerId,
+    handleViewPlayer,
+    handleGameAccounts,
+    handleArchiveToggle,
+    isViewer,
+  ]);
 
   // Shift+⌘/Ctrl+←/→ switches between the Players and Leads tabs, wrapping —
   // the same worksheet-tab gesture as the Transactions sheet.
   useEffect(() => {
-    const keys: TabKey[] = isLeaderOrAdmin
-      ? ["players", "winloss", "leads"]
-      : ["players", "winloss"];
+    const keys: TabKey[] = [
+      "players",
+      "winloss",
+      ...(isLeaderOrAdmin ? (["leads"] as TabKey[]) : []),
+      ...(isViewer ? [] : (["archived"] as TabKey[])),
+    ];
     if (keys.length < 2) return;
     const onKey = (e: KeyboardEvent) => {
       const mod = IS_MAC ? e.metaKey : e.ctrlKey;
@@ -1041,7 +1118,7 @@ export default function PlayersPage() {
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [isLeaderOrAdmin]);
+  }, [isLeaderOrAdmin, isViewer]);
 
   // ⌘S saves the current tab's ready rows from anywhere.
   useEffect(() => {
@@ -1081,6 +1158,9 @@ export default function PlayersPage() {
     { key: "players", label: "Players" },
     { key: "winloss", label: "Win / Loss" },
     ...(isLeaderOrAdmin ? [{ key: "leads" as const, label: "Leads" }] : []),
+    // Last, and last for a reason: it is where members go, not a place to
+    // start. Everyone who can edit can restore from it.
+    ...(isViewer ? [] : [{ key: "archived" as const, label: "Archived" }]),
   ];
 
   return (
@@ -1108,9 +1188,11 @@ export default function PlayersPage() {
         <span className="ml-3 pb-1.5 text-[11px] text-muted-foreground">
           {tab === "players"
             ? "Entry: Name · Member Code — use New player for anything more"
-            : tab === "winloss"
-              ? "Positive is the house up on that member, negative is the member up. Select a row and press ⌘↵ to open their profile."
-              : "Leads come in by import — use the Import button, then convert them on the Players tab"}
+            : tab === "archived"
+              ? "Members taken out of play. They keep their history and still show on past rows, but no search, picker or worksheet will offer them. Select one and press Ctrl+Shift+D to restore."
+              : tab === "winloss"
+                ? "Positive is the house up on that member, negative is the member up. Select a row and press ⌘↵ to open their profile."
+                : "Leads come in by import — use the Import button, then convert them on the Players tab"}
         </span>
       </div>
 
@@ -1136,7 +1218,7 @@ export default function PlayersPage() {
         </div>
 
         {/* How much of the roster is on screen. The rest arrives by scrolling. */}
-        {tab === "players" && total > 0 && (
+        {isRoster && total > 0 && (
           <span className="ml-2 flex items-center gap-1.5 text-[11px] tabular-nums text-muted-foreground">
             showing {Math.min(pageRows.length, total)} of {total}
             {loadingPage && <Loader2 className="h-3 w-3 animate-spin" />}
@@ -1151,36 +1233,14 @@ export default function PlayersPage() {
             data-page-search
             title="Press ⌘F / Ctrl+F (or /) to jump here"
             placeholder={
-              tab === "players"
+              isRoster || tab === "winloss"
                 ? "Search name or code…"
-                : tab === "winloss"
-                  ? "Search name or code…"
-                  : "Search leads…"
+                : "Search leads…"
             }
             className="h-8 w-56 pl-7 text-[13px]"
           />
         </div>
-        {tab === "players" && (
-          <Select
-            value={archiveFilter}
-            onValueChange={(v) =>
-              setArchiveFilter((v as typeof archiveFilter) ?? "live")
-            }
-          >
-            <SelectTrigger className="h-8 w-36 cursor-pointer text-[13px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="live" className="cursor-pointer">
-                Active members
-              </SelectItem>
-              <SelectItem value="archived" className="cursor-pointer">
-                Archived
-              </SelectItem>
-            </SelectContent>
-          </Select>
-        )}
-        {tab === "players" && prefixOptions.length > 0 && (
+        {isRoster && prefixOptions.length > 0 && (
           <Select value={prefixFilter} onValueChange={(v) => setPrefixFilter(v ?? "all")}>
             <SelectTrigger className="h-8 w-36 cursor-pointer text-[13px]">
               <SelectValue />
@@ -1226,7 +1286,7 @@ export default function PlayersPage() {
             )}
           </div>
         )}
-        {(tab === "players" || tab === "winloss") && (
+        {(isRoster || tab === "winloss") && (
           <div className="flex items-center gap-1.5">
             <span className="text-[11px] text-muted-foreground">Last deposit</span>
             <Select
@@ -1365,8 +1425,8 @@ export default function PlayersPage() {
 
       <SheetGrid
         widthStorageKey={`players:${tab}`}
-        onLoadMore={tab === "players" ? loadMore : undefined}
-        hasMore={tab === "players" && pageRows.length < total}
+        onLoadMore={isRoster ? loadMore : undefined}
+        hasMore={isRoster && pageRows.length < total}
         loadingMore={loadingPage}
         key={tab}
         columns={columns}
@@ -1387,7 +1447,7 @@ export default function PlayersPage() {
       />
 
       {/* Floating action bar — member rows only. ⌘↵ opens the player, ⌘G their game accounts. */}
-      {tab === "players" && selectedIds.length > 0 && (
+      {isRoster && selectedIds.length > 0 && (
         <div className="pointer-events-none absolute inset-x-0 bottom-14 z-40 flex justify-center">
           <div className="pointer-events-auto flex max-w-[92%] flex-wrap items-center justify-center gap-1.5 rounded-lg border border-emerald-600/40 bg-background/95 px-3 py-1.5 shadow-xl backdrop-blur">
             <span className="text-[11px] font-semibold text-emerald-800 dark:text-emerald-300">
@@ -1429,6 +1489,28 @@ export default function PlayersPage() {
                 <Gamepad2 className="h-3 w-3" />
                 Game acct
                 <Kbd k={`${MOD_LABEL}G`} />
+              </Button>
+            )}
+            {selectedPlayerId && !isViewer && (
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => void handleArchiveToggle()}
+                disabled={archivingId !== null}
+                title={
+                  tab === "archived"
+                    ? "Put this member back on the roster"
+                    : "Take this member out of every picker and search, keeping their history"
+                }
+                className="cursor-pointer gap-1"
+              >
+                {tab === "archived" ? (
+                  <ArchiveRestore className="h-3 w-3" />
+                ) : (
+                  <Archive className="h-3 w-3" />
+                )}
+                {tab === "archived" ? "Restore" : "Archive"}
+                <Kbd k="Ctrl+⇧D" />
               </Button>
             )}
           </div>
