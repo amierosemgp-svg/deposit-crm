@@ -64,7 +64,10 @@ export function BankTransferModal({
   const [amount, setAmount] = useState("");
   const [reference, setReference] = useState("");
   const [notes, setNotes] = useState("");
-  const [skipBot, setSkipBot] = useState(false);
+  // Manual by default: the desk moves this money in its own banking app, so
+  // the agent must not act on it and it must not auto-confirm — a human on the
+  // receiving side ticks it off. Untick only for a transfer the agent runs.
+  const [skipBot, setSkipBot] = useState(true);
   const [phase, setPhase] = useState<"input" | "submitting" | "success">("input");
 
   useEffect(() => {
@@ -74,7 +77,7 @@ export function BankTransferModal({
       setAmount("");
       setReference("");
       setNotes("");
-      setSkipBot(false);
+      setSkipBot(true);
       setPhase("input");
     }
   }, [open, defaultFromAccountId]);
@@ -168,9 +171,12 @@ export function BankTransferModal({
               <div className="flex items-start gap-2 rounded-md border border-blue-500/30 bg-blue-500/5 px-3 py-2.5 text-[11px] text-blue-900 dark:text-blue-200">
                 <Info className="h-3.5 w-3.5 shrink-0 mt-0.5 text-blue-600 dark:text-blue-400" />
                 <span>
-                  Transfers require recipient confirmation and auto-confirm after the
-                  configured window. Allowed: between companies under the same leader,
-                  or from a leader to their own company.
+                  Transfers require recipient confirmation.{" "}
+                  {skipBot
+                    ? "Handled manually, so it waits for a human — it will not auto-confirm."
+                    : "Unhandled ones auto-confirm after the configured window."}{" "}
+                  Allowed: between a company&apos;s own accounts, between companies under
+                  the same leader, or from a leader to their own company.
                 </span>
               </div>
 
@@ -361,8 +367,10 @@ export function BankTransferModal({
                   {formatRM(amt)} transfer initiated
                 </h3>
                 <p className="mt-1 text-[12px] text-muted-foreground">
-                  The recipient must confirm before funds are credited. It will
-                  auto-confirm after the configured window.
+                  The recipient must confirm before funds are credited.{" "}
+                  {skipBot
+                    ? "This one is manual — it stays pending until someone confirms or rejects it."
+                    : "It will auto-confirm after the configured window."}
                 </p>
                 <div className="mt-3 inline-flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-1.5 text-[12px]">
                   <span className="font-medium">{fromAccount?.bank_name}</span>

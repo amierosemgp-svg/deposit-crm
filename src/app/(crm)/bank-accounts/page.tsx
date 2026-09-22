@@ -129,6 +129,13 @@ export default function BankAccountsPage() {
     !!me && (me.role === "super_admin" || me.role === "company_leader");
   // Recording a cash-out is CS work; reversing one is a leader's call.
   const canRecordCashOut = !!me && me.role !== "viewer";
+  // Moving money between the desk's own accounts is everyday work, so every
+  // writing role may do it — not just leaders. Nothing is loosened by that:
+  // the source account must still be inside the user's own scope (enforced
+  // server-side in /api/transfers), the recipient still has to confirm, and
+  // both the transfer row and the system log carry who initiated, confirmed
+  // or rejected it.
+  const canTransfer = !!me && me.role !== "viewer";
 
   useEffect(() => {
     let cancelled = false;
@@ -304,6 +311,15 @@ export default function BankAccountsPage() {
     ];
   }
 
+  /**
+   * Who closed the transfer out. `confirmed_by_user_id` carries the confirmer
+   * *or* the rejecter; a window that expired on its own has nobody behind it.
+   */
+  function settledBy(t: BankTransfer) {
+    if (t.status === "auto_confirmed") return "Auto — window expired";
+    if (t.confirmed_by_user_id) return userName(t.confirmed_by_user_id);
+    return "—";
+  }
   function transferRoute(t: BankTransfer) {
     const from = accountById.get(t.from_account_id);
     const to = accountById.get(t.to_account_id);
@@ -334,24 +350,28 @@ export default function BankAccountsPage() {
             )}
           </p>
         </div>
-        {canManage && (
+        {(canTransfer || canManage) && (
           <div className="flex items-center gap-2">
-            <Button
-              onClick={() => {
-                setTransferDefaultFrom(null);
-                setTransferOpen(true);
-              }}
-              variant="outline"
-              size="sm"
-              className="cursor-pointer"
-            >
-              <ArrowRightLeft className="h-3.5 w-3.5" />
-              New Transfer
-            </Button>
-            <Button onClick={openCreate} size="sm" className="cursor-pointer">
-              <Plus className="h-3.5 w-3.5" />
-              Add Account
-            </Button>
+            {canTransfer && (
+              <Button
+                onClick={() => {
+                  setTransferDefaultFrom(null);
+                  setTransferOpen(true);
+                }}
+                variant="outline"
+                size="sm"
+                className="cursor-pointer"
+              >
+                <ArrowRightLeft className="h-3.5 w-3.5" />
+                New Transfer
+              </Button>
+            )}
+            {canManage && (
+              <Button onClick={openCreate} size="sm" className="cursor-pointer">
+                <Plus className="h-3.5 w-3.5" />
+                Add Account
+              </Button>
+            )}
           </div>
         )}
       </div>
@@ -408,7 +428,7 @@ export default function BankAccountsPage() {
                   </div>
                   <div className="flex items-center gap-1.5">
                     <StatusBadge status={t.status} />
-                    {canManage && (
+                    {canTransfer && (
                       <>
                         <Button
                           size="sm"
@@ -563,7 +583,7 @@ export default function BankAccountsPage() {
                       Balance
                     </th>
                     <th className="px-3 py-2.5 text-left font-medium">Status</th>
-                    {(canManage || canRecordCashOut) && (
+                    {(canManage || canRecordCashOut || canTransfer) && (
                       <th className="px-3 py-2.5 text-right font-medium">Actions</th>
                     )}
                   </tr>
@@ -639,7 +659,7 @@ export default function BankAccountsPage() {
                           <StatusBadge status={a.status} />
                         )}
                       </td>
-                      {(canManage || canRecordCashOut) && (
+                      {(canManage || canRecordCashOut || canTransfer) && (
                         <td className="px-3 py-2">
                           <div className="flex items-center justify-end gap-1">
                             {canRecordCashOut && (
@@ -654,22 +674,24 @@ export default function BankAccountsPage() {
                                 <Banknote className="h-3.5 w-3.5" />
                               </Button>
                             )}
+                            {canTransfer && (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => openTransferFor(a)}
+                                disabled={
+                                  a.status !== "active" ||
+                                  a.current_balance <= 0 ||
+                                  !managesEntity(a.entity_id)
+                                }
+                                className="cursor-pointer h-7 px-2"
+                                title="Transfer from this account"
+                              >
+                                <ArrowRightLeft className="h-3.5 w-3.5" />
+                              </Button>
+                            )}
                             {canManage && (
                             <>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => openTransferFor(a)}
-                              disabled={
-                                a.status !== "active" ||
-                                a.current_balance <= 0 ||
-                                !managesEntity(a.entity_id)
-                              }
-                              className="cursor-pointer h-7 px-2"
-                              title="Transfer from this account"
-                            >
-                              <ArrowRightLeft className="h-3.5 w-3.5" />
-                            </Button>
                             <Button
                               size="sm"
                               variant="ghost"
@@ -813,6 +835,9 @@ export default function BankAccountsPage() {
                 <th className="px-3 py-2.5 text-left font-medium">Reference</th>
                 <th className="px-3 py-2.5 text-left font-medium">Initiated By</th>
                 <th className="px-3 py-2.5 text-left font-medium whitespace-nowrap">
+                  Settled By
+                </th>
+                <th className="px-3 py-2.5 text-left font-medium whitespace-nowrap">
                   Confirmed At
                 </th>
               </tr>
@@ -821,7 +846,7 @@ export default function BankAccountsPage() {
               {sortedTransfers.length === 0 && (
                 <tr>
                   <td
-                    colSpan={7}
+                    colSpan={8}
                     className="px-3 py-10 text-center text-sm text-muted-foreground"
                   >
                     {!hydrated ? (
@@ -883,6 +908,9 @@ export default function BankAccountsPage() {
                     </td>
                     <td className="px-3 py-2 text-[11px]">
                       {userName(t.initiated_by_user_id)}
+                    </td>
+                    <td className="px-3 py-2 text-[11px] whitespace-nowrap">
+                      {settledBy(t)}
                     </td>
                     <td className="px-3 py-2 text-[11px] text-muted-foreground whitespace-nowrap">
                       {t.confirmed_at ? formatDateTime(t.confirmed_at) : "—"}

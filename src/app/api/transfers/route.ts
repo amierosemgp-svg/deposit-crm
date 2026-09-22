@@ -92,7 +92,9 @@ export async function POST(request: Request) {
           reference: body.reference?.trim() || `TRF-${Date.now()}`,
           notes: body.notes?.trim() || null,
           status: "pending_confirmation",
-          skip_bot: body.skip_bot ?? false,
+          // Manual unless the caller says otherwise — same default as
+          // /api/deposits. The desk moves this money in its own banking app.
+          skip_bot: body.skip_bot ?? true,
           initiated_by_user_id: user.user_id,
           expires_at: expiresAt,
           created_at: nowIso,
@@ -110,6 +112,10 @@ export async function POST(request: Request) {
           from_account: from.account_number,
           to_account: to.account_number,
           expires_at: expiresAt,
+          // Every writing role may move money between the desk's own accounts,
+          // so the log names the person and the hat they wore.
+          by: user.full_name || user.username,
+          by_role: user.role,
         },
       });
 

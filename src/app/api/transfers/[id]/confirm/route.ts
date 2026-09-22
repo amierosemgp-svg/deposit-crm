@@ -61,7 +61,11 @@ export async function POST(
         amount: t.amount,
         reference_id: t.transfer_id,
         user_id: user.user_id,
-        details: { action: "confirmed" },
+        details: {
+          action: "confirmed",
+          by: user.full_name || user.username,
+          by_role: user.role,
+        },
       });
 
       return updated;
