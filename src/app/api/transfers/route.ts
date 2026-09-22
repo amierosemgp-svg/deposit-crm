@@ -73,15 +73,35 @@ export async function POST(request: Request) {
         );
       }
 
-      const hours = await getSettingNumber("transfer_auto_confirm_hours", 24);
+      // Manual unless the caller says otherwise — same default as
+      // /api/deposits. The desk moves this money in its own banking app and
+      // the CRM records what already happened, so a manual transfer lands
+      // finished: both sides move now and there is nothing left to confirm.
+      // Unticking it hands the transfer to the agent, which still works the
+      // old two-phase way — debit now, credit when the recipient confirms.
+      const manual = body.skip_bot ?? true;
       const nowIso = new Date().toISOString();
-      const expiresAt = new Date(Date.now() + hours * 3600_000).toISOString();
+      const hours = manual
+        ? 0
+        : await getSettingNumber("transfer_auto_confirm_hours", 24);
+      const expiresAt = manual
+        ? null
+        : new Date(Date.now() + hours * 3600_000).toISOString();
 
       // Debit sender immediately — the amount is never double-spendable
       await txn
         .update(bankAccounts)
         .set({ current_balance: +(from.current_balance - body.amount).toFixed(2) })
         .where(eq(bankAccounts.account_id, from.account_id));
+
+      if (manual) {
+        // ...and credit the recipient in the same breath. `to` was locked by
+        // the same FOR UPDATE select above, so this balance is not stale.
+        await txn
+          .update(bankAccounts)
+          .set({ current_balance: +(to.current_balance + body.amount).toFixed(2) })
+          .where(eq(bankAccounts.account_id, to.account_id));
+      }
 
       const [transfer] = await txn
         .insert(bankTransfers)
@@ -91,15 +111,25 @@ export async function POST(request: Request) {
           amount: body.amount,
           reference: body.reference?.trim() || `TRF-${Date.now()}`,
           notes: body.notes?.trim() || null,
-          status: "pending_confirmation",
-          // Manual unless the caller says otherwise — same default as
-          // /api/deposits. The desk moves this money in its own banking app.
-          skip_bot: body.skip_bot ?? true,
+          // No "completed" in the enum; "confirmed" already means the money
+          // is on both sides. The person who booked it is the one who settled
+          // it, so they are recorded on both halves.
+          status: manual ? "confirmed" : "pending_confirmation",
+          skip_bot: manual,
           initiated_by_user_id: user.user_id,
+          confirmed_by_user_id: manual ? user.user_id : null,
+          confirmed_at: manual ? nowIso : null,
           expires_at: expiresAt,
           created_at: nowIso,
         })
         .returning();
+
+      // Every writing role may move money between the desk's own accounts, so
+      // the log names the person and the hat they wore.
+      const actor = {
+        by: user.full_name || user.username,
+        by_role: user.role,
+      };
 
       await txn.insert(transactions).values({
         entity_id: from.entity_id,
@@ -108,16 +138,32 @@ export async function POST(request: Request) {
         reference_id: transfer.transfer_id,
         user_id: user.user_id,
         details: {
-          action: "initiated",
+          action: manual ? "debited" : "initiated",
           from_account: from.account_number,
           to_account: to.account_number,
-          expires_at: expiresAt,
-          // Every writing role may move money between the desk's own accounts,
-          // so the log names the person and the hat they wore.
-          by: user.full_name || user.username,
-          by_role: user.role,
+          ...(expiresAt ? { expires_at: expiresAt } : {}),
+          ...actor,
         },
       });
+
+      // The receiving entity gets its own row, the way a confirmation would
+      // have written one — otherwise the credit never shows in its money log.
+      if (manual) {
+        await txn.insert(transactions).values({
+          entity_id: to.entity_id,
+          type: "bank_transfer",
+          amount: body.amount,
+          reference_id: transfer.transfer_id,
+          user_id: user.user_id,
+          details: {
+            action: "credited",
+            from_account: from.account_number,
+            to_account: to.account_number,
+            settled: "on creation — handled manually",
+            ...actor,
+          },
+        });
+      }
 
       return transfer;
     });

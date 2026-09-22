@@ -1124,7 +1124,11 @@ export const useStore = create<Store>((set, get) => {
         },
         {
           kind: "transfer",
-          message: `Transfer of RM ${amount.toFixed(2)} initiated — awaiting recipient confirmation`,
+          // Manual transfers settle on creation; only agent-handled ones wait.
+          message:
+            skip_bot === false
+              ? `Transfer of RM ${amount.toFixed(2)} initiated — awaiting recipient confirmation`
+              : `Transfer of RM ${amount.toFixed(2)} recorded — both accounts updated`,
         },
       ),
 

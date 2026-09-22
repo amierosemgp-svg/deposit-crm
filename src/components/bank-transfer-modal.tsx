@@ -128,7 +128,9 @@ export function BankTransferModal({
     if (result.ok) {
       setPhase("success");
       toast.success(
-        `Transfer of ${formatRM(amt)} initiated — awaiting recipient confirmation`,
+        skipBot
+          ? `Transfer of ${formatRM(amt)} recorded — both accounts updated`
+          : `Transfer of ${formatRM(amt)} initiated — awaiting recipient confirmation`,
       );
     } else {
       toast.error(result.error ?? "Transfer failed");
@@ -154,7 +156,9 @@ export function BankTransferModal({
               Transfer between bank accounts
             </h2>
             <p className="text-[12px] text-muted-foreground leading-tight mt-0.5">
-              Sender is debited immediately; recipient is credited on confirmation
+              {skipBot
+                ? "Both accounts move the moment you save"
+                : "Sender is debited immediately; recipient is credited on confirmation"}
             </p>
           </div>
         </div>
@@ -171,10 +175,9 @@ export function BankTransferModal({
               <div className="flex items-start gap-2 rounded-md border border-blue-500/30 bg-blue-500/5 px-3 py-2.5 text-[11px] text-blue-900 dark:text-blue-200">
                 <Info className="h-3.5 w-3.5 shrink-0 mt-0.5 text-blue-600 dark:text-blue-400" />
                 <span>
-                  Transfers require recipient confirmation.{" "}
                   {skipBot
-                    ? "Handled manually, so it waits for a human — it will not auto-confirm."
-                    : "Unhandled ones auto-confirm after the configured window."}{" "}
+                    ? "You already moved this at the bank, so it is booked as done — the sender is debited and the recipient credited on save, with nothing left to confirm."
+                    : "The agent handles this one: the sender is debited now and the recipient credited once they confirm, or when the window expires."}{" "}
                   Allowed: between a company&apos;s own accounts, between companies under
                   the same leader, or from a leader to their own company.
                 </span>
@@ -306,11 +309,12 @@ export function BankTransferModal({
                 />
                 <span>
                   <span className="block text-sm font-medium">
-                    Handle manually (skip agent)
+                    Already moved at the bank (skip agent, settle now)
                   </span>
                   <span className="block text-[11px] text-muted-foreground mt-0.5">
-                    The agent won&apos;t act on this and it won&apos;t auto-confirm
-                    after 24h — the recipient must Confirm or Reject it.
+                    Books both sides straight away and records you as the one who
+                    settled it. Untick only to hand the transfer to the agent, which
+                    leaves it pending until the recipient confirms.
                   </span>
                 </span>
               </label>
@@ -364,13 +368,12 @@ export function BankTransferModal({
               </motion.div>
               <div>
                 <h3 className="text-lg font-semibold">
-                  {formatRM(amt)} transfer initiated
+                  {formatRM(amt)} transfer {skipBot ? "recorded" : "initiated"}
                 </h3>
                 <p className="mt-1 text-[12px] text-muted-foreground">
-                  The recipient must confirm before funds are credited.{" "}
                   {skipBot
-                    ? "This one is manual — it stays pending until someone confirms or rejects it."
-                    : "It will auto-confirm after the configured window."}
+                    ? "Both accounts have moved — the sender is debited and the recipient credited."
+                    : "The recipient must confirm before funds are credited. It will auto-confirm after the configured window."}
                 </p>
                 <div className="mt-3 inline-flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-1.5 text-[12px]">
                   <span className="font-medium">{fromAccount?.bank_name}</span>
