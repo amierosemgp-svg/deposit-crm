@@ -10,7 +10,7 @@ import {
   settings,
   transactions,
 } from "@/db/schema";
-import type { AuthedUser } from "./auth";
+import { AuthError, type AuthedUser } from "./auth";
 import {
   IN_FLIGHT_TRANSFER_STATUSES,
   MAX_TRANSFER_ATTEMPTS,
@@ -126,6 +126,23 @@ export async function visibleEntityTree(user: AuthedUser) {
  *  1. company → company with the same parent leader
  *  2. leader → a company that is the leader's own direct child
  */
+/**
+ * An archived member is out of play: nothing new may be booked against them.
+ *
+ * The pickers and the search already hide them, so hitting this means a
+ * pasted code, a stale tab or a direct API call — exactly the cases the UI
+ * cannot cover. Restoring the member from the Archived filter is the way
+ * through, which the message says so CS is not left guessing.
+ */
+export function assertNotArchived(player: { status: string; username: string }) {
+  if (player.status === "archived") {
+    throw new AuthError(
+      422,
+      `${player.username} is archived — restore the member first if this is right`,
+    );
+  }
+}
+
 export async function transferAllowed(
   fromEntityId: number,
   toEntityId: number,

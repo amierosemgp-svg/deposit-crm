@@ -13,7 +13,7 @@ const patchSchema = z.object({
   contact_number: z.string().nullable().optional(),
   telegram_username: z.string().min(2).optional(),
   wechat_id: z.string().nullable().optional(),
-  status: z.enum(["active", "suspended"]).optional(),
+  status: z.enum(["active", "suspended", "archived"]).optional(),
   notes: z.string().nullable().optional(),
   bank_accounts: z
     .array(
@@ -82,12 +82,24 @@ export async function PATCH(
     // need recording here, and each action belongs to exactly one source.
     const changes = diffFields(row, parsed.data);
     if (changes.length) {
+      // Archiving is the one correction CS has for adding the wrong member, so
+      // the log has to say it happened rather than filing it as an edit —
+      // "reactivated" would also be a lie for a member coming back out of the
+      // archive, which is a restore, not a lifting of a suspension.
+      const next = parsed.data.status;
+      const statusAction =
+        next && next !== row.status
+          ? next === "suspended"
+            ? "player.suspended"
+            : next === "archived"
+              ? "player.archived"
+              : row.status === "archived"
+                ? "player.restored"
+                : "player.reactivated"
+          : null;
       await logActivity({
         category: "player",
-        action:
-          parsed.data.status && parsed.data.status !== row.status
-            ? `player.${parsed.data.status === "suspended" ? "suspended" : "reactivated"}`
-            : "player.updated",
+        action: statusAction ?? "player.updated",
         summary: `Player "${row.username}" (${row.full_name}) — ${describeChanges(changes)}`,
         actor: user,
         companyEntityId: row.company_entity_id,

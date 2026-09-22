@@ -3,7 +3,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { gameCredits, players, transactions, withdrawals } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
-import { jsonError } from "@/lib/api-helpers";
+import { assertNotArchived, jsonError } from "@/lib/api-helpers";
 import { checkWithdrawalMinimum } from "@/lib/withdrawal-limits";
 import { bookManualPayout, bookManualPull } from "@/lib/withdrawal-pull";
 
@@ -47,6 +47,7 @@ export async function POST(request: Request) {
     ) {
       throw new AuthError(403, "Player is outside your company scope");
     }
+    assertNotArchived(player);
 
     // A player can't withdraw more game credit than they hold. The UI already
     // caps the field, but this is the only check the bot and any direct API

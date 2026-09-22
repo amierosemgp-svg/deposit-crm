@@ -49,6 +49,8 @@ import {
   StickyNote,
   Network,
   Gift,
+  Archive,
+  ArchiveRestore,
 } from "lucide-react";
 
 
@@ -143,6 +145,7 @@ export function PlayerProfileModal({
 
   const [notesDraft, setNotesDraft] = useState("");
   const [savingNotes, setSavingNotes] = useState(false);
+  const [archiving, setArchiving] = useState(false);
 
   const [bankFormOpen, setBankFormOpen] = useState(false);
   const [bankForm, setBankForm] = useState(EMPTY_BANK);
@@ -290,6 +293,48 @@ export function PlayerProfileModal({
     } else toast.error(res.error ?? "Failed to remove game account");
   }
 
+  /**
+   * Archive is the fallback for a member added by mistake.
+   *
+   * Deleting is not on offer and should not be: the row is referenced by
+   * deposits, withdrawals, transfers, credits and the referral tree, so
+   * removing it either fails on a foreign key or tears a hole through the
+   * ledger. Archiving takes them out of every picker and search instead, and
+   * leaves the history intact — and it is reversible, which a delete is not.
+   */
+  async function setArchived(archived: boolean) {
+    if (!player || archiving) return;
+    if (archived) {
+      const moved =
+        player.total_deposits > 0 || player.total_withdrawals > 0;
+      const warning = moved
+        ? `\n\n${player.full_name} has money on record (${formatRM(player.total_deposits)} in, ${formatRM(player.total_withdrawals)} out). Their history stays and still shows on past rows — they just stop being offered for new ones.`
+        : "";
+      if (
+        !confirm(
+          `Archive ${player.full_name} (${player.username})?${warning}\n\nThey will no longer appear in player search, the pickers or the worksheet. You can restore them from the Archived filter.`,
+        )
+      ) {
+        return;
+      }
+    }
+    setArchiving(true);
+    const res = await updatePlayer(player.player_id, {
+      status: archived ? "archived" : "active",
+    });
+    setArchiving(false);
+    if (res.ok) {
+      toast.success(
+        archived
+          ? `${player.username} archived — no longer selectable`
+          : `${player.username} restored`,
+      );
+      if (archived) onOpenChange(false);
+    } else {
+      toast.error(res.error ?? "Could not change archive status");
+    }
+  }
+
   async function saveNotes() {
     if (!player || savingNotes) return;
     setSavingNotes(true);
@@ -324,6 +369,32 @@ export function PlayerProfileModal({
                                 <DialogTitle className="text-lg flex items-center gap-2">
                                   {player.full_name}
                                   <StatusBadge status={player.status} />
+                                  {!isViewer && (
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() =>
+                                        setArchived(player.status !== "archived")
+                                      }
+                                      disabled={archiving}
+                                      className="ml-auto h-7 cursor-pointer px-2 text-[12px] font-normal text-muted-foreground hover:text-foreground"
+                                      title={
+                                        player.status === "archived"
+                                          ? "Put this member back on the roster"
+                                          : "Take this member out of every picker and search, keeping their history"
+                                      }
+                                    >
+                                      {archiving ? (
+                                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                      ) : player.status === "archived" ? (
+                                        <ArchiveRestore className="h-3.5 w-3.5" />
+                                      ) : (
+                                        <Archive className="h-3.5 w-3.5" />
+                                      )}
+                                      {player.status === "archived" ? "Restore" : "Archive"}
+                                    </Button>
+                                  )}
                                 </DialogTitle>
                                 <DialogDescription className="mt-0.5">
                                   @{player.username} · Player ID P-{player.player_id}

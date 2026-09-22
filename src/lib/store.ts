@@ -446,6 +446,11 @@ type Store = {
     lastDep?: string;
     /** Members introduced by this player. */
     uplineId?: number;
+    /**
+     * "archived" for the archive itself, "all" for both. Omitted means live
+     * members only — archived ones are out of the roster by default.
+     */
+    status?: "archived" | "all";
   }) => Promise<{ players: Player[]; total: number }>;
   /** The member-code series in use, and what each would issue next. */
   loadCodeSeries: (
@@ -1202,13 +1207,14 @@ export const useStore = create<Store>((set, get) => {
       return res.data.players;
     },
 
-    listPlayers: async ({ q, companyId, limit = 100, offset = 0, prefix, lastDep, uplineId }) => {
+    listPlayers: async ({ q, companyId, limit = 100, offset = 0, prefix, lastDep, uplineId, status }) => {
       const qs = new URLSearchParams({ limit: String(limit), offset: String(offset) });
       if (q) qs.set("q", q);
       if (companyId != null) qs.set("company", String(companyId));
       if (prefix) qs.set("prefix", prefix);
       if (lastDep) qs.set("last_dep", lastDep);
       if (uplineId != null) qs.set("upline", String(uplineId));
+      if (status) qs.set("status", status);
       const res = await api<{ players: Player[]; total: number }>(`/api/players?${qs}`);
       if (!res.ok || !res.data) return { players: [], total: 0 };
       mergePlayers(set, get, res.data.players);

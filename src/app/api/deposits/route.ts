@@ -3,7 +3,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { bankAccounts, deposits, players, transactions } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
-import { jsonError } from "@/lib/api-helpers";
+import { assertNotArchived, jsonError } from "@/lib/api-helpers";
 import { canOverrideEligibility, resolveBonusForDeposit } from "@/lib/bonus";
 import { completeManualDeposit } from "@/lib/deposit-complete";
 import { InsufficientKioskCreditError } from "@/lib/kiosk-credit";
@@ -59,6 +59,7 @@ export async function POST(request: Request) {
     ) {
       throw new AuthError(403, "Player is outside your company scope");
     }
+    assertNotArchived(player);
 
     if (body.received_into_account_id !== undefined) {
       const [account] = await db

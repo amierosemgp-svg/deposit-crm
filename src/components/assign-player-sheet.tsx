@@ -259,7 +259,11 @@ export function AssignPlayerSheet({
                     <button
                       type="button"
                       onClick={() => void handleAssign(p)}
-                      disabled={assigningId !== null || p.status === "suspended"}
+                      disabled={
+                        assigningId !== null ||
+                        p.status === "suspended" ||
+                        p.status === "archived"
+                      }
                       className={cn(
                         "flex w-full cursor-pointer items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-muted/50 disabled:cursor-not-allowed disabled:opacity-50",
                         suggested && "bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-50",

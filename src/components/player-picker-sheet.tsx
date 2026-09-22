@@ -96,11 +96,14 @@ export function PlayerPickerSheet({
     // A server result is already matched; an explicit list still needs it.
     const matched =
       !players || q === "" ? source : source.filter((p) => playerHaystack(p).includes(q));
-    return [...matched].sort((a, b) => a.full_name.localeCompare(b.full_name));
+    // The search path never returns archived members, but a caller passing its
+    // own list has not been through that filter.
+    const live = matched.filter((p) => p.status !== "archived");
+    return [...live].sort((a, b) => a.full_name.localeCompare(b.full_name));
   }, [players, found, query]);
 
   function pick(p: Player) {
-    if (p.status === "suspended") return;
+    if (p.status === "suspended" || p.status === "archived") return;
     onSelect(p);
     onOpenChange(false);
   }

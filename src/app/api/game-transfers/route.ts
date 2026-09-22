@@ -3,7 +3,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { gameCredits, gameTransfers, players, transactions } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
-import { jsonError } from "@/lib/api-helpers";
+import { assertNotArchived, jsonError } from "@/lib/api-helpers";
 import { canonicalise } from "@/lib/game-name";
 import {
   creditWhere,
@@ -82,6 +82,7 @@ export async function POST(request: Request) {
       ) {
         throw new AuthError(403, "Player is outside your company scope");
       }
+      assertNotArchived(player);
 
       const fromLogin = resolveGameLogin(player.game_accounts, fromGame, body.from_game_username);
       const toLogin = resolveGameLogin(player.game_accounts, toGame, body.to_game_username);

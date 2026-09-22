@@ -1,0 +1,24 @@
+-- Archive a member instead of deleting them.
+--
+-- There is no DELETE route for players and there should not be: a member is
+-- referenced by deposits, withdrawals, game transfers, credits, rebates,
+-- referral bonuses and the referral tree, so removing the row either fails on
+-- a foreign key or tears a hole through the ledger. But CS does add the wrong
+-- member — a typo'd code, a duplicate of someone already on the roster — and
+-- until now the only fallback was to leave it sitting in the picker forever.
+--
+-- "archived" is that fallback. It is not "suspended": suspended is a live
+-- member who is on hold and still shows in the roster, archived is a row that
+-- should stop being offered anywhere a member is chosen. Their history stays
+-- exactly where it is and still renders, because the sheets hydrate members
+-- by id and that path deliberately ignores the filter.
+--
+-- Additive: one enum value, nothing rewritten. Every existing member keeps
+-- the status they have.
+--
+-- Run this BEFORE deploying the code that uses it. /api/state polls the whole
+-- desk, so a value the database does not know is not one broken feature, it
+-- is every request failing at once. Postgres also refuses to use a value added
+-- by ALTER TYPE inside the same transaction, which is why this stands alone.
+
+ALTER TYPE player_status ADD VALUE IF NOT EXISTS 'archived';

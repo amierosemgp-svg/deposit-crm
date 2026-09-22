@@ -97,7 +97,14 @@ export async function GET(request: Request) {
       scope.push(sql`p.company_entity_id = ${companyId}`);
     }
 
-    // Hydrate-by-id: the sheets ask for the members on the rows they drew.
+    /**
+     * Hydrate-by-id: the sheets ask for the members on the rows they drew.
+     *
+     * Deliberately exempt from the archived filter below. A deposit booked
+     * last month against a member since archived still has to show their
+     * name, not "unknown member" — archiving stops someone being *chosen*, it
+     * does not unwrite what they already did.
+     */
     const idsParam = sp.get("ids");
     if (idsParam !== null) {
       const ids = idsParam
@@ -118,6 +125,22 @@ export async function GET(request: Request) {
          WHERE ${sql.join(scope, sql` AND `)}`);
       const list = rows.rows.map((r) => (r as { row: unknown }).row);
       return Response.json({ players: list, total: list.length, limit: list.length, offset: 0 });
+    }
+
+    /**
+     * Archived members drop out of the roster unless they are asked for.
+     *
+     * This is the whole point of archiving: a member added by mistake stops
+     * being offered by the player search, the pickers and the worksheet
+     * typeahead, every one of which comes through here. `status=archived` is
+     * how the Archived filter finds them again to restore one; `status=all` is
+     * the escape hatch for anything that genuinely wants both.
+     */
+    const statusParam = (sp.get("status") ?? "").trim();
+    if (statusParam === "archived") {
+      scope.push(sql`p.status = 'archived'`);
+    } else if (statusParam !== "all") {
+      scope.push(sql`p.status <> 'archived'`);
     }
 
     /**

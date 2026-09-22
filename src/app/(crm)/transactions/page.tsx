@@ -2143,6 +2143,16 @@ export default function TransactionsPage() {
         return { ok: false, error: `Assign to me must be yes or no, not "${d[c.assign]?.trim()}"` };
       const player = playerByCode.get(member.trim().toLowerCase());
       if (!player) return { ok: false, error: `Unknown member code "${member.trim()}"` };
+      // The typeahead never offers an archived member, but playerByCode is
+      // built from whoever the sheet has hydrated — including members archived
+      // since the rows below were booked. Refuse before the row is saved
+      // rather than letting the API reject it after the fact.
+      if (player.status === "archived") {
+        return {
+          ok: false,
+          error: `"${member.trim()}" is archived — restore the member to book against them`,
+        };
+      }
       const amt = parseAmount(amount);
       if (amt === null || amt <= 0) return { ok: false, error: `Bad amount "${amount}"` };
       if (!bank.trim()) return { ok: false, error: "Bank is required" };
@@ -2201,6 +2211,16 @@ export default function TransactionsPage() {
         return { ok: false, error: `Assign to me must be yes or no, not "${d[c.assign]?.trim()}"` };
       const player = playerByCode.get(member.trim().toLowerCase());
       if (!player) return { ok: false, error: `Unknown member code "${member.trim()}"` };
+      // The typeahead never offers an archived member, but playerByCode is
+      // built from whoever the sheet has hydrated — including members archived
+      // since the rows below were booked. Refuse before the row is saved
+      // rather than letting the API reject it after the fact.
+      if (player.status === "archived") {
+        return {
+          ok: false,
+          error: `"${member.trim()}" is archived — restore the member to book against them`,
+        };
+      }
       const g = gameByName.get(product.trim().toLowerCase());
       if (!g) return { ok: false, error: `Unknown product "${product.trim()}"` };
       const all = amount.trim().toLowerCase() === "all";
@@ -2247,6 +2267,16 @@ export default function TransactionsPage() {
       const remark = d[c.remark] ?? "";
       const player = playerByCode.get(member.trim().toLowerCase());
       if (!player) return { ok: false, error: `Unknown member code "${member.trim()}"` };
+      // The typeahead never offers an archived member, but playerByCode is
+      // built from whoever the sheet has hydrated — including members archived
+      // since the rows below were booked. Refuse before the row is saved
+      // rather than letting the API reject it after the fact.
+      if (player.status === "archived") {
+        return {
+          ok: false,
+          error: `"${member.trim()}" is archived — restore the member to book against them`,
+        };
+      }
       const g = gameByName.get(product.trim().toLowerCase());
       if (!g) return { ok: false, error: `Unknown product "${product.trim()}"` };
       // Mirror the server's check so the row errors before it is sent: the
@@ -2290,6 +2320,16 @@ export default function TransactionsPage() {
         return { ok: false, error: `Assign to me must be yes or no, not "${d[c.assign]?.trim()}"` };
       const player = playerByCode.get(member.trim().toLowerCase());
       if (!player) return { ok: false, error: `Unknown member code "${member.trim()}"` };
+      // The typeahead never offers an archived member, but playerByCode is
+      // built from whoever the sheet has hydrated — including members archived
+      // since the rows below were booked. Refuse before the row is saved
+      // rather than letting the API reject it after the fact.
+      if (player.status === "archived") {
+        return {
+          ok: false,
+          error: `"${member.trim()}" is archived — restore the member to book against them`,
+        };
+      }
       const fromGame = gameByName.get(from.trim().toLowerCase());
       if (!fromGame) return { ok: false, error: `Unknown game "${from.trim()}"` };
       const toGame = gameByName.get(to.trim().toLowerCase());
@@ -2791,6 +2831,10 @@ export default function TransactionsPage() {
         const pl = playerByCode.get(v.toLowerCase());
         if (!pl) {
           toast.error(`Unknown member code "${v}" — player not changed`);
+          return;
+        }
+        if (pl.status === "archived") {
+          toast.error(`"${v}" is archived — player not changed`);
           return;
         }
         const res = await updateDepositDraft(dep.deposit_id, { player_id: pl.player_id });

@@ -235,6 +235,11 @@ export default function PlayersPage() {
   // Filter by member-code prefix (Players) / lead list (Leads). "all" = off.
   const [prefixFilter, setPrefixFilter] = useState("all");
   /**
+   * The roster hides archived members; this is how you get at them to put one
+   * back. "live" is the default everywhere else in the app.
+   */
+  const [archiveFilter, setArchiveFilter] = useState<"live" | "archived">("live");
+  /**
    * How long since a member last deposited. The buckets are the questions CS
    * actually asks — who is active, who is going cold, who has never paid at
    * all — rather than a free date range nobody wants to type.
@@ -548,6 +553,7 @@ export default function PlayersPage() {
         limit: PAGE_SIZE,
         offset,
         prefix: prefixFilter === "all" ? undefined : prefixFilter,
+        status: archiveFilter === "archived" ? "archived" : undefined,
         lastDep:
           lastDepDir === "any"
             ? undefined
@@ -576,7 +582,7 @@ export default function PlayersPage() {
     };
   }, [
     tab, listPlayers, search, selectedCompanyId, pages, prefixFilter,
-    lastDepDir, lastDepDays, savedAt,
+    lastDepDir, lastDepDays, savedAt, archiveFilter,
   ]);
 
   const memberRows = useMemo<SheetRow[]>(() => {
@@ -585,11 +591,15 @@ export default function PlayersPage() {
     return pageRows
       .map<SheetRow>((p) => ({
         id: p.player_id,
-        tone: p.status === "suspended" ? "muted" : "default",
+        tone: p.status === "active" ? "default" : "muted",
         cells: [
           p.full_name,
           p.username,
-          p.status === "suspended" ? "Suspended" : "Active",
+          p.status === "suspended"
+            ? "Suspended"
+            : p.status === "archived"
+              ? "Archived"
+              : "Active",
           formatRM(p.total_deposits),
           formatRM(p.total_withdrawals),
           sinceLabel(lastDepositAt.get(p.player_id)),
@@ -1150,6 +1160,26 @@ export default function PlayersPage() {
             className="h-8 w-56 pl-7 text-[13px]"
           />
         </div>
+        {tab === "players" && (
+          <Select
+            value={archiveFilter}
+            onValueChange={(v) =>
+              setArchiveFilter((v as typeof archiveFilter) ?? "live")
+            }
+          >
+            <SelectTrigger className="h-8 w-36 cursor-pointer text-[13px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="live" className="cursor-pointer">
+                Active members
+              </SelectItem>
+              <SelectItem value="archived" className="cursor-pointer">
+                Archived
+              </SelectItem>
+            </SelectContent>
+          </Select>
+        )}
         {tab === "players" && prefixOptions.length > 0 && (
           <Select value={prefixFilter} onValueChange={(v) => setPrefixFilter(v ?? "all")}>
             <SelectTrigger className="h-8 w-36 cursor-pointer text-[13px]">

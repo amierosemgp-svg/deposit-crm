@@ -162,6 +162,17 @@ export type PlayerGameAccount = {
   game_username: string;
 };
 
+/**
+ * "suspended" is a live member on hold; "archived" is a member added by
+ * mistake — kept for their history, never offered for selection again.
+ */
+export type PlayerStatus = "active" | "suspended" | "archived";
+
+/** Can this member still be picked for new work? */
+export function isSelectable(p: { status: PlayerStatus }) {
+  return p.status !== "archived" && p.status !== "suspended";
+}
+
 export type Player = {
   player_id: number;
   username: string;
@@ -176,7 +187,7 @@ export type Player = {
   upline_player_id?: number | null;
   upline_assigned_at?: string | null;
   registration_date: string;
-  status: "active" | "suspended";
+  status: PlayerStatus;
   total_deposits: number;
   total_withdrawals: number;
   notes?: string | null;

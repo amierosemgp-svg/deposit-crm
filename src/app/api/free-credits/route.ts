@@ -3,7 +3,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { players, transactions } from "@/db/schema";
 import { AuthError, authErrorResponse, requireUser, requireWriteUser } from "@/lib/auth";
-import { jsonError } from "@/lib/api-helpers";
+import { assertNotArchived, jsonError } from "@/lib/api-helpers";
 import { issueFreeCredit } from "@/lib/free-credit";
 
 const createSchema = z.object({
@@ -56,6 +56,7 @@ export async function POST(request: Request) {
       ) {
         throw new AuthError(403, "Player is outside your company scope");
       }
+      assertNotArchived(player);
 
       const issued = await issueFreeCredit(txn, {
         user,

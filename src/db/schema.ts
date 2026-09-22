@@ -48,7 +48,17 @@ export const authChallengePurposeEnum = pgEnum("auth_challenge_purpose", [
   "telegram_link",
 ]);
 
-export const playerStatusEnum = pgEnum("player_status", ["active", "suspended"]);
+/**
+ * "suspended" is a live member on hold — still on the roster, still offered.
+ * "archived" is the fallback for a member added by mistake: their history
+ * stays and still renders, but they stop being offered anywhere a member is
+ * picked. See migrations/2026-09-22-archive-players.sql.
+ */
+export const playerStatusEnum = pgEnum("player_status", [
+  "active",
+  "suspended",
+  "archived",
+]);
 
 /** Who created a transaction: the agent (auto-detected) or a person (manual). */
 export const transactionSourceEnum = pgEnum("transaction_source", [

@@ -1,4 +1,4 @@
-import { and, desc, eq, ilike, or, type SQL } from "drizzle-orm";
+import { and, desc, eq, ilike, ne, or, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { entities, players } from "@/db/schema";
@@ -26,8 +26,13 @@ export async function GET(request: Request) {
 
   const filters: SQL[] = [];
   if (companyId) filters.push(eq(players.company_entity_id, Number(companyId)));
-  if (status === "active" || status === "suspended") {
+  if (status === "active" || status === "suspended" || status === "archived") {
     filters.push(eq(players.status, status));
+  } else {
+    // Archived members are out of play — the agent must not be handed one to
+    // match a deposit against. Asking for them by name still works, so a
+    // lookup that needs to explain an old row can still find them.
+    filters.push(ne(players.status, "archived"));
   }
   if (q) {
     filters.push(
