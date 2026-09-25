@@ -686,6 +686,30 @@ export const EXPENSE_CATEGORY_LABEL: Record<ExpenseCategory, string> = {
 };
 
 
+export type ClaimStatus = "outstanding" | "settled" | "cancelled";
+
+/**
+ * Money someone paid out of their own pocket that the company owes back.
+ * `entity_id` is who owes it; `claimed_by_user_id` is who is owed.
+ */
+export type Claim = {
+  claim_id: number;
+  entity_id: number;
+  claimed_by_user_id: number;
+  paid_into_account_id: number | null;
+  amount: number;
+  occurred_at: string;
+  reason: string;
+  notes?: string | null;
+  status: ClaimStatus;
+  settled_at: string | null;
+  settled_by_user_id: number | null;
+  /** The account the reimbursement came out of, once it has been paid. */
+  settled_from_account_id: number | null;
+  recorded_by_user_id: number | null;
+  created_at: string;
+};
+
 export type Expense = {
   expense_id: number;
   expense_date: string;

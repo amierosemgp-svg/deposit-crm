@@ -1356,6 +1356,52 @@ export const expenseCategoryEnum = pgEnum("expense_category", [
   "other",
 ]);
 
+export const claimStatusEnum = pgEnum("claim_status", [
+  "outstanding",
+  "settled",
+  "cancelled",
+]);
+
+/**
+ * Money a person paid out of their own pocket that the company owes back.
+ *
+ * Nothing else here holds it. An `expenses` row is money the company spent and
+ * will not see again; `bankTransfers` and `leaderTransfers` move money between
+ * accounts the company already owns; a deposit or a withdrawal is a player's
+ * money. A claim is the one shape none of those fit: the company's balance went
+ * up, but it went up on someone else's money, and that someone is owed.
+ *
+ * `entity_id` is who owes — the company the money went into, not the claimant's
+ * own entity, because a leader can fund an account belonging to any company
+ * under them. `paid_into_account_id` is nullable: not every claim lands in an
+ * account we track, and a claim with no account is still a debt.
+ *
+ * Settling is the reimbursement actually happening, so it names the account the
+ * money came out of and debits it in the same step — see /api/claims/[id].
+ */
+export const claims = pgTable("claims", {
+  claim_id: serial("claim_id").primaryKey(),
+  entity_id: integer("entity_id")
+    .notNull()
+    .references(() => entities.entity_id),
+  claimed_by_user_id: integer("claimed_by_user_id")
+    .notNull()
+    .references(() => users.user_id),
+  paid_into_account_id: integer("paid_into_account_id").references(() => bankAccounts.account_id),
+  amount: numeric("amount", { precision: 14, scale: 2, mode: "number" }).notNull(),
+  occurred_at: timestamp("occurred_at", { withTimezone: true, mode: "string" }).notNull(),
+  reason: varchar("reason", { length: 200 }).notNull(),
+  notes: text("notes"),
+  status: claimStatusEnum("status").notNull().default("outstanding"),
+  settled_at: timestamp("settled_at", { withTimezone: true, mode: "string" }),
+  settled_by_user_id: integer("settled_by_user_id").references(() => users.user_id),
+  settled_from_account_id: integer("settled_from_account_id").references(() => bankAccounts.account_id),
+  recorded_by_user_id: integer("recorded_by_user_id").references(() => users.user_id),
+  created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .notNull()
+    .defaultNow(),
+});
+
 export const expenses = pgTable("expenses", {
   expense_id: serial("expense_id").primaryKey(),
   expense_date: timestamp("expense_date", { withTimezone: true, mode: "string" })

@@ -16,6 +16,8 @@ import type {
   BotHealth,
   Deposit,
   Entity,
+  Claim,
+  ClaimStatus,
   Expense,
   ExpenseCategory,
   GameAccountStock,
@@ -92,6 +94,7 @@ type StateResponse = {
   bonusPlans: BonusPlan[];
   referralBonuses: ReferralBonus[];
   expenses: Expense[];
+  claims: Claim[];
   botHealth: BotHealth[];
   botCommands: BotCommand[];
   gameAccountStock: GameAccountStock[];
@@ -131,6 +134,7 @@ type Store = {
   bonusPlans: BonusPlan[];
   referralBonuses: ReferralBonus[];
   expenses: Expense[];
+  claims: Claim[];
   botHealth: BotHealth[];
   /** Recent on-demand agent commands — drives the Crawl banks button. */
   botCommands: BotCommand[];
@@ -419,6 +423,29 @@ type Store = {
     paid_from_cash_entity_id?: number | null;
   }) => Promise<MutationResult>;
   /**
+   * Record money a person put in that the company owes back. Moves no balance:
+   * the money is already in the account. Settling is what moves it.
+   */
+  createClaim: (input: {
+    entity_id: number;
+    claimed_by_user_id: number;
+    amount: number;
+    occurred_at: string;
+    reason: string;
+    paid_into_account_id?: number | null;
+    notes?: string;
+  }) => Promise<MutationResult>;
+  /**
+   * Settle a claim, reopen one, or cancel it. Naming the account on settle
+   * pays the claimant out of it in the same step.
+   */
+  setClaimStatus: (
+    claimId: number,
+    status: ClaimStatus,
+    settledFromAccountId?: number | null,
+  ) => Promise<MutationResult>;
+  deleteClaim: (claimId: number) => Promise<MutationResult>;
+  /**
    * Make sure these members are in the cache, fetching the ones that are not.
    *
    * What a sheet calls after drawing its rows: it knows the player ids on the
@@ -605,6 +632,7 @@ export const useStore = create<Store>((set, get) => {
     bonusPlans: [],
     referralBonuses: [],
     expenses: [],
+    claims: [],
     botHealth: [],
     botCommands: [],
     gameAccountStock: [],
@@ -1183,6 +1211,18 @@ export const useStore = create<Store>((set, get) => {
 
     createExpense: (input) =>
       mutate("/api/expenses", { method: "POST", body: JSON.stringify(input) }),
+
+    createClaim: (input) =>
+      mutate("/api/claims", { method: "POST", body: JSON.stringify(input) }),
+    setClaimStatus: (claimId, status, settledFromAccountId) =>
+      mutate(`/api/claims/${claimId}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          status,
+          settled_from_account_id: settledFromAccountId ?? null,
+        }),
+      }),
+    deleteClaim: (claimId) => mutate(`/api/claims/${claimId}`, { method: "DELETE" }),
     hydratePlayers: async (ids) => {
       const want = [...new Set(ids.filter((id): id is number => typeof id === "number" && id > 0))];
       if (!want.length) return;

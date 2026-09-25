@@ -72,6 +72,7 @@ import {
   type BonusOption,
   type BotCommand,
   type Deposit,
+  type Claim,
   type Expense,
   type GameTransfer,
   type Player,
@@ -95,7 +96,8 @@ type TabKey =
   | "leaderwithdrawal"
   | "rebate"
   | "leadertransfer"
-  | "expense";
+  | "expense"
+  | "claim";
 
 /**
  * Column order per sheet, in workflow order: who handles it, then everything
@@ -131,6 +133,8 @@ const COLUMN_KEYS = {
   ],
   // Settlements between leaders (super-admin only).
   leadertransfer: ["assign", "date", "time", "from", "fromaccount", "to", "toaccount", "amount", "note"],
+  // Money someone paid out of their own pocket that the company owes back.
+  claim: ["assign", "date", "claimant", "company", "amount", "reason", "paidinto", "status", "notes"],
 } as const satisfies Record<TabKey, readonly string[]>;
 
 type ColKey<T extends TabKey> = (typeof COLUMN_KEYS)[T][number];
@@ -190,6 +194,7 @@ const LOGIN_PAIRS: Record<TabKey, Array<{ userCol: number; gameCol: number }>> =
   rebate: [],
   leadertransfer: [],
   expense: [],
+  claim: [],
 };
 
 /** One leader-to-leader settlement, as GET /api/leader-transfers returns it. */
@@ -527,21 +532,6 @@ function Kbd({ k, light }: { k: string; light?: boolean }) {
   );
 }
 
-const ENTRY_HINT: Record<TabKey, string> = {
-  deposit: "Entry: Member Code · Product · Bonus % · Bank · Amount — the rest fills itself",
-  withdrawal:
-    "Entry: Member Code · Product · Bank · Amount (or ALL) · Bank Account — the rest fills itself",
-  freecredit:
-    "Entry: Member Code · Product · Amount · Mode (bot / manual) · Remark — credit with no deposit behind it",
-  transfer: "Entry: Member Code · From · To · Amount (or ALL) — the rest fills itself",
-  expense: "Entry: Date · Category · Description · Amount · Casino · Notes",
-  leaderwithdrawal:
-    "Entry: Date · Time · Bank Account · Amount · Taken By · Notes — cash a company took out at the bank; the account is debited on save",
-  rebate: "Generated on the Rebates page — select rows here to pay, skip or unskip them",
-  leadertransfer:
-    "Entry: From Leader · To Leader · Amount — name the bank account each end used, or Cash",
-};
-
 /** Either end of a leader settlement when no bank account was involved. */
 const CASH = "Cash";
 
@@ -558,6 +548,9 @@ export default function TransactionsPage() {
   const withdrawals = useStore((s) => s.withdrawals);
   const gameTransfers = useStore((s) => s.gameTransfers);
   const expenses = useStore((s) => s.expenses);
+  const claims = useStore((s) => s.claims);
+  const setClaimStatus = useStore((s) => s.setClaimStatus);
+  const deleteClaim = useStore((s) => s.deleteClaim);
   const players = useStore((s) => s.players);
   const hydrated = useStore((s) => s.hydrated);
   const me = useStore((s) => s.me);
@@ -780,7 +773,7 @@ export default function TransactionsPage() {
 
   /** Rebates are generated on their own page, so they have no range to fetch. */
   const RANGE_SHEETS = useMemo<TabKey[]>(
-    () => ["deposit", "withdrawal", "transfer", "freecredit", "leaderwithdrawal", "leadertransfer", "expense"],
+    () => ["deposit", "withdrawal", "transfer", "freecredit", "leaderwithdrawal", "leadertransfer", "expense", "claim"],
     [],
   );
   useEffect(() => {
@@ -848,6 +841,9 @@ export default function TransactionsPage() {
       | "reject-deposit"
       | "reject-withdrawal"
       | "delete-expense"
+      | "delete-claim"
+      | "settle-claim"
+      | "reopen-claim"
       | "delete-deposit"
       | "delete-withdrawal"
       | "delete-freecredit"
@@ -1212,6 +1208,19 @@ export default function TransactionsPage() {
         paidfrom: { label: "Paid From", width: 190, entry: true, options: PAID_FROM_SUGGESTIONS, placeholder: "bank account / company cash" },
         notes: { label: "Notes", width: 240, entry: true, placeholder: "notes (optional)" },
       }),
+      claim: order("claim", {
+        assign,
+        date: { label: "Date", width: 92, align: "center", entry: true, required: true, placeholder: "31/8/2026" },
+        claimant: { label: "Owed To", width: 150, entry: true, required: true, options: LEADER_SUGGESTIONS, placeholder: "who the company owes" },
+        company: { label: "Owed By", width: 150, entry: true, required: true, options: companies.map((c) => c.company_name), placeholder: "which casino owes it" },
+        amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "1000" },
+        reason: { label: "Reason", width: 260, entry: true, required: true, placeholder: "what the money was for" },
+        paidinto: { label: "Paid Into", width: 170, entry: true, options: ACCOUNT_SUGGESTIONS, placeholder: "bank account (optional)" },
+        // Set by settling, not typed: paying it back moves money, so it goes
+        // through the action bar where the account can be named.
+        status: { label: "Status", width: 110, align: "center" },
+        notes: { label: "Notes", width: 240, entry: true, placeholder: "optional" },
+      }),
     };
   }, [games, banks, companies, isAdmin, OUR_ACCOUNTS, memberSuggestions, MODE_SUGGESTIONS, ASSIGN_SUGGESTIONS, ACCOUNT_SUGGESTIONS, LEADER_SUGGESTIONS, END_SUGGESTIONS, PAID_FROM_SUGGESTIONS]);
 
@@ -1233,6 +1242,7 @@ export default function TransactionsPage() {
     rebate: padDrafts([], "rebate"),
     leadertransfer: padDrafts([], "leadertransfer"),
     expense: padDrafts([], "expense"),
+    claim: padDrafts([], "claim"),
   }));
   // Server rejections from the last save, keyed by the draft row's identity.
   const [commitErrors, setCommitErrors] = useState<Map<string, string>>(new Map());
@@ -1750,6 +1760,33 @@ export default function TransactionsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expenses, companyNameById, range, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId, transferEndLabel, entityName, inRangeOr, statusFilters]);
 
+  const claimRows = useMemo<SheetRow[]>(() => {
+    return inRangeOr<Claim>("claim", claims)
+      .filter((c) => companyInScope(c.entity_id))
+      .filter((c) => inRange(c.occurred_at, range))
+      .filter((c) => statusFilters.size === 0 || statusFilters.has(c.status))
+      .sort((a, b) => a.occurred_at.localeCompare(b.occurred_at))
+      .map((c: Claim) => ({
+        id: c.claim_id,
+        // A settled claim is history; an outstanding one is money owed, and
+        // the sheet should say so at a glance.
+        tone: c.status === "settled" ? ("muted" as const) : ("default" as const),
+        cells: toCells("claim", {
+          assign: assignCell(c.recorded_by_user_id),
+          date: sheetDate(c.occurred_at),
+          claimant: userName(c.claimed_by_user_id),
+          company: companyNameById.get(c.entity_id) ?? "",
+          amount: fmtAmount(c.amount),
+          reason: c.reason,
+          paidinto: c.paid_into_account_id != null ? transferEndLabel(c.paid_into_account_id, false) : "",
+          status: c.status,
+          notes: c.notes ?? "",
+        }),
+      }))
+      .filter((r) => matchesSearch(r.cells));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [claims, companyNameById, userName, range, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId, transferEndLabel, inRangeOr, statusFilters]);
+
   const accountById = useMemo(
     () => new Map(bankAccounts.map((a) => [a.account_id, a])),
     [bankAccounts],
@@ -1858,6 +1895,7 @@ export default function TransactionsPage() {
     rebate: rebateRows,
     leadertransfer: leaderTransferRows,
     expense: expenseRows,
+    claim: claimRows,
   };
   const rows = rowsByTab[tab];
 
@@ -2442,6 +2480,67 @@ export default function TransactionsPage() {
     [companyByName, resolvePaidFrom],
   );
 
+  const parseClaimDraft = useCallback(
+    (d: string[]): Parsed => {
+      const c = COL.claim;
+      if (parseAssign(d[c.assign] ?? "") === null)
+        return { ok: false, error: `Assign to me must be yes or no, not "${d[c.assign]?.trim()}"` };
+      const dateCell = (d[c.date] ?? "").trim();
+      const occurred_at = dateCell
+        ? parseSheetDate(dateCell)
+        : new Date().toISOString().slice(0, 10);
+      if (!occurred_at) return { ok: false, error: `Bad date "${dateCell}" (use 31/8/2026)` };
+
+      const claimantCell = (d[c.claimant] ?? "").trim();
+      if (!claimantCell) return { ok: false, error: "Say who the company owes" };
+      const claimed_by_user_id = leaderByName.get(claimantCell.toLowerCase());
+      if (!claimed_by_user_id)
+        return { ok: false, error: `Unknown claimant "${claimantCell}" — pick a leader from the list` };
+
+      const companyCell = (d[c.company] ?? "").trim();
+      if (!companyCell) return { ok: false, error: "Say which casino owes it" };
+      const entity_id = companyByName.get(companyCell.toLowerCase());
+      if (!entity_id) return { ok: false, error: `Unknown casino "${companyCell}"` };
+
+      const amt = parseAmount(d[c.amount] ?? "");
+      if (amt === null || amt <= 0) return { ok: false, error: `Bad amount "${d[c.amount]}"` };
+
+      const reason = (d[c.reason] ?? "").trim();
+      if (!reason) return { ok: false, error: "Say what the money was for" };
+
+      /**
+       * The account the money landed in, if we track it. Optional on purpose:
+       * a claim can be cash handed to an agent, and a claim with no account is
+       * still a debt.
+       */
+      let paid_into_account_id: number | null = null;
+      const intoCell = (d[c.paidinto] ?? "").trim();
+      if (intoCell) {
+        const account = accountByLabel.get(intoCell.toLowerCase());
+        if (!account) return { ok: false, error: `Unknown bank account "${intoCell}"` };
+        if (!companyInScope(account.entity_id))
+          return { ok: false, error: `${account.bank_name} ${account.account_number} is outside your scope` };
+        paid_into_account_id = account.account_id;
+      }
+
+      const notes = (d[c.notes] ?? "").trim();
+      return {
+        ok: true,
+        payload: {
+          entity_id,
+          claimed_by_user_id,
+          amount: amt,
+          occurred_at,
+          reason,
+          ...(paid_into_account_id ? { paid_into_account_id } : {}),
+          ...(notes ? { notes } : {}),
+        },
+      };
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [leaderByName, companyByName, accountByLabel, selectedCompanyId, selectedLeaderId],
+  );
+
   const parseLeaderWithdrawalDraft = useCallback(
     (d: string[]): Parsed => {
       const c = COL.leaderwithdrawal;
@@ -2585,6 +2684,7 @@ export default function TransactionsPage() {
     rebate: parseRebateDraft,
     leadertransfer: parseLeaderTransferDraft,
     expense: parseExpenseDraft,
+    claim: parseClaimDraft,
   };
   const parseDraft = parseByTab[tab];
 
@@ -2620,6 +2720,11 @@ export default function TransactionsPage() {
     for (const t of gameTransfers) m.set(t.transfer_id, t);
     return m;
   }, [gameTransfers]);
+  const claimById = useMemo(() => {
+    const m = new Map<number, Claim>();
+    for (const c of claims) m.set(c.claim_id, c);
+    return m;
+  }, [claims]);
   const expenseById = useMemo(() => {
     const m = new Map<number, Expense>();
     for (const e of expenses) m.set(e.expense_id, e);
@@ -2940,6 +3045,13 @@ export default function TransactionsPage() {
         : [],
     [tab, selectedNumericIds, freeCreditById],
   );
+  const selectedClaims = useMemo(
+    () =>
+      tab === "claim"
+        ? selectedNumericIds.map((id) => claimById.get(id)).filter((c): c is Claim => !!c)
+        : [],
+    [tab, selectedNumericIds, claimById],
+  );
   const selectedExpenses = useMemo(
     () =>
       tab === "expense"
@@ -3184,6 +3296,14 @@ export default function TransactionsPage() {
         rejectableWd.length > 0 && rejectableWd.every((w) => mine(w.assigned_to_user_id)),
       retryTf: selectedTransfers.some((t) => t.status === "failed"),
       delExp: tab === "expense" && selectedExpenses.length > 0,
+      // Settling moves no money — the payment itself is entered as its own Clear
+      // Bank row — so CS marks these settled too. The server still scopes it to
+      // the companies the user works for.
+      settleClaim:
+        tab === "claim" && selectedClaims.some((c) => c.status === "outstanding"),
+      reopenClaim:
+        tab === "claim" && selectedClaims.some((c) => c.status === "settled"),
+      delClaim: tab === "claim" && selectedClaims.some((c) => c.status !== "settled"),
       // Deleting a keyed-wrong row. Manual only — the server refuses the
       // agent's own rows, so the button is not offered for them either.
       delDep: tab === "deposit" && deletableDep.length > 0,
@@ -3303,6 +3423,30 @@ export default function TransactionsPage() {
         reprocessGameTransfer,
       ),
     [runBulk, selectedTransfers, reprocessGameTransfer],
+  );
+  const handleSettleClaims = useCallback(
+    () =>
+      setConfirming({
+        kind: "settle-claim",
+        ids: selectedClaims.filter((c) => c.status === "outstanding").map((c) => c.claim_id),
+      }),
+    [selectedClaims],
+  );
+  const handleReopenClaims = useCallback(
+    () =>
+      setConfirming({
+        kind: "reopen-claim",
+        ids: selectedClaims.filter((c) => c.status === "settled").map((c) => c.claim_id),
+      }),
+    [selectedClaims],
+  );
+  const handleDeleteClaims = useCallback(
+    () =>
+      setConfirming({
+        kind: "delete-claim",
+        ids: selectedClaims.filter((c) => c.status !== "settled").map((c) => c.claim_id),
+      }),
+    [selectedClaims],
   );
   const handleDeleteExpenses = useCallback(
     () =>
@@ -3456,6 +3600,7 @@ export default function TransactionsPage() {
         else if (tab === "withdrawal" && can.delWd) run = handleDeleteWithdrawals;
         else if (tab === "freecredit" && can.delFc) run = handleDeleteFreeCredits;
         else if (tab === "expense" && can.delExp) run = handleDeleteExpenses;
+        else if (tab === "claim" && can.delClaim) run = handleDeleteClaims;
         else if (tab === "leaderwithdrawal" && can.delCash) run = handleDeleteCashOuts;
         else if (tab === "leadertransfer" && can.delLt) run = handleDeleteLeaderTransfers;
       }
@@ -3471,7 +3616,7 @@ export default function TransactionsPage() {
     isViewer, selectedIds.length, tab, acting, confirming, can,
     selectedPlayerId, handleViewPlayer,
     handleAssignToMe, handleApprove, handleComplete, handleRetryDeposits,
-    handlePull, handleMarkPaid, handleRetryTransfers, handleDeleteExpenses,
+    handlePull, handleMarkPaid, handleRetryTransfers, handleDeleteExpenses, handleDeleteClaims,
     handleDeleteDeposits, handleDeleteWithdrawals, handleDeleteFreeCredits,
     handleDeleteCashOuts, handleDeleteLeaderTransfers,
   ]);
@@ -3518,6 +3663,7 @@ export default function TransactionsPage() {
     rebate: "/api/rebates/payouts", // never posted to — the sheet is read-only
     leadertransfer: "/api/leader-transfers",
     expense: "/api/expenses",
+    claim: "/api/claims",
   };
 
   const handleCommit = useCallback(async () => {
@@ -3617,6 +3763,7 @@ export default function TransactionsPage() {
       leaderwithdrawal: "cash withdrawal",
       rebate: "rebate",
       leadertransfer: "leader transfer",
+      claim: "claim",
       expense: "expense",
     }[tab];
     if (failed) {
@@ -3681,6 +3828,11 @@ export default function TransactionsPage() {
     // Expenses have no status — what the desk filters by is the category, so
     // the same pills carry those instead.
     expense: EXPENSE_CATEGORIES.map((c) => [c, EXPENSE_CATEGORY_LABEL[c]] as [string, string]),
+    claim: [
+      ["outstanding", "Outstanding"],
+      ["settled", "Settled"],
+      ["cancelled", "Cancelled"],
+    ],
   };
   const statusOptions = statusOptionsByTab[tab];
 
@@ -3866,6 +4018,60 @@ export default function TransactionsPage() {
         },
       };
     }
+    if (
+      confirming.kind === "settle-claim" ||
+      confirming.kind === "reopen-claim" ||
+      confirming.kind === "delete-claim"
+    ) {
+      const settling = confirming.kind === "settle-claim";
+      const reopening = confirming.kind === "reopen-claim";
+      const list = confirming.ids
+        .map((id) => claimById.get(id))
+        .filter((c): c is Claim => !!c);
+      const total = list.reduce((a, c) => a + c.amount, 0);
+      return {
+        title: settling
+          ? `Mark ${list.length} claim${list.length === 1 ? "" : "s"} settled?`
+          : reopening
+            ? `Reopen ${list.length} claim${list.length === 1 ? "" : "s"}?`
+            : `Delete ${list.length} claim${list.length === 1 ? "" : "s"}?`,
+        /**
+         * Settling here records the debt as cleared and moves no bank balance.
+         * The payment itself is money leaving an account, so it goes on the Clear
+         * Bank sheet, which is what debits it. Booking it as an expense would
+         * count the money as a cost, and it is not one: it was spent when they
+         * paid it, and this is the company handing it back.
+         */
+        description: settling
+          ? "Records that they have been paid back. No bank balance moves here — " +
+            "enter the payment itself on the Clear Bank sheet, which debits the account."
+          : reopening
+            ? "Puts the claim back to outstanding. Use this when the payment did not go through."
+            : "Removes the claim. Only claims that were never settled can be deleted.",
+        confirmLabel: settling ? "Mark settled" : reopening ? "Reopen" : "Delete",
+        summary: [
+          { label: "Claims", value: String(list.length) },
+          { label: "Total amount", value: fmtAmount(total), emphasis: true },
+        ] as SummaryRow[],
+        items: list.map((c) => ({
+          key: c.claim_id,
+          label: userName(c.claimed_by_user_id),
+          meta: c.reason,
+          value: fmtAmount(c.amount),
+        })),
+        run: async () => {
+          if (settling || reopening) {
+            await runBulk(
+              settling ? "Settle" : "Reopen",
+              list.map((c) => c.claim_id),
+              (id: number) => setClaimStatus(id, settling ? "settled" : "outstanding"),
+            );
+          } else {
+            await runBulk("Delete", list.map((c) => c.claim_id), deleteClaim);
+          }
+        },
+      };
+    }
     if (confirming.kind === "delete-leadertransfer") {
       const list = confirming.ids
         .map((id) => leaderTransfers.find((t) => t.transfer_id === id))
@@ -3994,7 +4200,8 @@ export default function TransactionsPage() {
       run: () => runBulk("Delete", list.map((e) => e.expense_id), deleteExpense),
     };
   }, [
-    confirming, depositById, withdrawalById, expenseById, playerById,
+    confirming, depositById, withdrawalById, expenseById, claimById, playerById,
+    setClaimStatus, deleteClaim,
     cashOutById, rebateById, accountById, freeCreditById,
     runBulk, rejectDeposit, rejectWithdrawal, deleteExpense, reverseBankCashOut,
     deleteDeposit, deleteWithdrawal, deleteFreeCredit, deleteCashOut, deleteLeaderTransfer,
@@ -4080,6 +4287,7 @@ export default function TransactionsPage() {
     // server-side to the caller's own tree, so "open" does not mean "all".
     { key: "leadertransfer" as const, label: "Leader Transfer" },
     { key: "expense" as const, label: "Expenses" },
+    { key: "claim" as const, label: "Claims" },
   ];
 
   return (
@@ -4107,9 +4315,6 @@ export default function TransactionsPage() {
             {label}
           </button>
         ))}
-        <span className="ml-3 pb-1.5 text-[11px] text-muted-foreground">
-          {ENTRY_HINT[tab]}
-        </span>
       </div>
 
       {/* Toolbar — two rows: search, dates and buttons; then the filter pills. */}
@@ -4588,6 +4793,43 @@ export default function TransactionsPage() {
                     ? "Delete these rows and put back everything they moved"
                     : "Assign to me first — actions run only on rows you've claimed"
                 }
+                className="cursor-pointer gap-1 border-red-300 text-red-700 hover:bg-red-50 dark:text-red-300"
+              >
+                <Trash2 className="h-3 w-3" />
+                Delete
+                <Kbd k={`${DEL_LABEL}D`} />
+              </Button>
+            )}
+            {can.settleClaim && (
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={acting}
+                onClick={handleSettleClaims}
+                title="Record that they have been paid back — no bank balance moves"
+                className="cursor-pointer gap-1 border-emerald-300 text-emerald-700 hover:bg-emerald-50 dark:text-emerald-300"
+              >
+                Mark settled
+              </Button>
+            )}
+            {can.reopenClaim && (
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={acting}
+                onClick={handleReopenClaims}
+                title="Put the claim back to outstanding"
+                className="cursor-pointer gap-1"
+              >
+                Reopen
+              </Button>
+            )}
+            {can.delClaim && (
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={acting}
+                onClick={handleDeleteClaims}
                 className="cursor-pointer gap-1 border-red-300 text-red-700 hover:bg-red-50 dark:text-red-300"
               >
                 <Trash2 className="h-3 w-3" />

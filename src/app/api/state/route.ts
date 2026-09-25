@@ -9,6 +9,7 @@ import {
   companyLeaders,
   leaderMemberships,
   deposits,
+  claims,
   expenses,
   gameCredits,
   gameTransfers,
@@ -345,6 +346,7 @@ export async function GET() {
       bots,
       scopedCommands,
       scopedExpenses,
+      scopedClaims,
       scopedAdjustments,
       scopedReferralBonuses,
     ] = await Promise.all([
@@ -423,6 +425,21 @@ export async function GET() {
               .limit(500)
           : Promise.resolve([]),
 
+      /**
+       * Claims — money a person put in that the company owes back. Scoped the
+       * same way expenses are: a company's own book, never the group's.
+       */
+      user.role === "super_admin"
+        ? db.select().from(claims).orderBy(desc(claims.occurred_at)).limit(500)
+        : user.companyIds?.length
+          ? db
+              .select()
+              .from(claims)
+              .where(inArray(claims.entity_id, user.companyIds))
+              .orderBy(desc(claims.occurred_at))
+              .limit(500)
+          : Promise.resolve([]),
+
       boIds.length
         ? db
             .select()
@@ -498,6 +515,7 @@ export async function GET() {
       bonusPlans: scopedBonusPlans,
       referralBonuses: scopedReferralBonuses,
       expenses: scopedExpenses,
+      claims: scopedClaims,
       botHealth: bots,
       botCommands: scopedCommands,
       // Counts only — how many pre-registered accounts are left per game, so
