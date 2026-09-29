@@ -15,6 +15,7 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
   Check,
+  KeyRound,
   Laptop,
   Loader2,
   Network,
@@ -84,6 +85,7 @@ export function SecurityTab() {
       <TwoFactorCard />
       <DevicesCard canSetPolicy={isSuperAdmin} />
       {isSuperAdmin && <IpAllowlistCard />}
+      {isSuperAdmin && <ResetPasswordCard />}
     </div>
   );
 }
@@ -571,6 +573,122 @@ function IpAllowlistCard() {
               Save allowlist
             </Button>
           </>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+/* ---------------- Reset someone's password ---------------- */
+
+function ResetPasswordCard() {
+  const me = useStore((s) => s.me)!;
+  const allUsers = useStore((s) => s.users);
+  // Your own password changes above, with the current one — not here.
+  const users = allUsers.filter((u: User) => u.user_id !== me.user_id);
+  const userItems = users.map((u: User) => ({
+    value: String(u.user_id),
+    label: `${u.full_name} (@${u.username})`,
+  }));
+  const [userId, setUserId] = useState<string>("");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const selected = users.find((u: User) => String(u.user_id) === userId);
+  const mismatch = confirm.length > 0 && password !== confirm;
+  const canSave = !!selected && password.length >= 8 && password === confirm && !busy;
+
+  async function save() {
+    if (!selected || !canSave) return;
+    setBusy(true);
+    const res = await fetch(`/api/users/${selected.user_id}/password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ new_password: password }),
+    });
+    setBusy(false);
+    const body = await res.json().catch(() => null);
+    if (!res.ok) return toast.error(body?.error ?? "Could not reset the password");
+    toast.success(`Password reset for ${selected.full_name}`);
+    setPassword("");
+    setConfirm("");
+  }
+
+  return (
+    <Card className="p-5">
+      <div className="mb-4 flex items-start gap-2.5">
+        <KeyRound className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+        <div>
+          <h2 className="text-sm font-semibold">Reset a password</h2>
+          <p className="text-[13px] text-muted-foreground">
+            For an account whose owner has forgotten theirs. Tell them the new
+            password yourself; they can change it from their own Settings after
+            signing in.
+          </p>
+        </div>
+      </div>
+
+      <div className="max-w-sm space-y-3">
+        <div className="space-y-1.5">
+          <Label className="text-[13px]">Account</Label>
+          <Select
+            value={userId || null}
+            onValueChange={(v) => {
+              setUserId(v ?? "");
+              setPassword("");
+              setConfirm("");
+            }}
+            items={userItems}
+          >
+            <SelectTrigger className="h-9 w-full cursor-pointer text-[13px]">
+              <SelectValue placeholder="Pick a user" />
+            </SelectTrigger>
+            <SelectContent>
+              {users.map((u: User) => (
+                <SelectItem key={u.user_id} value={String(u.user_id)} className="cursor-pointer">
+                  {u.full_name} (@{u.username})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        {selected && (
+          <form
+            className="space-y-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void save();
+            }}
+          >
+            <div className="space-y-1.5">
+              <Label className="text-[13px]">New password</Label>
+              <Input
+                type="password"
+                autoComplete="new-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="At least 8 characters"
+                className="h-9 text-[13px]"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-[13px]">Confirm</Label>
+              <Input
+                type="password"
+                autoComplete="new-password"
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+                className={cn("h-9 text-[13px]", mismatch && "border-red-500")}
+              />
+              {mismatch && <p className="text-[12px] text-red-600">Passwords don&apos;t match</p>}
+            </div>
+            <Button type="submit" size="sm" disabled={!canSave} className="cursor-pointer">
+              {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              Reset password
+            </Button>
+          </form>
         )}
       </div>
     </Card>
