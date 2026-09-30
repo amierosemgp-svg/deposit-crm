@@ -187,6 +187,7 @@ export function CompanyInfoPanel({ range }: { range: DateRange }) {
   const loadBankMovements = useStore((s) => s.loadBankMovements);
   const selectedLeaderId = useStore((s) => s.selectedLeaderId);
   const bankAccounts = useStore((s) => s.bankAccounts);
+  const companies = useStore((s) => s.companies);
   // Re-reads whenever anything else on the page does — see store.dataVersion.
   const dataVersion = useStore((s) => s.dataVersion);
 
@@ -239,8 +240,17 @@ export function CompanyInfoPanel({ range }: { range: DateRange }) {
      * The balance rides along beside the flow — the flow says how busy the
      * account was, the balance says whether it can cover the next payout.
      */
+    /**
+     * An account is in view if its company is — or if it is the leader's own,
+     * above the company or leader picked. Leader accounts belong to no casino,
+     * so companyInScope alone dropped them from every scoped view.
+     */
+    const leaderInView =
+      selectedCompanyId != null
+        ? companies().find((c) => c.company_id === selectedCompanyId)?.leader_entity_id
+        : selectedLeaderId;
     const visible = movements.accounts
-      .filter((m) => companyInScope(m.entity_id))
+      .filter((m) => companyInScope(m.entity_id) || m.entity_id === leaderInView)
       .map((m) => {
         const account = bankAccounts.find((a) => a.account_id === m.account_id);
         return {
@@ -265,9 +275,10 @@ export function CompanyInfoPanel({ range }: { range: DateRange }) {
       online: m.online,
     });
 
-    // A card lists the accounts that actually moved money that way. An account
-    // that took nothing in is noise on the "in" card, not information.
-    const banksIn = ordered.filter((m) => m.in_count > 0).map((m) => row(m, "in"));
+    // The in card lists every account, so each balance is on screen even on a
+    // quiet day — an idle account is dimmed, not dropped. The out card lists
+    // only the accounts that paid something, which is what it is read for.
+    const banksIn = ordered.map((m) => ({ ...row(m, "in"), dim: m.in_count === 0 }));
     const banksOut = ordered.filter((m) => m.out_count > 0).map((m) => row(m, "out"));
 
     const totalIn = visible.reduce((a, m) => a + m.in_amount, 0);
@@ -349,7 +360,7 @@ export function CompanyInfoPanel({ range }: { range: DateRange }) {
       .sort((a, b) => a.rank - b.rank || a.label.localeCompare(b.label));
 
     return { banksIn, banksOut, totalIn, totalOut, netRows, games };
-  }, [movements, bankAccounts, boAccounts, botHealth, companyInScope]);
+  }, [movements, bankAccounts, boAccounts, botHealth, companyInScope, companies, selectedCompanyId, selectedLeaderId]);
 
   const monthLabel = rangeLabel(range);
   const net = scope.totalIn - scope.totalOut;

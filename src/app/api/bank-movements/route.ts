@@ -54,7 +54,14 @@ export async function GET(request: Request) {
     if (visible !== null && visible.length === 0) return Response.json({ accounts: [] });
     const accountWhere: SQL[] = [sql`a.status = 'active'`];
     if (visible !== null) accountWhere.push(inList(sql`a.entity_id`, visible));
-    if (companyId !== null) accountWhere.push(sql`a.entity_id = ${companyId}`);
+    // A casino's view carries its leader's own accounts too: that is the
+    // company the casino's float is topped up from and swept back to, and the
+    // desk wants both balances in front of it.
+    if (companyId !== null) {
+      accountWhere.push(sql`(a.entity_id = ${companyId} OR a.entity_id = (
+        SELECT e.parent_entity_id FROM entities e
+         WHERE e.entity_id = ${companyId} AND e.entity_type = 'company'))`);
+    }
 
     /**
      * One window clause per source, on the column that dates that movement in

@@ -179,7 +179,7 @@ export function BankTransferModal({
                     ? "You already moved this at the bank, so it is booked as done — the sender is debited and the recipient credited on save, with nothing left to confirm."
                     : "The agent handles this one: the sender is debited now and the recipient credited once they confirm, or when the window expires."}{" "}
                   Allowed: between a company&apos;s own accounts, between companies under
-                  the same leader, or from a leader to their own company.
+                  the same leader, or between a leader and their own company (either way).
                 </span>
               </div>
 

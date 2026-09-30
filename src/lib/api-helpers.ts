@@ -172,10 +172,18 @@ export async function transferAllowed(
   ) {
     return { allowed: true };
   }
+  // And back: a company sweeping its takings up to its own leader.
+  if (
+    from.entity_type === "company" &&
+    to.entity_type === "leader" &&
+    from.parent_entity_id === to.entity_id
+  ) {
+    return { allowed: true };
+  }
   return {
     allowed: false,
     reason:
-      "Transfers are only allowed between companies under the same leader, or from a leader to their own company",
+      "Transfers are only allowed between companies under the same leader, or between a leader and their own company",
   };
 }
 
