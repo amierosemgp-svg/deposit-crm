@@ -81,9 +81,12 @@ const GROUPS: Group[] = [
   },
   {
     title: "Undo, fill & rows",
-    hint: "Entry rows only — saved rows are records",
+    hint: "Fill and rows: entry rows only — saved rows are records",
     items: [
-      { keys: [MOD, "Z"], label: "Undo (back to the last save)" },
+      {
+        keys: [MOD, "Z"],
+        label: "Undo — while typing, a keystroke at a time; otherwise entry-row changes and edits to saved cells, back to the last save",
+      },
       { keys: [MOD, "Y"], label: `Redo · Shift+${MOD}+Z too` },
       { keys: [MOD, "D"], label: "Fill down — the top row copied down the selection (one row: from the row above)" },
       { keys: [MOD, "R"], label: "Fill right — the left column copied across (one column: from the left)" },

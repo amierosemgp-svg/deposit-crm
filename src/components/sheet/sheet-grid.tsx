@@ -27,15 +27,19 @@
  *   Esc                     cancel the edit
  *   Ctrl/Cmd+C / V          copy any range · paste a TSV block into the drafts
  *   Delete / Backspace      clear the selected draft cells
- *   Ctrl/Cmd+Z / Y          undo / redo in the entry rows (Ctrl+Shift+Z too)
+ *   Ctrl/Cmd+Z / Y          undo / redo — a keystroke at a time while typing,
+ *                           else entry-row changes and saved-cell edits
+ *                           (Ctrl+Shift+Z redoes too)
  *   Ctrl/Cmd+D / R          fill down / right
  *   Ctrl/Cmd+Enter          fill the selection with the active cell (or with
  *                           what is being typed)
  *   Ctrl/Cmd+; / Shift+;    type today's date / the time (Alt+Shift: both)
  *   Ctrl/Cmd+Shift+= / -    insert / delete entry rows (Sheets: Ctrl+Alt)
  *
- * Only entry rows change: saved rows are server records, so undo, fill and
- * row insert/delete leave them alone and say so. Saving is the page's ⌘S.
+ * Fill and row insert/delete only touch entry rows: saved rows are server
+ * records, and a fill across them would be a bulk edit. Undo covers both —
+ * an in-place edit of a saved cell is undone by saving its old value back.
+ * Saving the entry rows is the page's ⌘S.
  *
  * Copy/paste rides the native clipboard events on the focused wrapper — no
  * navigator.clipboard permission prompt, and Excel's own TSV format both ways.
@@ -1475,30 +1479,47 @@ export function SheetGrid({
   // ---- draft mutation helpers ----
 
   /**
-   * Undo / redo, over the entry rows only.
+   * Undo / redo, one timeline over both regions.
    *
-   * Every change the grid makes to the drafts goes through changeDrafts, which
-   * files the rows as they were. Saved rows are never in here: they are server
-   * records, and "undo" on an approval is not a thing a keystroke should do.
+   * Entry rows: every change the grid makes to the drafts goes through
+   * changeDrafts, which files the rows as they were.
+   *
+   * Saved rows: an in-place edit files the cell's old and new value, and
+   * undoing it saves the old value back through the same onCommittedEdit the
+   * edit used — the same permission, the same server checks, nothing a
+   * keystroke couldn't already do. The row is found again by id, because a
+   * refresh can move it.
    *
    * The history is dropped whenever the drafts change from outside — a save
    * clearing the rows it sent, a dialog filling one in, a tab switch. Undoing
    * past a save would bring back rows that are already saved, and a second
    * ⌘S would save them twice.
    */
-  const undoRef = useRef<string[][][]>([]);
-  const redoRef = useRef<string[][][]>([]);
+  type HistoryStep =
+    | { kind: "drafts"; drafts: string[][] }
+    | { kind: "saved"; rowId: string | number; c: number; before: string; after: string };
+  const undoRef = useRef<HistoryStep[]>([]);
+  const redoRef = useRef<HistoryStep[]>([]);
   const ownChangeRef = useRef(false);
   const UNDO_LIMIT = 100;
-  /**
-   * Ctrl+Z inside the cell editor, waiting to see whether the browser undid
-   * anything. The input's own undo never saw the keystroke that opened the
-   * editor (the grid seeds that one), so once its history runs dry the next
-   * Ctrl+Z backs out of the edit instead — the cell goes back to what it was.
-   */
-  const undoProbeRef = useRef(false);
   /** Ctrl+D / Ctrl+R pressed mid-edit: fill once the edit has committed. */
   const pendingFillRef = useRef<"down" | "right" | null>(null);
+  /**
+   * The open cell editor's own history, one entry per change.
+   *
+   * The browser's undo can't do this: the keystroke that opens a typed edit
+   * is put there by the grid, not typed into the input, and React's writes
+   * to a controlled input wipe the browser's history after one step. Once
+   * this runs dry, Ctrl+Z backs out of the edit and the cell is what it was.
+   */
+  const editUndoRef = useRef<string[]>([]);
+  const editRedoRef = useRef<string[]>([]);
+
+  const pushStep = useCallback((step: HistoryStep) => {
+    undoRef.current.push(step);
+    if (undoRef.current.length > UNDO_LIMIT) undoRef.current.shift();
+    redoRef.current = [];
+  }, []);
 
   useEffect(() => {
     if (ownChangeRef.current) {
@@ -1511,33 +1532,38 @@ export function SheetGrid({
 
   const changeDrafts = useCallback(
     (next: string[][]) => {
-      undoRef.current.push(drafts);
-      if (undoRef.current.length > UNDO_LIMIT) undoRef.current.shift();
-      redoRef.current = [];
+      pushStep({ kind: "drafts", drafts });
       ownChangeRef.current = true;
       onDraftsChange(next);
     },
-    [drafts, onDraftsChange],
+    [drafts, onDraftsChange, pushStep],
   );
 
   const stepHistory = useCallback(
     (dir: "undo" | "redo") => {
       const from = dir === "undo" ? undoRef.current : redoRef.current;
       const to = dir === "undo" ? redoRef.current : undoRef.current;
-      const snapshot = from.pop();
-      if (!snapshot) {
-        flash(
-          dir === "undo"
-            ? "Nothing to undo — undo covers the NEW ENTRIES rows since the last save."
-            : "Nothing to redo.",
-        );
+      const step = from.pop();
+      if (!step) {
+        flash(dir === "undo" ? "Nothing to undo since the last save." : "Nothing to redo.");
         return;
       }
-      to.push(drafts);
-      ownChangeRef.current = true;
-      onDraftsChange(snapshot);
+      if (step.kind === "drafts") {
+        to.push({ kind: "drafts", drafts });
+        ownChangeRef.current = true;
+        onDraftsChange(step.drafts);
+        return;
+      }
+      const r = rows.findIndex((row) => row.id === step.rowId);
+      if (r < 0 || !onCommittedEdit) {
+        flash("That row is no longer in the sheet, so its edit can't be undone.");
+        return;
+      }
+      to.push(step);
+      onCommittedEdit(r, step.c, dir === "undo" ? step.before : step.after);
+      moveTo(r, step.c);
     },
-    [drafts, onDraftsChange, flash],
+    [drafts, onDraftsChange, flash, rows, onCommittedEdit, moveTo],
   );
 
   const setDraftCell = useCallback(
@@ -1626,6 +1652,8 @@ export function SheetGrid({
         return;
       }
       editDoneRef.current = false;
+      editUndoRef.current = [];
+      editRedoRef.current = [];
       onEditStart?.(r, c);
       setEditing({
         r,
@@ -1645,8 +1673,10 @@ export function SheetGrid({
       if (editing.r < draftStart) {
         // In-place edit of a committed cell — hand it to the parent, and only
         // when it actually changed (a click-away commit shouldn't PATCH).
-        if (value !== (rows[editing.r]?.cells[editing.c] ?? "")) {
-          onCommittedEdit?.(editing.r, editing.c, value);
+        const before = rows[editing.r]?.cells[editing.c] ?? "";
+        if (value !== before && onCommittedEdit) {
+          onCommittedEdit(editing.r, editing.c, value);
+          pushStep({ kind: "saved", rowId: rows[editing.r].id, c: editing.c, before, after: value });
         }
       } else {
         setDraftCell(editing.r, editing.c, value);
@@ -1675,7 +1705,7 @@ export function SheetGrid({
         moveTo(editing.r, editing.c - 1);
       }
     },
-    [editing, draftStart, rows, onCommittedEdit, setDraftCell, moveTo],
+    [editing, draftStart, rows, onCommittedEdit, setDraftCell, moveTo, pushStep],
   );
 
   /** Commit whatever is currently typed in the editor. */
@@ -2347,22 +2377,28 @@ export function SheetGrid({
         suggestions: suggestionsAt(editing.r, editing.c),
         browse: editing.browse,
         onChange: (v) => {
-          // The browser's undo changed the text, so it still had history.
-          undoProbeRef.current = false;
+          editUndoRef.current.push(editing.value);
+          editRedoRef.current = [];
           setEditing((prev) => (prev ? { ...prev, value: v } : prev));
         },
         onKeyDown: (e) => {
           const mod = e.ctrlKey || e.metaKey;
           const k = e.key.toLowerCase();
-          if (mod && k === "z" && !e.shiftKey && !e.altKey) {
-            // Let the input undo first; if it had nothing left, back out of
-            // the edit — see undoProbeRef.
-            undoProbeRef.current = true;
-            setTimeout(() => {
-              if (!undoProbeRef.current) return;
-              undoProbeRef.current = false;
-              cancelEdit();
-            }, 0);
+          const undo = mod && k === "z" && !e.shiftKey && !e.altKey;
+          const redo = mod && !e.altKey && ((k === "y" && !e.shiftKey) || (k === "z" && e.shiftKey));
+          if (undo || redo) {
+            // One keystroke per step, from the grid's own history — see
+            // editUndoRef. Undo past the first keystroke backs out of the edit.
+            e.preventDefault();
+            const from = undo ? editUndoRef.current : editRedoRef.current;
+            const to = undo ? editRedoRef.current : editUndoRef.current;
+            const prev = from.pop();
+            if (prev === undefined) {
+              if (undo) cancelEdit();
+              return;
+            }
+            to.push(editing.value);
+            setEditing((cur) => (cur ? { ...cur, value: prev } : cur));
           } else if (mod && (k === "d" || k === "r") && !e.shiftKey && !e.altKey) {
             // Fill down / right while typing: land the edit, then fill. Left
             // to the browser these bookmark the page and reload it — and the
