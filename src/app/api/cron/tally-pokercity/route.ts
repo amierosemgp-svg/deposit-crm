@@ -1,13 +1,6 @@
 import { db } from "@/db";
-import { googleClientEmail, googleSheets } from "@/lib/google-sheets";
-import {
-  MONTHS,
-  buildReport,
-  chunkMessage,
-  loadCrmRows,
-  parseTab,
-  reconcile,
-} from "@/lib/sheet-tally";
+import { runPokercityTally } from "@/lib/pokercity-tally";
+import { chunkMessage } from "@/lib/sheet-tally";
 import { sendTelegramMessage } from "@/lib/telegram";
 
 /**
@@ -32,9 +25,6 @@ function yesterday(): string {
   const now = new Date(Date.now() + 8 * 3600_000 - 24 * 3600_000);
   return now.toISOString().slice(0, 10);
 }
-
-const addDays = (day: string, n: number) =>
-  new Date(Date.parse(`${day}T00:00:00Z`) + n * 86400_000).toISOString().slice(0, 10);
 
 async function post(text: string, send: boolean) {
   const chatId = process.env.TALLY_TELEGRAM_CHAT_ID;
@@ -61,53 +51,10 @@ export async function GET(request: Request) {
     return Response.json({ error: "date must be YYYY-MM-DD" }, { status: 400 });
   }
   const send = params.get("send") !== "0";
-  const [year, month] = day.split("-").map(Number);
-  const monthName = MONTHS[month - 1];
 
   try {
-    const google = await googleSheets();
-
-    let sheetId = params.get("sheet");
-    let sheetName = sheetId ?? "";
-    if (!sheetId) {
-      const files = await google.findSpreadsheets(["Poker", "Transaction", monthName, String(year)]);
-      if (!files.length) {
-        const text =
-          `Pokercity sheet vs CRM — couldn't run for ${day}.\n\n` +
-          `No Google Sheet named like "Poker City Transaction ${monthName} ${year}" is shared with ` +
-          `${googleClientEmail()}. Share this month's file with that email as Viewer.`;
-        return Response.json({ ok: false, day, text, ...(await post(text, send)) });
-      }
-      sheetId = files[0].id;
-      sheetName = files[0].name;
-    }
-
-    const [depGrid, wdrGrid] = await Promise.all([
-      google.readTab(sheetId, "+Deposit"),
-      google.readTab(sheetId, "-Withdrawal"),
-    ]);
-    const sheet = [
-      ...parseTab(depGrid, "deposit", year, month),
-      ...parseTab(wdrGrid, "withdrawal", year, month),
-    ];
-
-    // A margin either side of the month, so an entry near midnight on the 1st
-    // or the last day can still find its partner.
-    const monthStart = `${year}-${String(month).padStart(2, "0")}-01`;
-    const crm = await loadCrmRows(db, addDays(monthStart, -2), addDays(day, 3));
-
-    const findings = reconcile(sheet, crm, day);
-    const text = buildReport({ day, sheetName, sheet, crm, findings });
-    const onDay = findings.filter((f) => ("s" in f ? f.s.day : f.c.day) === day).length;
-    return Response.json({
-      ok: true,
-      day,
-      sheet: sheetName,
-      toCheck: onDay,
-      stillOpen: findings.length - onDay,
-      text,
-      ...(await post(text, send)),
-    });
+    const result = await runPokercityTally(db, day, { sheetId: params.get("sheet") });
+    return Response.json({ ...result, ...(await post(result.text, send)) });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     const text = `Pokercity sheet vs CRM — couldn't run for ${day}.\n\n${message}`;

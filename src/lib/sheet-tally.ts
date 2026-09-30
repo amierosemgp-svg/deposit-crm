@@ -264,18 +264,36 @@ export type Finding =
   | { type: "stuck"; s: SheetRow; c: CrmRow } // in the CRM, never settled
   | { type: "amount"; s: SheetRow; c: CrmRow } // same member, near time, other amount
   | { type: "code"; s: SheetRow; c: CrmRow } // same amount, near time, other member
+  | { type: "late"; s: SheetRow; c: CrmRow } // same member and amount, days apart: a late fix
   | { type: "sheet-only"; s: SheetRow }
   | { type: "crm-only"; c: CrmRow };
 
-export const findingDay = (f: Finding) => ("s" in f ? f.s.day : f.c.day);
+/**
+ * The day a finding is reported under. A late fix belongs to the later of its
+ * two dates, the day the pair became complete, so it's mentioned the morning
+ * after it was keyed in and never before.
+ */
+export const findingDay = (f: Finding) =>
+  f.type === "late"
+    ? f.s.day > f.c.day ? f.s.day : f.c.day
+    : "s" in f ? f.s.day : f.c.day;
+
+/** Needs someone to do something. A late fix is already done. */
+export const needsAction = (f: Finding) => f.type !== "late";
 
 /**
- * What doesn't agree, for sheet rows and settled CRM rows dated up to
- * `through`. Rows after it are loaded only so that a late-evening entry can
- * find its partner across midnight; they are never reported, because the day
- * they belong to isn't over.
+ * What doesn't agree, for sheet rows and settled CRM rows dated `from` to
+ * `through`. Rows either side are loaded only so that an entry near midnight
+ * can find its partner; they are never reported. Before `from` is last month,
+ * whose sheet is another file this run hasn't fully read; after `through` is a
+ * day that isn't over.
  */
-export function reconcile(sheet: SheetRow[], crm: CrmRow[], through: string): Finding[] {
+export function reconcile(
+  sheet: SheetRow[],
+  crm: CrmRow[],
+  from: string,
+  through: string,
+): Finding[] {
   const done = crm.filter((c) => DONE.has(c.status));
   const open = crm.filter((c) => !DONE.has(c.status));
   const first = pairUp(sheet, done);
@@ -290,14 +308,15 @@ export function reconcile(sheet: SheetRow[], crm: CrmRow[], through: string): Fi
   // unrelated-looking lines. One-to-one, tightest first.
   const sheetLeft = new Set(second.sheetLeft);
   const crmLeft = new Set(first.crmLeft);
-  const near = (type: "amount" | "code", limit: number) => {
+  const claim = (
+    type: "amount" | "code" | "late",
+    fits: (s: SheetRow, c: CrmRow) => boolean,
+    limit: number,
+  ) => {
     const cands: { g: number; s: SheetRow; c: CrmRow }[] = [];
     for (const s of sheetLeft) {
       for (const c of crmLeft) {
-        if (s.kind !== c.kind) continue;
-        const sameCode = s.code === c.code;
-        const sameAmount = s.cents === c.cents;
-        if (type === "amount" ? !(sameCode && !sameAmount) : !(sameAmount && !sameCode)) continue;
+        if (s.kind !== c.kind || !fits(s, c)) continue;
         const g = gap(s, c);
         if (g <= limit) cands.push({ g, s, c });
       }
@@ -310,14 +329,18 @@ export function reconcile(sheet: SheetRow[], crm: CrmRow[], through: string): Fi
       findings.push({ type, s, c });
     }
   };
-  near("amount", 60);
-  near("code", 10);
+  claim("amount", (s, c) => s.code === c.code && s.cents !== c.cents, 60);
+  claim("code", (s, c) => s.cents === c.cents && s.code !== c.code, 10);
+  // A missing row keyed in days later carries the day it was keyed, not the
+  // day it happened (the CRM stamps a manual entry with "now"). Same member
+  // and amount anywhere in the month is that row, not two separate problems.
+  claim("late", (s, c) => s.code === c.code && s.cents === c.cents, Infinity);
 
   for (const s of sheetLeft) findings.push({ type: "sheet-only", s });
   for (const c of crmLeft) findings.push({ type: "crm-only", c });
 
   return findings
-    .filter((f) => findingDay(f) <= through)
+    .filter((f) => findingDay(f) >= from && findingDay(f) <= through)
     .sort((a, b) => {
       const ka = "s" in a ? `${a.s.day} ${a.s.time ?? ""}` : `${a.c.day} ${a.c.time ?? ""}`;
       const kb = "s" in b ? `${b.s.day} ${b.s.time ?? ""}` : `${b.c.day} ${b.c.time ?? ""}`;
@@ -348,6 +371,8 @@ function describe(f: Finding, withDate: boolean): string {
       return `${d(f.s.day)}${kindWord(f.s.kind)} ${f.s.code}: sheet ${rm(f.s.cents)}${at(f.s)}, CRM ${rm(f.c.cents)}${at(f.c)} (#${f.c.id}) — amounts differ`;
     case "code":
       return `${d(f.s.day)}${kindWord(f.s.kind)} ${rm(f.s.cents)}${at(f.s)}: sheet says ${f.s.code}, CRM says ${f.c.code} (#${f.c.id}) — member code differs`;
+    case "late":
+      return `${kindWord(f.s.kind)} ${f.s.code} ${rm(f.s.cents)}: sheet ${shortDate(f.s.day)}${at(f.s)}, CRM ${shortDate(f.c.day)}${at(f.c)} (#${f.c.id})`;
     case "sheet-only":
       return `${d(f.s.day)}${kindWord(f.s.kind)} ${f.s.code} ${rm(f.s.cents)}${at(f.s)} (${f.s.bank || "no bank"}, ${f.s.product}) — on the sheet, not in the CRM`;
     case "crm-only":
@@ -369,8 +394,9 @@ export function buildReport(args: {
   sheet: SheetRow[];
   crm: CrmRow[];
   findings: Finding[];
+  notes?: string[];
 }): string {
-  const { day, sheetName, sheet, crm, findings } = args;
+  const { day, sheetName, sheet, crm, findings, notes = [] } = args;
   const done = crm.filter((c) => DONE.has(c.status));
   const lines: string[] = [];
   const [y, m, d] = day.split("-").map(Number);
@@ -390,8 +416,11 @@ export function buildReport(args: {
     );
   }
 
-  const today = findings.filter((f) => findingDay(f) === day);
-  const older = findings.filter((f) => findingDay(f) < day);
+  const onDay = findings.filter((f) => findingDay(f) === day);
+  const today = onDay.filter(needsAction);
+  const late = onDay.filter((f) => !needsAction(f));
+  // A late fix is mentioned the once, on its own day; after that it's settled.
+  const older = findings.filter((f) => findingDay(f) < day && needsAction(f));
   lines.push("");
   if (!today.length) {
     lines.push(`${shortDate(day)}: every row matches ✅`);
@@ -403,12 +432,19 @@ export function buildReport(args: {
     lines.push("(The day totals differ only because of entries across midnight or keyed in late.)");
   }
 
+  if (late.length) {
+    lines.push("");
+    lines.push(`Keyed in late, now matched (no action): ${late.length}`);
+    for (const f of late) lines.push(`• ${describe(f, false)}`);
+  }
+
   if (older.length) {
     lines.push("");
     lines.push(`Still open from earlier this month: ${older.length}`);
     for (const f of older.slice(0, OLDER_LIST_MAX)) lines.push(`• ${describe(f, true)}`);
     if (older.length > OLDER_LIST_MAX) lines.push(`…and ${older.length - OLDER_LIST_MAX} more`);
   }
+  if (notes.length) lines.push("", ...notes);
   return lines.join("\n");
 }
 
