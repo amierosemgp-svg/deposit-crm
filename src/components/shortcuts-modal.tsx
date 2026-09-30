@@ -88,8 +88,8 @@ const GROUPS: Group[] = [
       { keys: [MOD, "D"], label: "Fill down — the top row copied down the selection (one row: from the row above)" },
       { keys: [MOD, "R"], label: "Fill right — the left column copied across (one column: from the left)" },
       { keys: [MOD, "Enter"], label: "Fill the selection with the active cell · while typing, with what's typed" },
-      { keys: [MOD, ALT, "="], label: "Insert blank entry rows above" },
-      { keys: [MOD, ALT, "-"], label: "Delete the selected entry rows" },
+      { keys: ["Shift", MOD, "="], label: "Insert blank entry rows above" },
+      { keys: ["Shift", MOD, "-"], label: "Delete the selected entry rows" },
     ],
   },
   {

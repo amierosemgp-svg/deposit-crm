@@ -3698,6 +3698,37 @@ export default function TransactionsPage() {
       } else if (tab === "transfer") {
         if (matchesAction(e, "retry") && can.retryTf) run = handleRetryTransfers;
       }
+      /**
+       * An action key that has nothing to do on this selection still belongs
+       * to the CRM while rows are selected. Passed through, ⌘P opened the
+       * print dialog and ⌘B the browser's bookmarks, which reads as the
+       * shortcut being broken; say instead why it didn't run.
+       */
+      if (!run) {
+        const why = matchesAction(e, "advance")
+          ? tab === "deposit"
+            ? can.approve
+              ? "Assign these deposits to yourself first, then approve them."
+              : "Nothing to approve — approving works on pending deposits."
+            : tab === "withdrawal"
+              ? "Nothing to pull — pulling credits works on requested withdrawals."
+              : "Approve / Pull credits works on the Deposit and Withdrawal tabs."
+          : matchesAction(e, "finish")
+            ? tab === "deposit"
+              ? "Nothing to complete — completing works on approved deposits."
+              : tab === "withdrawal"
+                ? "Nothing to mark paid — that works once credits are pulled."
+                : "Complete / Mark paid works on the Deposit and Withdrawal tabs."
+            : matchesAction(e, "retry")
+              ? "Nothing to retry — retrying works on failed deposits and transfers."
+              : null;
+        if (why) {
+          e.preventDefault();
+          e.stopPropagation();
+          toast.info(why);
+          return;
+        }
+      }
       const mod = IS_MAC ? e.metaKey : e.ctrlKey;
       const wrongMod = IS_MAC ? e.ctrlKey : e.metaKey;
       // Delete rides Shift as well as the modifier — see DEL_LABEL.

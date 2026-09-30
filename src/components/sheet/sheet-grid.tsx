@@ -32,7 +32,7 @@
  *   Ctrl/Cmd+Enter          fill the selection with the active cell (or with
  *                           what is being typed)
  *   Ctrl/Cmd+; / Shift+;    type today's date / the time (Alt+Shift: both)
- *   Ctrl/Cmd+Alt+= / -      insert / delete entry rows
+ *   Ctrl/Cmd+Shift+= / -    insert / delete entry rows (Sheets: Ctrl+Alt)
  *
  * Only entry rows change: saved rows are server records, so undo, fill and
  * row insert/delete leave them alone and say so. Saving is the page's ⌘S.
@@ -1490,6 +1490,15 @@ export function SheetGrid({
   const redoRef = useRef<string[][][]>([]);
   const ownChangeRef = useRef(false);
   const UNDO_LIMIT = 100;
+  /**
+   * Ctrl+Z inside the cell editor, waiting to see whether the browser undid
+   * anything. The input's own undo never saw the keystroke that opened the
+   * editor (the grid seeds that one), so once its history runs dry the next
+   * Ctrl+Z backs out of the edit instead — the cell goes back to what it was.
+   */
+  const undoProbeRef = useRef(false);
+  /** Ctrl+D / Ctrl+R pressed mid-edit: fill once the edit has committed. */
+  const pendingFillRef = useRef<"down" | "right" | null>(null);
 
   useEffect(() => {
     if (ownChangeRef.current) {
@@ -1912,7 +1921,7 @@ export function SheetGrid({
     fillSelection((r) => cellValue(r, src), { ...bounds, c1: src + 1 });
   }, [bounds, cellValue, fillSelection]);
 
-  /** Ctrl+Alt+=: blank entry rows above the selection, as many as it spans. */
+  /** Ctrl+Shift+=: blank entry rows above the selection, as many as it spans. */
   const insertDraftRows = useCallback(() => {
     if (readOnly || !bounds) return;
     if (bounds.r1 < draftStart) {
@@ -1929,7 +1938,7 @@ export function SheetGrid({
     changeDrafts(next);
   }, [readOnly, bounds, draftStart, drafts, entryColumns.length, changeDrafts, flash]);
 
-  /** Ctrl+Alt+-: delete the entry rows in the selection; saved rows stay. */
+  /** Ctrl+Shift+-: delete the entry rows in the selection; saved rows stay. */
   const deleteDraftRows = useCallback(() => {
     if (readOnly || !bounds || !sel) return;
     const from = Math.max(bounds.r1, draftStart);
@@ -1984,9 +1993,13 @@ export function SheetGrid({
         }
       } else if (k === "backspace" && plain) {
         if (sel) revealCell(sel.r, sel.c);
-      } else if (e.altKey && !e.shiftKey && (e.key === "=" || e.code === "Equal")) {
+      } else if (e.shiftKey && !e.altKey && (e.code === "Equal" || e.key === "+")) {
+        // Sheets' own key is Ctrl+Alt+= / -, but Windows tools grab Ctrl+Alt
+        // chords before the browser sees them (on the desk's machines it
+        // resized the pointer). Shift instead; inside the grid that takes
+        // the place of the browser's zoom keys.
         insertDraftRows();
-      } else if (e.altKey && !e.shiftKey && (e.key === "-" || e.code === "Minus")) {
+      } else if (e.shiftKey && !e.altKey && (e.code === "Minus" || e.key === "_")) {
         deleteDraftRows();
       } else if (k === "home" && !e.altKey) {
         tabOriginRef.current = null;
@@ -2007,6 +2020,16 @@ export function SheetGrid({
       deleteDraftRows, moveTo, lastDataRow, colsFor,
     ],
   );
+
+  // A fill asked for mid-edit runs once the edit has committed and the drafts
+  // it wrote are the ones in hand.
+  useEffect(() => {
+    if (editing || !pendingFillRef.current) return;
+    const dir = pendingFillRef.current;
+    pendingFillRef.current = null;
+    if (dir === "down") fillDown();
+    else fillRight();
+  }, [editing, fillDown, fillRight]);
 
   // ---- keyboard ----
 
@@ -2323,9 +2346,31 @@ export function SheetGrid({
         align: columns[editing.c]?.align,
         suggestions: suggestionsAt(editing.r, editing.c),
         browse: editing.browse,
-        onChange: (v) => setEditing((prev) => (prev ? { ...prev, value: v } : prev)),
+        onChange: (v) => {
+          // The browser's undo changed the text, so it still had history.
+          undoProbeRef.current = false;
+          setEditing((prev) => (prev ? { ...prev, value: v } : prev));
+        },
         onKeyDown: (e) => {
-          if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+          const mod = e.ctrlKey || e.metaKey;
+          const k = e.key.toLowerCase();
+          if (mod && k === "z" && !e.shiftKey && !e.altKey) {
+            // Let the input undo first; if it had nothing left, back out of
+            // the edit — see undoProbeRef.
+            undoProbeRef.current = true;
+            setTimeout(() => {
+              if (!undoProbeRef.current) return;
+              undoProbeRef.current = false;
+              cancelEdit();
+            }, 0);
+          } else if (mod && (k === "d" || k === "r") && !e.shiftKey && !e.altKey) {
+            // Fill down / right while typing: land the edit, then fill. Left
+            // to the browser these bookmark the page and reload it — and the
+            // bookmark dialog steals focus, committing half a word.
+            e.preventDefault();
+            pendingFillRef.current = k === "d" ? "down" : "right";
+            commitEdit("none");
+          } else if (e.key === "Enter" && mod) {
             // Sheets' fill range: what was typed goes into every selected
             // entry cell. A saved cell edited in place just commits.
             e.preventDefault();
