@@ -13,7 +13,8 @@
  *    A lead becomes a member from the Players tab (or the row shows "Member"
  *    once they have converted).
  *
- * A selection of member rows floats an action bar (⌘↵ opens the player).
+ * A selection of member rows floats an action bar (the player's details, their
+ * game accounts, archive).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -43,6 +44,7 @@ import { ShareListModal } from "@/components/share-list-modal";
 import { CreatePlayerModal } from "@/components/create-player-modal";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { matchesAction, actionLabel, sheetTabStep } from "@/lib/shortcut-keys";
 import {
   Gamepad2,
   Archive,
@@ -978,8 +980,8 @@ export default function PlayersPage() {
   // ---- selection → player modal ----
   const selectedPlayerId = useMemo(
     () =>
-      // Win/Loss rows are keyed by player too, so ⌘↵ opens the profile from
-      // there as well — the tab exists to find a member worth looking at, and
+      // Win/Loss rows are keyed by player too, so the Player action opens the
+      // profile from there as well — the tab exists to find a member worth looking at, and
       // stopping at the number would leave the reader nowhere to go.
       (isRoster || tab === "winloss") && selectedIds.length === 1
         ? Number(selectedIds[0])
@@ -1048,7 +1050,12 @@ export default function PlayersPage() {
     }
   }, [selectedPlayerId, openPlayer]);
 
-  // ⌘↵ opens the player; Esc clears — capture phase so the grid never sees them.
+  /**
+   * Row actions; Esc clears — capture phase so the grid never sees them.
+   *
+   * Opening the player rides ACTION_KEYS.viewPlayer (⌘L). It was ⌘↵, which
+   * is Google Sheets' "fill range" and now belongs to the grid.
+   */
   useEffect(() => {
     if (!selectedIds.length) return;
     const onKey = (e: KeyboardEvent) => {
@@ -1070,14 +1077,15 @@ export default function PlayersPage() {
         void handleArchiveToggle();
         return;
       }
-      const mod = IS_MAC ? e.metaKey : e.ctrlKey;
-      const wrongMod = IS_MAC ? e.ctrlKey : e.metaKey;
-      if (!mod || wrongMod || e.altKey || e.shiftKey) return;
-      if (k === "enter" && selectedPlayerId) {
+      if (matchesAction(e, "viewPlayer") && selectedPlayerId) {
         e.preventDefault();
         e.stopPropagation();
         handleViewPlayer();
+        return;
       }
+      const mod = IS_MAC ? e.metaKey : e.ctrlKey;
+      const wrongMod = IS_MAC ? e.ctrlKey : e.metaKey;
+      if (!mod || wrongMod || e.altKey || e.shiftKey) return;
       if (k === "g" && selectedPlayerId) {
         e.preventDefault();
         e.stopPropagation();
@@ -1095,8 +1103,9 @@ export default function PlayersPage() {
     isViewer,
   ]);
 
-  // Shift+⌘/Ctrl+←/→ switches between the Players and Leads tabs, wrapping —
-  // the same worksheet-tab gesture as the Transactions sheet.
+  // Shift+⌘/Ctrl+PgUp/PgDn switches between the tabs, wrapping — Google Sheets'
+  // worksheet-tab key, same as the Transactions sheet. Shift+⌘/Ctrl+←/→ does it
+  // too, except inside the grid, where Sheets makes it extend the selection.
   useEffect(() => {
     const keys: TabKey[] = [
       "players",
@@ -1109,7 +1118,7 @@ export default function PlayersPage() {
       const mod = IS_MAC ? e.metaKey : e.ctrlKey;
       const wrongMod = IS_MAC ? e.ctrlKey : e.metaKey;
       if (!mod || wrongMod || !e.shiftKey || e.altKey) return;
-      const dir = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+      const dir = sheetTabStep(e, e.target);
       if (!dir) return;
       e.preventDefault();
       e.stopPropagation();
@@ -1191,7 +1200,10 @@ export default function PlayersPage() {
             : tab === "archived"
               ? "Members taken out of play. They keep their history and still show on past rows, but no search, picker or worksheet will offer them. Select one and press Ctrl+Shift+D to restore."
               : tab === "winloss"
-                ? "Positive is the house up on that member, negative is the member up. Select a row and press ⌘↵ to open their profile."
+                ? "Positive is the house up on that member, negative is the member up." +
+                  (actionLabel("viewPlayer")
+                    ? ` Select a row and press ${actionLabel("viewPlayer")} to open their profile.`
+                    : "")
                 : "Leads come in by import — use the Import button, then convert them on the Players tab"}
         </span>
       </div>
@@ -1434,7 +1446,6 @@ export default function PlayersPage() {
         drafts={drafts}
         onDraftsChange={onDraftsChange}
         draftStatus={draftStatus}
-        onCommit={handleCommit}
         readOnly={tab !== "players" || playersReadOnly}
         onSelectedRowsChange={setSelectedIds}
         draftSuggestions={draftSuggestions}
@@ -1446,7 +1457,7 @@ export default function PlayersPage() {
         focusKey={`${tab}:${hydrated}`}
       />
 
-      {/* Floating action bar — member rows only. ⌘↵ opens the player, ⌘G their game accounts. */}
+      {/* Floating action bar — member rows only. Player opens the details, ⌘G their game accounts. */}
       {isRoster && selectedIds.length > 0 && (
         <div className="pointer-events-none absolute inset-x-0 bottom-14 z-40 flex justify-center">
           <div className="pointer-events-auto flex max-w-[92%] flex-wrap items-center justify-center gap-1.5 rounded-lg border border-emerald-600/40 bg-background/95 px-3 py-1.5 shadow-xl backdrop-blur">
@@ -1471,7 +1482,7 @@ export default function PlayersPage() {
               >
                 <User className="h-3 w-3" />
                 Player
-                <Kbd k={`${MOD_LABEL}↵`} />
+                {actionLabel("viewPlayer") && <Kbd k={actionLabel("viewPlayer")!} />}
               </Button>
             ) : (
               <span className="text-[11px] text-muted-foreground">

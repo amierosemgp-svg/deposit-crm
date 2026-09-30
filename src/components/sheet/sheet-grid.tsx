@@ -6,19 +6,36 @@
  * Two regions in one grid: committed rows on top (read-only — they are server
  * records) and draft "entry rows" underneath, where new transactions are typed
  * or pasted exactly the way they were in the sheet. The keyboard model is
- * Excel's, because that is the muscle memory being migrated:
+ * Google Sheets', because that is the muscle memory being migrated, and where
+ * a Sheets key clashed with one of the CRM's own, Sheets won (the displaced
+ * keys are in lib/shortcut-keys.ts):
  *
  *   arrows / Tab            move the selected cell (Shift reverses)
  *   Enter                   edit the cell if it takes input, else move down
  *   Shift+arrows            grow the selection
  *   Ctrl/Cmd+↑ / ↓          jump to the top / bottom of the block you are in
+ *   Ctrl/Cmd+← / →          jump to the edge of the data in the row
+ *   Ctrl/Cmd+Shift+arrows   grow the selection to that edge
+ *   Ctrl/Cmd+Home / End     first cell / last cell with data (Shift grows)
+ *   Alt+PgUp / PgDn         one screen left / right
+ *   Ctrl/Cmd+Backspace      scroll back to the active cell
+ *   Shift+Space             select the row · Ctrl/Cmd+Space the column
+ *   Ctrl/Cmd+A              select everything (Ctrl/Cmd+Shift+Space too)
  *   Ctrl/Cmd+click          add another rectangle to the selection
  *   type / F2 / double-click edit a draft cell (typing replaces, F2 appends)
- *   Enter / Alt+↓           on a dropdown cell, open its list (Excel's Alt+↓)
+ *   Enter / Alt+↓           on a dropdown cell, open its list
  *   Esc                     cancel the edit
  *   Ctrl/Cmd+C / V          copy any range · paste a TSV block into the drafts
  *   Delete / Backspace      clear the selected draft cells
- *   Ctrl/Cmd+Enter          commit the ready entry rows (parent handles it)
+ *   Ctrl/Cmd+Z / Y          undo / redo in the entry rows (Ctrl+Shift+Z too)
+ *   Ctrl/Cmd+D / R          fill down / right
+ *   Ctrl/Cmd+Enter          fill the selection with the active cell (or with
+ *                           what is being typed)
+ *   Ctrl/Cmd+; / Shift+;    type today's date / the time (Alt+Shift: both)
+ *   Ctrl/Cmd+Alt+= / -      insert / delete entry rows
+ *
+ * Only entry rows change: saved rows are server records, so undo, fill and
+ * row insert/delete leave them alone and say so. Saving is the page's ⌘S.
  *
  * Copy/paste rides the native clipboard events on the focused wrapper — no
  * navigator.clipboard permission prompt, and Excel's own TSV format both ways.
@@ -145,6 +162,33 @@ function colLetter(index: number): string {
     i = Math.floor((i - 1) / 26);
   }
   return s;
+}
+
+/**
+ * What Google Sheets' stamp keys type: Ctrl+; the date, Ctrl+Shift+; the time,
+ * Ctrl+Alt+Shift+; both. The date is in the sheet's own format (31/8/2026),
+ * so a stamped cell reads the same as a typed one. Null for any other key.
+ *
+ * Matched on the physical key as well as the character, because Shift turns
+ * ";" into ":" on a US layout and into something else on others.
+ */
+function stampFor(e: {
+  key: string;
+  code: string;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+  altKey: boolean;
+}): string | null {
+  if (!(e.ctrlKey || e.metaKey)) return null;
+  if (e.key !== ";" && e.key !== ":" && e.code !== "Semicolon") return null;
+  if (e.altKey && !e.shiftKey) return null;
+  const now = new Date();
+  const two = (n: number) => String(n).padStart(2, "0");
+  const date = `${now.getDate()}/${now.getMonth() + 1}/${now.getFullYear()}`;
+  const time = `${now.getHours()}:${two(now.getMinutes())}:${two(now.getSeconds())}`;
+  if (e.shiftKey && e.altKey) return `${date} ${time}`;
+  return e.shiftKey ? time : date;
 }
 
 function parseNumeric(raw: string): number | null {
@@ -540,6 +584,22 @@ function CellEditor({
   const openUp = rect ? rect.bottom + listMaxH + 4 > window.innerHeight : false;
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    // Ctrl+; and friends type the date / time at the caret, as in Sheets.
+    const stamp = stampFor(e);
+    if (stamp !== null) {
+      e.preventDefault();
+      const el = ref.current;
+      const start = el?.selectionStart ?? value.length;
+      const end = el?.selectionEnd ?? value.length;
+      onChange(value.slice(0, start) + stamp + value.slice(end));
+      setBrowsing(false);
+      setOpen(true);
+      setHighlight(-1);
+      requestAnimationFrame(() =>
+        el?.setSelectionRange(start + stamp.length, start + stamp.length),
+      );
+      return;
+    }
     // Alt+↓ — Excel's "open the list" key — brings the full list back after
     // an Esc, or when typing filtered everything away.
     if (e.altKey && e.key === "ArrowDown" && suggestions?.length) {
@@ -832,7 +892,6 @@ export function SheetGrid({
   drafts,
   onDraftsChange,
   draftStatus,
-  onCommit,
   entryColumns: entryColumnsProp,
   widthStorageKey,
   flushRef,
@@ -856,7 +915,6 @@ export function SheetGrid({
   drafts: string[][];
   onDraftsChange: (next: string[][]) => void;
   draftStatus: (draft: string[], index: number) => DraftStatus;
-  onCommit: () => void;
   /**
    * The NEW ENTRIES dock's own columns, when they differ from the saved list's.
    *
@@ -1308,21 +1366,12 @@ export function SheetGrid({
     [draftStart, entryColumns, columns],
   );
 
-  const moveTo = useCallback(
-    (r: number, c: number, extend = false) => {
-      const nr = Math.max(0, Math.min(nRows - 1, r));
-      // An entry row is only as wide as the dock draws it; without this, Tab
-      // off the last entry cell parked the cursor on a column that isn't there.
-      const lastCol = (nr >= draftStart ? entryColumns.length : nCols) - 1;
-      const nc = Math.max(0, Math.min(lastCol, c));
-      if (extend) {
-        setExt({ r: nr, c: nc });
-      } else {
-        // Moving the cursor collapses the selection, scattered parts included.
-        setHeldRanges([]);
-        setSel({ r: nr, c: nc });
-        setExt(null);
-      }
+  /**
+   * Scroll a cell into view — loading older rows first when it sits above
+   * what is rendered. Every move ends here, and so does Ctrl+Backspace.
+   */
+  const revealCell = useCallback(
+    (nr: number, nc: number) => {
       const edge = nr === 0 ? "top" : nr === draftStart - 1 ? "bottom" : undefined;
       if (nr < hiddenAbove) {
         // Target row isn't rendered yet (PageUp / Ctrl+A / Home runs) — load
@@ -1338,16 +1387,27 @@ export function SheetGrid({
         scrollCellIntoView(nr, nc);
       }
     },
-    [
-      nRows,
-      nCols,
-      hiddenAbove,
-      rows.length,
-      scrollCellIntoView,
-      scrollToEdge,
-      draftStart,
-      entryColumns.length,
-    ],
+    [hiddenAbove, rows.length, scrollCellIntoView, scrollToEdge, draftStart],
+  );
+
+  const moveTo = useCallback(
+    (r: number, c: number, extend = false) => {
+      const nr = Math.max(0, Math.min(nRows - 1, r));
+      // An entry row is only as wide as the dock draws it; without this, Tab
+      // off the last entry cell parked the cursor on a column that isn't there.
+      const lastCol = (nr >= draftStart ? entryColumns.length : nCols) - 1;
+      const nc = Math.max(0, Math.min(lastCol, c));
+      if (extend) {
+        setExt({ r: nr, c: nc });
+      } else {
+        // Moving the cursor collapses the selection, scattered parts included.
+        setHeldRanges([]);
+        setSel({ r: nr, c: nc });
+        setExt(null);
+      }
+      revealCell(nr, nc);
+    },
+    [nRows, nCols, draftStart, entryColumns.length, revealCell],
   );
 
   // Load the next older chunk whenever the sentinel row scrolls into view.
@@ -1414,16 +1474,75 @@ export function SheetGrid({
 
   // ---- draft mutation helpers ----
 
+  /**
+   * Undo / redo, over the entry rows only.
+   *
+   * Every change the grid makes to the drafts goes through changeDrafts, which
+   * files the rows as they were. Saved rows are never in here: they are server
+   * records, and "undo" on an approval is not a thing a keystroke should do.
+   *
+   * The history is dropped whenever the drafts change from outside — a save
+   * clearing the rows it sent, a dialog filling one in, a tab switch. Undoing
+   * past a save would bring back rows that are already saved, and a second
+   * ⌘S would save them twice.
+   */
+  const undoRef = useRef<string[][][]>([]);
+  const redoRef = useRef<string[][][]>([]);
+  const ownChangeRef = useRef(false);
+  const UNDO_LIMIT = 100;
+
+  useEffect(() => {
+    if (ownChangeRef.current) {
+      ownChangeRef.current = false;
+      return;
+    }
+    undoRef.current = [];
+    redoRef.current = [];
+  }, [drafts]);
+
+  const changeDrafts = useCallback(
+    (next: string[][]) => {
+      undoRef.current.push(drafts);
+      if (undoRef.current.length > UNDO_LIMIT) undoRef.current.shift();
+      redoRef.current = [];
+      ownChangeRef.current = true;
+      onDraftsChange(next);
+    },
+    [drafts, onDraftsChange],
+  );
+
+  const stepHistory = useCallback(
+    (dir: "undo" | "redo") => {
+      const from = dir === "undo" ? undoRef.current : redoRef.current;
+      const to = dir === "undo" ? redoRef.current : undoRef.current;
+      const snapshot = from.pop();
+      if (!snapshot) {
+        flash(
+          dir === "undo"
+            ? "Nothing to undo — undo covers the NEW ENTRIES rows since the last save."
+            : "Nothing to redo.",
+        );
+        return;
+      }
+      to.push(drafts);
+      ownChangeRef.current = true;
+      onDraftsChange(snapshot);
+    },
+    [drafts, onDraftsChange, flash],
+  );
+
   const setDraftCell = useCallback(
     (r: number, c: number, value: string) => {
       const i = r - draftStart;
       if (i < 0) return;
+      // A click-away commit of an untouched cell is not an edit to undo.
+      if ((drafts[i]?.[c] ?? "") === value) return;
       const next = drafts.map((row) => [...row]);
       while (next.length <= i) next.push(Array(nCols).fill(""));
       next[i][c] = value;
-      onDraftsChange(next);
+      changeDrafts(next);
     },
-    [drafts, draftStart, nCols, onDraftsChange],
+    [drafts, draftStart, nCols, changeDrafts],
   );
 
   const clearDraftRange = useCallback(() => {
@@ -1440,8 +1559,38 @@ export function SheetGrid({
         }
       }
     }
-    if (touched) onDraftsChange(next);
-  }, [bounds, drafts, draftStart, onDraftsChange]);
+    if (touched) changeDrafts(next);
+  }, [bounds, drafts, draftStart, changeDrafts]);
+
+  /**
+   * Write into the entry cells of the selection — the shared end of Ctrl+D,
+   * Ctrl+R and Ctrl+Enter. `valueAt` says what goes in each cell, or null to
+   * leave it. Derived columns are skipped (they fill themselves), and so are
+   * saved rows, with a word if that was all the selection held.
+   */
+  const fillSelection = useCallback(
+    (valueAt: (r: number, c: number) => string | null, target: Bounds) => {
+      if (readOnly) return;
+      const next = drafts.map((row) => [...row]);
+      let touched = false;
+      for (let r = Math.max(target.r1, draftStart); r <= target.r2; r++) {
+        const i = r - draftStart;
+        while (next.length <= i) next.push(Array(entryColumns.length).fill(""));
+        for (let c = target.c1; c <= Math.min(target.c2, entryColumns.length - 1); c++) {
+          if (!entryColumns[c]?.entry) continue;
+          const v = valueAt(r, c);
+          if (v === null || next[i][c] === v) continue;
+          next[i][c] = v;
+          touched = true;
+        }
+      }
+      if (touched) changeDrafts(next);
+      else if (target.r2 < draftStart) {
+        flash("Saved rows can't be filled — fill works in the NEW ENTRIES panel.");
+      }
+    },
+    [readOnly, drafts, draftStart, entryColumns, changeDrafts, flash],
+  );
 
   // ---- editing ----
 
@@ -1668,10 +1817,10 @@ export function SheetGrid({
           if (c > maxC) maxC = c;
         });
       });
-      onDraftsChange(next);
+      changeDrafts(next);
       setExt({ r: sel.r + lines.length - 1, c: maxC });
     },
-    [editing, readOnly, sel, draftStart, drafts, nCols, onDraftsChange, flash],
+    [editing, readOnly, sel, draftStart, drafts, nCols, changeDrafts, flash],
   );
 
   // Kept current with the edit in flight, so the page's save shortcut can
@@ -1689,6 +1838,176 @@ export function SheetGrid({
     };
   }, [flushRef, editing, commitEdit, draftStart]);
 
+  // ---- Google Sheets' keys ----
+
+  /**
+   * Ctrl+←/→: where Sheets lands. From a filled cell with a filled neighbour,
+   * the last filled cell before a blank; otherwise the next filled cell, or
+   * the row's end when there is none.
+   */
+  const edgeCol = useCallback(
+    (r: number, c: number, dir: 1 | -1): number => {
+      const last = colsFor(r).length - 1;
+      const filled = (cc: number) => cellValue(r, cc) !== "";
+      const inRow = (cc: number) => cc >= 0 && cc <= last;
+      let n = c + dir;
+      if (!inRow(n)) return c;
+      if (filled(c) && filled(n)) {
+        while (inRow(n + dir) && filled(n + dir)) n += dir;
+        return n;
+      }
+      while (inRow(n) && !filled(n)) n += dir;
+      return Math.max(0, Math.min(last, n));
+    },
+    [colsFor, cellValue],
+  );
+
+  /** Ctrl+End's row: the last entry row with anything in it, else the last saved row. */
+  const lastDataRow = useCallback((): number => {
+    for (let i = drafts.length - 1; i >= 0; i--) {
+      if (drafts[i].some((v) => (v ?? "").trim())) return draftStart + i;
+    }
+    return Math.max(0, draftStart - 1);
+  }, [drafts, draftStart]);
+
+  /** Alt+PgDn / PgUp: the column one screen-width away. */
+  const screenCol = useCallback(
+    (r: number, c: number, dir: 1 | -1): number => {
+      const cols = colsFor(r);
+      const room = (mainScrollRef.current?.clientWidth ?? 800) - 44;
+      let used = 0;
+      let n = c;
+      while (n + dir >= 0 && n + dir < cols.length) {
+        used += widthOf(cols[n + dir]);
+        if (used > room) break;
+        n += dir;
+      }
+      return n === c ? c + dir : n;
+    },
+    [colsFor, widthOf],
+  );
+
+  /** Ctrl+D: the top row of the selection copied down it (one row: the row above). */
+  const fillDown = useCallback(() => {
+    if (!bounds) return;
+    const src = bounds.r1 === bounds.r2 ? bounds.r1 - 1 : bounds.r1;
+    if (src < 0) return;
+    // A saved row above the first entry row can be the source; its columns
+    // are not the dock's, so each cell is matched by column key.
+    const srcCols = colsFor(src);
+    fillSelection(
+      (_r, c) => {
+        const i = srcCols.findIndex((col) => col.key === entryColumns[c]?.key);
+        return i < 0 ? null : cellValue(src, i);
+      },
+      { ...bounds, r1: src + 1 },
+    );
+  }, [bounds, colsFor, entryColumns, cellValue, fillSelection]);
+
+  /** Ctrl+R: the left column of the selection copied across (one column: the one to its left). */
+  const fillRight = useCallback(() => {
+    if (!bounds) return;
+    const src = bounds.c1 === bounds.c2 ? bounds.c1 - 1 : bounds.c1;
+    if (src < 0) return;
+    fillSelection((r) => cellValue(r, src), { ...bounds, c1: src + 1 });
+  }, [bounds, cellValue, fillSelection]);
+
+  /** Ctrl+Alt+=: blank entry rows above the selection, as many as it spans. */
+  const insertDraftRows = useCallback(() => {
+    if (readOnly || !bounds) return;
+    if (bounds.r1 < draftStart) {
+      flash("Rows can only be inserted among the NEW ENTRIES rows.");
+      return;
+    }
+    const width = drafts[0]?.length ?? entryColumns.length;
+    const next = drafts.map((row) => [...row]);
+    next.splice(
+      bounds.r1 - draftStart,
+      0,
+      ...Array.from({ length: bounds.r2 - bounds.r1 + 1 }, () => Array<string>(width).fill("")),
+    );
+    changeDrafts(next);
+  }, [readOnly, bounds, draftStart, drafts, entryColumns.length, changeDrafts, flash]);
+
+  /** Ctrl+Alt+-: delete the entry rows in the selection; saved rows stay. */
+  const deleteDraftRows = useCallback(() => {
+    if (readOnly || !bounds || !sel) return;
+    const from = Math.max(bounds.r1, draftStart);
+    if (from > bounds.r2) {
+      flash("Saved rows can't be deleted from here.");
+      return;
+    }
+    changeDrafts(drafts.filter((_, i) => draftStart + i < from || draftStart + i > bounds.r2));
+    moveTo(from, sel.c);
+    if (bounds.r1 < draftStart) flash("Only the NEW ENTRIES rows were deleted — saved rows stay.");
+  }, [readOnly, bounds, sel, draftStart, drafts, changeDrafts, moveTo, flash]);
+
+  /**
+   * The chords Google Sheets owns that are not movement: undo, select, fill,
+   * stamp, insert / delete rows, scroll-to-active. True when handled.
+   *
+   * Clipboard chords are not here — they arrive as copy / cut / paste events —
+   * and neither are the ones the page catches first (⌘S, ⌘F, ⌘⇧D).
+   */
+  const handleSheetsChord = useCallback(
+    (e: React.KeyboardEvent): boolean => {
+      const k = e.key.toLowerCase();
+      const plain = !e.shiftKey && !e.altKey;
+      const stamp = stampFor(e);
+      if (stamp !== null) {
+        if (sel) startEdit(sel.r, sel.c, stamp);
+      } else if (k === "z" && plain) {
+        stepHistory("undo");
+      } else if ((k === "y" && plain) || (k === "z" && e.shiftKey && !e.altKey)) {
+        stepHistory("redo");
+      } else if ((k === "a" && plain) || (k === " " && e.shiftKey && !e.altKey)) {
+        if (nRows) {
+          setHeldRanges([]);
+          setSel({ r: 0, c: 0 });
+          setExt({ r: nRows - 1, c: Math.max(nCols, entryColumns.length) - 1 });
+        }
+      } else if (k === " " && plain) {
+        // Ctrl+Space: the whole column(s) under the selection.
+        if (sel && nRows) {
+          setHeldRanges([]);
+          setSel({ r: 0, c: Math.min(sel.c, (ext ?? sel).c) });
+          setExt({ r: nRows - 1, c: Math.max(sel.c, (ext ?? sel).c) });
+        }
+      } else if (k === "d" && plain) {
+        fillDown();
+      } else if (k === "r" && plain) {
+        fillRight();
+      } else if (k === "enter" && plain) {
+        if (sel) {
+          const v = cellValue(sel.r, sel.c);
+          if (bounds) fillSelection(() => v, bounds);
+        }
+      } else if (k === "backspace" && plain) {
+        if (sel) revealCell(sel.r, sel.c);
+      } else if (e.altKey && !e.shiftKey && (e.key === "=" || e.code === "Equal")) {
+        insertDraftRows();
+      } else if (e.altKey && !e.shiftKey && (e.key === "-" || e.code === "Minus")) {
+        deleteDraftRows();
+      } else if (k === "home" && !e.altKey) {
+        tabOriginRef.current = null;
+        moveTo(0, 0, e.shiftKey);
+      } else if (k === "end" && !e.altKey) {
+        tabOriginRef.current = null;
+        const r = lastDataRow();
+        moveTo(r, colsFor(r).length - 1, e.shiftKey);
+      } else {
+        return false;
+      }
+      e.preventDefault();
+      return true;
+    },
+    [
+      sel, ext, bounds, nRows, nCols, entryColumns.length, startEdit, stepHistory,
+      fillDown, fillRight, fillSelection, cellValue, revealCell, insertDraftRows,
+      deleteDraftRows, moveTo, lastDataRow, colsFor,
+    ],
+  );
+
   // ---- keyboard ----
 
   const handleKeyDown = useCallback(
@@ -1696,28 +2015,15 @@ export function SheetGrid({
       if (editing) return; // the editor input owns the keyboard
       const mod = e.ctrlKey || e.metaKey;
 
-      if (mod && e.key === "Enter") {
-        e.preventDefault();
-        onCommit();
-        return;
-      }
-      if (mod && (e.key === "a" || e.key === "A")) {
-        e.preventDefault();
-        if (nRows) {
-          setHeldRanges([]);
-          setSel({ r: 0, c: 0 });
-          setExt({ r: nRows - 1, c: nCols - 1 });
-        }
-        return;
-      }
+      if (mod && handleSheetsChord(e)) return;
       /**
        * Copy/paste arrive via the clipboard events; don't swallow them here.
        *
-       * The arrows are the exception: Ctrl+↑/↓ is a jump to the end of the
-       * block and has to reach the switch below. Bailing out on every modified
-       * key is what stopped it working the first time.
+       * The arrows are the exception: Ctrl+arrows jump to the edge and have
+       * to reach the switch below. Bailing out on every modified key is what
+       * stopped Ctrl+↑/↓ working the first time.
        */
-      if (mod && e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+      if (mod && !e.key.startsWith("Arrow")) return;
 
       if (!sel) {
         if (["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Tab", "Enter"].includes(e.key)) {
@@ -1746,29 +2052,32 @@ export function SheetGrid({
           // does — the last saved row, or the last entry row if already in the
           // dock. Landing on a blank entry row from the middle of the day's
           // takings would be a jump to nowhere.
-          if (mod) moveTo(sel.r >= draftStart ? nRows - 1 : draftStart - 1, sel.c, e.shiftKey);
-          else if (e.shiftKey) moveTo((ext ?? sel).r + 1, (ext ?? sel).c, true);
+          // With Shift it grows from the moving corner, as Sheets does.
+          if (mod) {
+            const at = e.shiftKey ? (ext ?? sel) : sel;
+            moveTo(at.r >= draftStart ? nRows - 1 : draftStart - 1, at.c, e.shiftKey);
+          } else if (e.shiftKey) moveTo((ext ?? sel).r + 1, (ext ?? sel).c, true);
           else moveTo(sel.r + 1, sel.c);
           break;
         case "ArrowUp":
           e.preventDefault();
           tabOriginRef.current = null;
-          if (mod) moveTo(sel.r >= draftStart ? draftStart : 0, sel.c, e.shiftKey);
-          else if (e.shiftKey) moveTo((ext ?? sel).r - 1, (ext ?? sel).c, true);
+          if (mod) {
+            const at = e.shiftKey ? (ext ?? sel) : sel;
+            moveTo(at.r >= draftStart ? draftStart : 0, at.c, e.shiftKey);
+          } else if (e.shiftKey) moveTo((ext ?? sel).r - 1, (ext ?? sel).c, true);
           else moveTo(sel.r - 1, sel.c);
           break;
         case "ArrowRight":
+        case "ArrowLeft": {
           e.preventDefault();
           tabOriginRef.current = null;
-          if (e.shiftKey) moveTo((ext ?? sel).r, (ext ?? sel).c + 1, true);
-          else moveTo(sel.r, sel.c + 1);
+          const dir = e.key === "ArrowRight" ? 1 : -1;
+          const at = e.shiftKey ? (ext ?? sel) : sel;
+          const c = mod ? edgeCol(at.r, at.c, dir) : at.c + dir;
+          moveTo(at.r, c, e.shiftKey);
           break;
-        case "ArrowLeft":
-          e.preventDefault();
-          tabOriginRef.current = null;
-          if (e.shiftKey) moveTo((ext ?? sel).r, (ext ?? sel).c - 1, true);
-          else moveTo(sel.r, sel.c - 1);
-          break;
+        }
         case "Tab":
           e.preventDefault();
           if (!e.shiftKey && (!tabOriginRef.current || tabOriginRef.current.r !== sel.r)) {
@@ -1803,14 +2112,29 @@ export function SheetGrid({
           else moveTo(sel.r, nCols - 1);
           break;
         case "PageDown":
+        case "PageUp": {
           e.preventDefault();
-          if (e.shiftKey) moveTo((ext ?? sel).r + 20, (ext ?? sel).c, true);
-          else moveTo(sel.r + 20, sel.c);
+          const dir = e.key === "PageDown" ? 1 : -1;
+          // Alt+PgDn / PgUp: a screen right / left, Sheets' sideways page.
+          if (e.altKey) moveTo(sel.r, screenCol(sel.r, sel.c, dir));
+          else if (e.shiftKey) moveTo((ext ?? sel).r + 20 * dir, (ext ?? sel).c, true);
+          else moveTo(sel.r + 20 * dir, sel.c);
           break;
-        case "PageUp":
-          e.preventDefault();
-          if (e.shiftKey) moveTo((ext ?? sel).r - 20, (ext ?? sel).c, true);
-          else moveTo(sel.r - 20, sel.c);
+        }
+        case " ":
+          // Shift+Space selects the row(s), as in Sheets; a bare space types.
+          if (e.shiftKey && !e.altKey) {
+            e.preventDefault();
+            setHeldRanges([]);
+            setSel({ r: Math.min(sel.r, (ext ?? sel).r), c: 0 });
+            setExt({
+              r: Math.max(sel.r, (ext ?? sel).r),
+              c: Math.max(nCols, entryColumns.length) - 1,
+            });
+          } else if (!e.altKey) {
+            e.preventDefault();
+            startEdit(sel.r, sel.c, e.key);
+          }
           break;
         case "F2":
           e.preventDefault();
@@ -1841,8 +2165,9 @@ export function SheetGrid({
     },
     [
       editing, sel, ext, bounds, nRows, nCols, draftStart, readOnly,
-      moveTo, startEdit, clearDraftRange, onCommit, flash,
+      moveTo, startEdit, clearDraftRange, flash,
       isDropdownCell, openDropdown, isEditableCell,
+      handleSheetsChord, edgeCol, screenCol, entryColumns.length,
     ],
   );
 
@@ -2001,9 +2326,18 @@ export function SheetGrid({
         onChange: (v) => setEditing((prev) => (prev ? { ...prev, value: v } : prev)),
         onKeyDown: (e) => {
           if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+            // Sheets' fill range: what was typed goes into every selected
+            // entry cell. A saved cell edited in place just commits.
             e.preventDefault();
-            commitEdit("none");
-            onCommit();
+            if (editing.r < draftStart || !bounds) {
+              commitEdit("none");
+            } else {
+              const typed = editing.value;
+              editDoneRef.current = true;
+              setEditing(null);
+              containerRef.current?.focus();
+              fillSelection(() => typed, bounds);
+            }
           } else if (e.key === "Enter") {
             e.preventDefault();
             commitEdit(e.shiftKey ? "up" : "down");

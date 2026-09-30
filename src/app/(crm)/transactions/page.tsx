@@ -18,6 +18,12 @@ import { bonusOn } from "@/lib/bonus-math";
 import { formatClock, formatRelative, formatRM } from "@/lib/format";
 import { byBankOrder } from "@/lib/bank-order";
 import { extractSenderName } from "@/lib/bank-remark";
+import {
+  matchesAction,
+  actionLabel,
+  sheetTabStep,
+  type CrmAction,
+} from "@/lib/shortcut-keys";
 import { usePlayerProfile } from "@/components/player-name-link";
 import {
   SheetGrid,
@@ -537,6 +543,12 @@ function Kbd({ k, light }: { k: string; light?: boolean }) {
       {k}
     </kbd>
   );
+}
+
+/** A row action's chip, from ACTION_KEYS — nothing if the action has no key. */
+function ActionKbd({ action, light }: { action: CrmAction; light?: boolean }) {
+  const k = actionLabel(action);
+  return k ? <Kbd k={k} light={light} /> : null;
 }
 
 /** Either end of a leader settlement when no bank account was involved. */
@@ -3662,40 +3674,34 @@ export default function TransactionsPage() {
         setSelectedIds([]);
         return;
       }
+      let run: (() => void) | null = null;
+      /**
+       * The row actions read their keys from ACTION_KEYS: ⌘P advances a row
+       * (approve a deposit, pull a withdrawal) and ⌘B finishes it, ⌘I
+       * retries. Open-player and Assign moved off ⌘↵ / ⌘A to ⌘L / ⌘J, since
+       * those two are Google Sheets keys the grid now honours.
+       *
+       * None may ever be ⌘C (the grid's copy — this listener captures, so it
+       * would beat the copy), ⌘T (new tab, never reaches the page), ⌘M
+       * (minimise on macOS) or ⌘R (the grid's fill right). Reject has no key
+       * on purpose: a destructive action must never sit on a reflex keystroke.
+       */
+      if (matchesAction(e, "viewPlayer") && selectedPlayerId) run = handleViewPlayer;
+      else if (matchesAction(e, "assign") && can.assign) run = handleAssignToMe;
+      else if (tab === "deposit") {
+        if (matchesAction(e, "advance") && can.approveMine) run = handleApprove;
+        else if (matchesAction(e, "finish") && can.complete) run = handleComplete;
+        else if (matchesAction(e, "retry") && can.retryDep) run = handleRetryDeposits;
+      } else if (tab === "withdrawal") {
+        if (matchesAction(e, "advance") && can.pull) run = handlePull;
+        else if (matchesAction(e, "finish") && can.paid) run = handleMarkPaid;
+      } else if (tab === "transfer") {
+        if (matchesAction(e, "retry") && can.retryTf) run = handleRetryTransfers;
+      }
       const mod = IS_MAC ? e.metaKey : e.ctrlKey;
       const wrongMod = IS_MAC ? e.ctrlKey : e.metaKey;
-      if (!mod || wrongMod || e.altKey) return;
-      // Shift belongs to Delete alone: every other action is bare-modifier,
-      // and letting them fire with Shift held would make the guard meaningless.
-      const del = e.shiftKey && k === "d";
-      if (e.shiftKey && !del) return;
-      let run: (() => void) | null = null;
-      if (k === "enter" && selectedPlayerId) run = handleViewPlayer;
-      else if (k === "a" && can.assign) run = handleAssignToMe;
-      else if (tab === "deposit") {
-        if (k === "p" && can.approveMine) run = handleApprove;
-        // ⌘B, never ⌘C. The clipboard keys belong to the sheet — this screen
-        // exists so people can copy rows straight into Excel, and ⌘C is the
-        // most reflexive keystroke there is. It used to sit here, where it
-        // beat the grid's copy (this listener captures and preventDefaults,
-        // so the browser never issued the copy) and completed the deposits
-        // instead, with no confirmation.
-        //
-        // ⌘B also makes the two flows read the same: ⌘P advances a row —
-        // approve a deposit, pull a withdrawal — and ⌘B finishes it.
-        else if (k === "b" && can.complete) run = handleComplete;
-        // ⌘I, not ⌘T — the browser reserves ⌘T / Ctrl+T for "new tab" and the
-        // page never receives it.
-        else if (k === "i" && can.retryDep) run = handleRetryDeposits;
-        // No key for Reject on purpose: ⌘R / Ctrl+R is the browser's reload,
-        // and a destructive action must never sit on a reflex keystroke.
-      } else if (tab === "withdrawal") {
-        if (k === "p" && can.pull) run = handlePull;
-        // ⌘B, not ⌘M — ⌘M minimises the window on macOS before the page sees it.
-        else if (k === "b" && can.paid) run = handleMarkPaid;
-      } else if (tab === "transfer") {
-        if (k === "i" && can.retryTf) run = handleRetryTransfers;
-      }
+      // Delete rides Shift as well as the modifier — see DEL_LABEL.
+      const del = mod && !wrongMod && !e.altKey && e.shiftKey && k === "d";
       if (del) {
         if (tab === "deposit" && can.delDep) run = handleDeleteDeposits;
         else if (tab === "withdrawal" && can.delWd) run = handleDeleteWithdrawals;
@@ -3722,9 +3728,16 @@ export default function TransactionsPage() {
     handleDeleteCashOuts, handleDeleteLeaderTransfers,
   ]);
 
-  // Shift+Cmd/Ctrl+Left/Right cycles the worksheet tabs — global, so it works
-  // whether the focus is in the grid, a filter, or nowhere. Skips while a text
-  // field is focused so it never fights caret movement.
+  /**
+   * Shift+Cmd/Ctrl+PgUp/PgDn cycles the worksheet tabs, as it does in Google
+   * Sheets — global, so it works whether the focus is in the grid, a filter,
+   * or nowhere.
+   *
+   * Shift+Cmd/Ctrl+←/→ did this first and still does outside the grid, but in
+   * the grid it is Sheets' "extend the selection to the edge", so it is left
+   * to the grid there. Skips while a text field is focused so it never fights
+   * caret movement.
+   */
   useEffect(() => {
     const order: TabKey[] = [
       "deposit",
@@ -3739,13 +3752,13 @@ export default function TransactionsPage() {
       const mod = IS_MAC ? e.metaKey : e.ctrlKey;
       const wrongMod = IS_MAC ? e.ctrlKey : e.metaKey;
       if (!e.shiftKey || !mod || wrongMod || e.altKey) return;
-      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
       const t = e.target as HTMLElement | null;
+      const dir = sheetTabStep(e, t);
+      if (!dir) return;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
       e.preventDefault();
       e.stopPropagation();
-      const i = order.indexOf(tab);
-      const next = e.key === "ArrowLeft" ? i - 1 : i + 1;
+      const next = order.indexOf(tab) + dir;
       // Wrap around, so the ends meet like flipping through sheet tabs.
       switchTab(order[(next + order.length) % order.length]);
     };
@@ -4693,7 +4706,6 @@ export default function TransactionsPage() {
         drafts={drafts}
         onDraftsChange={onDraftsChange}
         draftStatus={draftStatus}
-        onCommit={handleCommit}
         flushRef={flushEdit}
         readOnly={isViewer || tab === "rebate"}
         committedEditable={committedEditable}
@@ -4735,7 +4747,7 @@ export default function TransactionsPage() {
               >
                 <User className="h-3 w-3" />
                 Player
-                <Kbd k={`${MOD_LABEL}\u21B5`} />
+                <ActionKbd action="viewPlayer" />
               </Button>
             )}
             {can.assign && (
@@ -4758,7 +4770,7 @@ export default function TransactionsPage() {
                     Assign to me
                   </>
                 )}
-                <Kbd k={`${MOD_LABEL}A`} />
+                <ActionKbd action="assign" />
               </Button>
             )}
             {can.approve && (
@@ -4771,7 +4783,7 @@ export default function TransactionsPage() {
               >
                 <CheckCircle2 className="h-3 w-3" />
                 Approve
-                <Kbd k={`${MOD_LABEL}P`} light />
+                <ActionKbd action="advance" light />
               </Button>
             )}
             {can.complete && (
@@ -4784,7 +4796,7 @@ export default function TransactionsPage() {
               >
                 <CheckCircle2 className="h-3 w-3" />
                 Complete
-                <Kbd k={`${MOD_LABEL}B`} />
+                <ActionKbd action="finish" />
               </Button>
             )}
             {can.retryDep && (
@@ -4797,7 +4809,7 @@ export default function TransactionsPage() {
               >
                 <RotateCcw className="h-3 w-3" />
                 Retry
-                <Kbd k={`${MOD_LABEL}I`} />
+                <ActionKbd action="retry" />
               </Button>
             )}
             {can.rejectDep && (
@@ -4822,7 +4834,7 @@ export default function TransactionsPage() {
               >
                 <HandCoins className="h-3 w-3" />
                 Pull credits
-                <Kbd k={`${MOD_LABEL}P`} light />
+                <ActionKbd action="advance" light />
               </Button>
             )}
             {can.paid && (
@@ -4834,7 +4846,7 @@ export default function TransactionsPage() {
               >
                 <CheckCircle2 className="h-3 w-3" />
                 Mark paid
-                <Kbd k={`${MOD_LABEL}B`} light />
+                <ActionKbd action="finish" light />
               </Button>
             )}
             {can.rejectWd && (
@@ -4860,7 +4872,7 @@ export default function TransactionsPage() {
               >
                 <RotateCcw className="h-3 w-3" />
                 Retry
-                <Kbd k={`${MOD_LABEL}I`} />
+                <ActionKbd action="retry" />
               </Button>
             )}
             {(can.delCash || can.delLt) && (
