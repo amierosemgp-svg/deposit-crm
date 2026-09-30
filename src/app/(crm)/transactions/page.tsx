@@ -13,7 +13,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useStore, type MutationResult } from "@/lib/store";
+import { applyDepositPatch, useStore, type DepositPatch, type MutationResult } from "@/lib/store";
 import { bonusOn } from "@/lib/bonus-math";
 import { formatClock, formatRelative, formatRM } from "@/lib/format";
 import { byBankOrder } from "@/lib/bank-order";
@@ -362,6 +362,13 @@ function transferTone(s: GameTransfer["status"]): SheetRow["tone"] {
   return "default";
 }
 
+/** Stamp on a range row edited in place — see patchRangeRow. */
+const EDITED_AT = "__edited_at";
+function rowKey(r: unknown): unknown {
+  const o = r as Record<string, unknown>;
+  return o.deposit_id ?? o.withdrawal_id ?? r;
+}
+
 function gameUsername(p: Player | undefined, game: string | null | undefined): string {
   if (!p?.game_accounts?.length) return "";
   if (game) {
@@ -562,7 +569,7 @@ export default function TransactionsPage() {
   const selectedLeaderId = useStore((s) => s.selectedLeaderId);
   const refresh = useStore((s) => s.refresh);
   const setAssignment = useStore((s) => s.setAssignment);
-  const updateDepositDraft = useStore((s) => s.updateDepositDraft);
+  const updateDeposit = useStore((s) => s.updateDepositDraft);
   const approveDeposit = useStore((s) => s.approveDeposit);
   const completeDeposit = useStore((s) => s.completeDeposit);
   const rejectDeposit = useStore((s) => s.rejectDeposit);
@@ -708,8 +715,31 @@ export default function TransactionsPage() {
   const [rangeRows, setRangeRows] = useState<
     Partial<Record<TabKey, { rows: unknown[]; totals: { rows: number; amount: number } }>>
   >({});
+  /**
+   * An in-place edit on a range row. The row is stamped with when, so a range
+   * fetch that set off before the edit doesn't land the old row back over it —
+   * the next poll brings the saved state.
+   */
+  const patchRangeRow = useCallback(
+    <T,>(which: TabKey, match: (row: T) => boolean, fn: (row: T) => T) => {
+      const at = Date.now();
+      setRangeRows((prev) => {
+        const sheet = prev[which];
+        if (!sheet) return prev;
+        return {
+          ...prev,
+          [which]: {
+            ...sheet,
+            rows: sheet.rows.map((r) => (match(r as T) ? { ...fn(r as T), [EDITED_AT]: at } : r)),
+          },
+        };
+      });
+    },
+    [],
+  );
   const loadRangeRows = useCallback(
     async (which: TabKey) => {
+      const startedAt = Date.now();
       /**
        * Pages until the range is complete, not just the first page of it.
        *
@@ -740,10 +770,19 @@ export default function TransactionsPage() {
           totals ??= data.totals;
           if ((data.rows?.length ?? 0) < PAGE) break;
         }
-        setRangeRows((prev) => ({
-          ...prev,
-          [which]: { rows, totals: totals ?? { rows: rows.length, amount: 0 } },
-        }));
+        setRangeRows((prev) => {
+          // Keep any row edited here while this fetch was in flight.
+          const edited = new Map<unknown, unknown>();
+          for (const r of prev[which]?.rows ?? []) {
+            const at = (r as Record<string, unknown>)[EDITED_AT];
+            if (typeof at === "number" && at >= startedAt) edited.set(rowKey(r), r);
+          }
+          const merged = edited.size ? rows.map((r) => edited.get(rowKey(r)) ?? r) : rows;
+          return {
+            ...prev,
+            [which]: { rows: merged, totals: totals ?? { rows: rows.length, amount: 0 } },
+          };
+        });
       } catch {
         // Keep whatever is on screen; the next refresh or poll retries.
       }
@@ -1296,11 +1335,24 @@ export default function TransactionsPage() {
     return m;
   }, [players]);
 
+  /**
+   * Every deposit the sheet can show, by id: the range fetch, with the store's
+   * copy on top. The sheet draws the range, but the store only holds the
+   * newest 500 — looking rows up there alone left anything older uneditable,
+   * and the store is where an edit or a claim lands first.
+   */
   const depositById = useMemo(() => {
     const m = new Map<number, Deposit>();
+    for (const d of (rangeRows.deposit?.rows ?? []) as Deposit[]) m.set(d.deposit_id, d);
     for (const d of deposits) m.set(d.deposit_id, d);
     return m;
-  }, [deposits]);
+  }, [deposits, rangeRows.deposit]);
+  const withdrawalById = useMemo(() => {
+    const m = new Map<number, Withdrawal>();
+    for (const w of (rangeRows.withdrawal?.rows ?? []) as Withdrawal[]) m.set(w.withdrawal_id, w);
+    for (const w of withdrawals) m.set(w.withdrawal_id, w);
+    return m;
+  }, [withdrawals, rangeRows.withdrawal]);
 
   /**
    * The player's saved bank account a payout is going to.
@@ -1546,6 +1598,7 @@ export default function TransactionsPage() {
 
   const depositRows = useMemo<SheetRow[]>(() => {
     return inRangeOr<Deposit>("deposit", deposits)
+      .map((d) => depositById.get(d.deposit_id) ?? d)
       .filter((d) => d.company_entity_id === null || companyInScope(d.company_entity_id))
       .filter((d) => inRange(d.deposit_date, range))
       .filter((d) => statusFilters.size === 0 || statusFilters.has(d.status))
@@ -1560,7 +1613,7 @@ export default function TransactionsPage() {
             assign: assignCell(d.assigned_to_user_id),
             member: d.player_username ?? p?.username ?? "",
             product: d.selected_game ?? "",
-            username: gameUsername(p, d.selected_game),
+            username: d.selected_game_username || gameUsername(p, d.selected_game),
             amount: fmtAmount(d.deposit_amount),
             bonuspct: pct ? `${pct}%` : "—",
             bonus: d.bonus_amount ? fmtAmount(d.bonus_amount) : "—",
@@ -1590,10 +1643,11 @@ export default function TransactionsPage() {
       })
       .filter((r) => matchesSearch(r.cells));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deposits, playerById, range, statusFilters, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId, inRangeOr]);
+  }, [deposits, depositById, playerById, range, statusFilters, matchesSearch, assignCell, selectedCompanyId, selectedLeaderId, inRangeOr]);
 
   const withdrawalRows = useMemo<SheetRow[]>(() => {
     return inRangeOr<Withdrawal>("withdrawal", withdrawals)
+      .map((w) => withdrawalById.get(w.withdrawal_id) ?? w)
       .filter((w) => {
         const p = playerById.get(w.player_id);
         return !p || companyInScope(p.company_entity_id);
@@ -1631,7 +1685,7 @@ export default function TransactionsPage() {
       })
       .filter((r) => matchesSearch(r.cells));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [withdrawals, playerById, range, statusFilters, matchesSearch, assignCell, payoutAccountOf, selectedCompanyId, selectedLeaderId, inRangeOr]);
+  }, [withdrawals, withdrawalById, playerById, range, statusFilters, matchesSearch, assignCell, payoutAccountOf, selectedCompanyId, selectedLeaderId, inRangeOr]);
 
   const freeCreditRows = useMemo<SheetRow[]>(() => {
     // Live status for agent-queued rows comes off the referenced transfer.
@@ -2710,11 +2764,6 @@ export default function TransactionsPage() {
 
   // ---- in-place edits & workflow actions on saved rows ----
 
-  const withdrawalById = useMemo(() => {
-    const m = new Map<number, Withdrawal>();
-    for (const w of withdrawals) m.set(w.withdrawal_id, w);
-    return m;
-  }, [withdrawals]);
   const transferByIdMap = useMemo(() => {
     const m = new Map<number, GameTransfer>();
     for (const t of gameTransfers) m.set(t.transfer_id, t);
@@ -2909,18 +2958,51 @@ export default function TransactionsPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(patch),
         });
-        const data = (await res.json().catch(() => null)) as { error?: string } | null;
+        const data = (await res.json().catch(() => null)) as
+          | { error?: string; withdrawal?: Withdrawal }
+          | null;
         if (!res.ok) {
           toast.error(data?.error ?? "Could not edit the withdrawal");
           return;
         }
-        await refresh();
+        // Put the saved row in both places the sheet reads from, rather than
+        // awaiting a full /api/state — that round trip is seconds, the PATCH
+        // is milliseconds.
+        const saved = data?.withdrawal;
+        if (saved) {
+          const id = w.withdrawal_id;
+          patchRangeRow<Withdrawal>("withdrawal", (r) => r.withdrawal_id === id, (r) => ({ ...r, ...saved }));
+          useStore.setState((st) => ({
+            withdrawals: st.withdrawals.map((x) => (x.withdrawal_id === id ? { ...x, ...saved } : x)),
+          }));
+        } else {
+          void loadRangeRows("withdrawal");
+        }
         return;
       }
 
       // ── deposits ────────────────────────────────────────────────────────
       const dep = depositById.get(Number(rows[rowIndex]?.id));
       if (!dep) return;
+      /**
+       * The store only updates its own newest-500 slice, and the sheet draws
+       * the range fetch — so without this an edit showed up only on the next
+       * 10s poll. Guess on the range row now, take the server's row after.
+       */
+      const updateDepositDraft = async (depositId: number, patch: DepositPatch) => {
+        const match = (r: Deposit) => r.deposit_id === depositId;
+        patchRangeRow<Deposit>("deposit", match, (r) =>
+          applyDepositPatch(r, patch, useStore.getState().players),
+        );
+        const res = await updateDeposit(depositId, patch);
+        if (res.deposit) {
+          const saved = res.deposit;
+          patchRangeRow<Deposit>("deposit", match, (r) => ({ ...r, ...saved }));
+        } else if (!res.ok) {
+          void loadRangeRows("deposit");
+        }
+        return res;
+      };
       const v = value.trim();
       /**
        * Correcting a completed row unwinds the credit it booked. When the
@@ -2998,8 +3080,9 @@ export default function TransactionsPage() {
       rows,
       playerByCode,
       gameByName,
-      updateDepositDraft,
-      refresh,
+      updateDeposit,
+      patchRangeRow,
+      loadRangeRows,
     ],
   );
 

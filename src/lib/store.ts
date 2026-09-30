@@ -47,6 +47,42 @@ export type MutationResult = {
   warning?: string;
 };
 
+export type DepositPatch = Partial<
+  Pick<
+    Deposit,
+    | "bonus_percentage"
+    | "bonus_plan_id"
+    | "selected_game"
+    | "selected_game_username"
+    | "player_id"
+    | "deposit_amount"
+    | "bank_name"
+    | "deposit_date"
+  >
+> & { bonus_override_reason?: string };
+
+/**
+ * A deposit with an edit applied, before the server has answered — the bonus
+ * and total follow a new percentage, the member's code follows a new player.
+ * Shared by the store and the sheet's range rows so both show the same guess.
+ */
+export function applyDepositPatch(d: Deposit, patch: DepositPatch, players: Player[]): Deposit {
+  const next = { ...d, ...patch };
+  if (patch.bonus_percentage !== undefined) {
+    const bonusAmt = +((d.deposit_amount * patch.bonus_percentage) / 100).toFixed(2);
+    next.bonus_amount = bonusAmt;
+    next.total_amount = +(d.deposit_amount + bonusAmt).toFixed(2);
+  }
+  if (patch.player_id !== undefined) {
+    const p = players.find((x) => x.player_id === patch.player_id);
+    if (p) {
+      next.player_username = p.username;
+      next.company_entity_id = p.company_entity_id;
+    }
+  }
+  return next;
+}
+
 async function api<T = unknown>(
   path: string,
   init?: RequestInit,
@@ -203,20 +239,8 @@ type Store = {
   }) => Promise<{ ok: boolean; options?: BonusOption[]; error?: string }>;
   updateDepositDraft: (
     depositId: number,
-    patch: Partial<
-      Pick<
-        Deposit,
-        | "bonus_percentage"
-        | "bonus_plan_id"
-        | "selected_game"
-        | "selected_game_username"
-        | "player_id"
-        | "deposit_amount"
-        | "bank_name"
-        | "deposit_date"
-      >
-    > & { bonus_override_reason?: string },
-  ) => Promise<MutationResult>;
+    patch: DepositPatch,
+  ) => Promise<MutationResult & { deposit?: Deposit }>;
   approveDeposit: (depositId: number) => Promise<MutationResult>;
   completeDeposit: (depositId: number) => Promise<MutationResult>;
   rejectDeposit: (depositId: number) => Promise<MutationResult>;
@@ -800,26 +824,9 @@ export const useStore = create<Store>((set, get) => {
       // we refresh to revert.
       const players = get().players;
       set({
-        deposits: get().deposits.map((d) => {
-          if (d.deposit_id !== depositId) return d;
-          const next = { ...d, ...patch };
-          if (patch.bonus_percentage !== undefined) {
-            const bonusAmt = +(
-              (d.deposit_amount * patch.bonus_percentage) /
-              100
-            ).toFixed(2);
-            next.bonus_amount = bonusAmt;
-            next.total_amount = +(d.deposit_amount + bonusAmt).toFixed(2);
-          }
-          if (patch.player_id !== undefined) {
-            const p = players.find((x) => x.player_id === patch.player_id);
-            if (p) {
-              next.player_username = p.username;
-              next.company_entity_id = p.company_entity_id;
-            }
-          }
-          return next;
-        }),
+        deposits: get().deposits.map((d) =>
+          d.deposit_id === depositId ? applyDepositPatch(d, patch, players) : d,
+        ),
       });
       const res = await api<{ deposit: Deposit; warning?: string }>(`/api/deposits/${depositId}`, {
         method: "PATCH",
@@ -840,7 +847,11 @@ export const useStore = create<Store>((set, get) => {
           ),
         });
       }
-      return { ok: true, ...(res.data?.warning ? { warning: res.data.warning } : {}) };
+      return {
+        ok: true,
+        ...(saved ? { deposit: saved } : {}),
+        ...(res.data?.warning ? { warning: res.data.warning } : {}),
+      };
     },
 
     approveDeposit: async (depositId) => {

@@ -8,7 +8,8 @@
  * or pasted exactly the way they were in the sheet. The keyboard model is
  * Excel's, because that is the muscle memory being migrated:
  *
- *   arrows / Tab / Enter    move the selected cell (Shift reverses)
+ *   arrows / Tab            move the selected cell (Shift reverses)
+ *   Enter                   edit the cell if it takes input, else move down
  *   Shift+arrows            grow the selection
  *   Ctrl/Cmd+↑ / ↓          jump to the top / bottom of the block you are in
  *   Ctrl/Cmd+click          add another rectangle to the selection
@@ -1449,7 +1450,7 @@ export function SheetGrid({
       if (readOnly) return;
       if (r < draftStart && !committedEditable?.(r, c)) {
         flash(
-          "This cell is read-only — add rows in the NEW ENTRIES panel below; on pending deposits the Member/Product/Bonus % cells edit in place.",
+          "This cell is read-only — add rows in the NEW ENTRIES panel below; on a row you have claimed (Assign = Yes), Member/Product/Username/Bonus % edit in place.",
         );
         return;
       }
@@ -1782,6 +1783,10 @@ export function SheetGrid({
           tabOriginRef.current = null;
           if (!e.shiftKey && origin && origin.r === sel.r) {
             moveTo(sel.r + 1, origin.c);
+          } else if (!e.shiftKey && isEditableCell(sel.r, sel.c)) {
+            // Enter on a cell that takes input opens it, like F2 — the
+            // editor's own Enter then commits and moves down.
+            startEdit(sel.r, sel.c);
           } else {
             moveTo(sel.r + (e.shiftKey ? -1 : 1), sel.c);
           }
@@ -1837,7 +1842,7 @@ export function SheetGrid({
     [
       editing, sel, ext, bounds, nRows, nCols, draftStart, readOnly,
       moveTo, startEdit, clearDraftRange, onCommit, flash,
-      isDropdownCell, openDropdown,
+      isDropdownCell, openDropdown, isEditableCell,
     ],
   );
 
@@ -2172,7 +2177,7 @@ export function SheetGrid({
           <div className="flex items-center gap-2 border-b border-border bg-emerald-600/10 px-2 py-0.5 text-[11px] font-medium text-emerald-800 dark:bg-emerald-400/10 dark:text-emerald-300">
             <span className="font-bold">NEW ENTRIES</span>
             <span className="font-normal text-emerald-800/80 dark:text-emerald-300/80">
-              type or paste here · Enter/Tab move · Enter on a ▾ cell opens its list · Ctrl/⌘+S saves the ✓ rows
+              type or paste here · Enter edits · Tab moves · Enter on a ▾ cell opens its list · Ctrl/⌘+S saves the ✓ rows
             </span>
           </div>
           <div
