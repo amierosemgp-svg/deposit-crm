@@ -53,8 +53,9 @@ function RoleBadge({ role }: { role: UserRole }) {
 /**
  * The logins on an entity, with a way to take one away.
  *
- * Removing is offered to the super admin only, and never on their own account —
- * the server enforces both, plus the rule that the last super admin cannot go.
+ * Removing is offered to the super admin, and to a leader for the CS logins on
+ * companies they hold; never on your own account. The server enforces all of
+ * it, plus the rule that the last super admin cannot go.
  * Deleting the only login on a CS desk removes the empty desk with it, which is
  * why that case is spelled out in the confirmation.
  */
@@ -560,6 +561,10 @@ export default function HierarchyPage() {
   const isLeader = me?.role === "company_leader";
   const canAddCompanyOn = (leaderId: number) =>
     isSuper || (isLeader && me?.entity_id === leaderId);
+  // A leader may delete CS logins on the companies they hold — the same rule
+  // DELETE /api/users/:id enforces.
+  const canRemoveCsOn = (companyId: number) =>
+    isSuper || (isLeader && (me?.companyIds ?? []).includes(companyId));
   const canAddCsOn = (company: Entity) =>
     isSuper || (isLeader && company.parent_entity_id === me?.entity_id);
   const canAddUserOn = (entity: Entity) => {
@@ -987,7 +992,9 @@ export default function HierarchyPage() {
                                                   users={csUsers}
                                                   entityId={cs.entity_id}
                                                   onRemove={
-                              isSuper ? (u, fromEntityId) => setRemoving({ user: u, fromEntityId }) : undefined
+                              canRemoveCsOn(company.entity_id)
+                                ? (u, fromEntityId) => setRemoving({ user: u, fromEntityId })
+                                : undefined
                             }
                   onEditCompanies={isSuper ? setLeaderCompanies : undefined}
                                                 />
