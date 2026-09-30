@@ -1,4 +1,5 @@
 import { aliasedTable, and, asc, desc, eq, getTableColumns, gte, inArray, isNull, or, sql } from "drizzle-orm";
+import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { csCutoff } from "@/lib/report-sql";
 import { db } from "@/db";
 import {
@@ -144,19 +145,16 @@ export async function GET() {
         ? undefined
         : inArray(players.company_entity_id, companyIds);
 
-    // The ids are needed either way — they scope the withdrawals, credits,
-    // transfers and bonuses below — but they never leave the server, so when
-    // the client's roster is current we fetch the ids alone and skip the 1.5 MB.
-    // The ids never leave the server: they scope the withdrawals, credits,
-    // transfers and bonuses below.
-    let playerIds: number[] = [];
-    if (canSeePlayers) {
-      const idRows = await db
-        .select({ player_id: players.player_id })
-        .from(players)
-        .where(playerScope);
-      playerIds = idRows.map((p) => p.player_id);
-    }
+    // Withdrawals, credits, transfers and bonuses are scoped to the viewer's
+    // players by a subquery, never by a list of ids: a list becomes one bind
+    // parameter per player, and Postgres refuses a statement with more than
+    // 65,535 of them — which the whole house passed on 2026-09-30.
+    const scopedPlayerIds = db
+      .select({ player_id: players.player_id })
+      .from(players)
+      .where(playerScope);
+    const inPlayerScope = (column: AnyPgColumn) =>
+      user.companyIds === null ? undefined : inArray(column, scopedPlayerIds);
 
     // How many members each company holds — what the hierarchy pages were
     // counting by walking the roster.
@@ -216,7 +214,7 @@ export async function GET() {
        * roster is no longer shipped, and this is one join rather than twelve
        * thousand rows.
        */
-      playerIds.length
+      canSeePlayers
         ? db
             .select({
               ...getTableColumns(withdrawals),
@@ -226,43 +224,29 @@ export async function GET() {
             .innerJoin(players, eq(players.player_id, withdrawals.player_id))
             .where(
               and(
-                inArray(withdrawals.player_id, playerIds),
+                inPlayerScope(withdrawals.player_id),
                 csCutoffIso ? gte(withdrawals.created_at, csCutoffIso) : undefined,
               ),
             )
             .orderBy(desc(withdrawals.created_at))
             .limit(500)
-        : user.companyIds === null
-          ? db
-              .select({
-                ...getTableColumns(withdrawals),
-                company_entity_id: players.company_entity_id,
-              })
-              .from(withdrawals)
-              .innerJoin(players, eq(players.player_id, withdrawals.player_id))
-              .orderBy(desc(withdrawals.created_at))
-              .limit(500)
-          : Promise.resolve([]),
-      playerIds.length
-        ? db.select().from(gameCredits).where(inArray(gameCredits.player_id, playerIds))
-        : user.companyIds === null
-          ? db.select().from(gameCredits)
-          : Promise.resolve([]),
-      playerIds.length
+        : Promise.resolve([]),
+      canSeePlayers
+        ? db.select().from(gameCredits).where(inPlayerScope(gameCredits.player_id))
+        : Promise.resolve([]),
+      canSeePlayers
         ? db
             .select()
             .from(gameTransfers)
             .where(
               and(
-                inArray(gameTransfers.player_id, playerIds),
+                inPlayerScope(gameTransfers.player_id),
                 csCutoffIso ? gte(gameTransfers.created_at, csCutoffIso) : undefined,
               ),
             )
             .orderBy(desc(gameTransfers.created_at))
             .limit(200)
-        : user.companyIds === null
-          ? db.select().from(gameTransfers).orderBy(desc(gameTransfers.created_at)).limit(200)
-          : Promise.resolve([]),
+        : Promise.resolve([]),
       accountIds.length
         ? db
             .select()
@@ -331,7 +315,7 @@ export async function GET() {
     ]);
 
     // Everything below depends only on values already resolved above —
-    // companyIds, accountIds, playerIds, boIds — and nothing here depends on
+    // companyIds, accountIds, the player scope, boIds — and nothing here depends on
     // anything else here. They used to be seven `await`s in a row, which on a
     // Singapore→Mumbai link cost seven full round trips (~1.5s) to fetch data
     // the database could have been working on all at once.
@@ -452,7 +436,7 @@ export async function GET() {
       // exactly the bonuses belonging to players they can already see. The
       // downline's name is joined here rather than looked up in the browser
       // because the downline may sit outside the viewer's scope entirely.
-      playerIds.length || user.companyIds === null
+      canSeePlayers
         ? db
             .select({
               bonus_id: referralBonuses.bonus_id,
@@ -478,11 +462,7 @@ export async function GET() {
               downlinePlayer,
               eq(referralBonuses.downline_player_id, downlinePlayer.player_id),
             )
-            .where(
-              user.companyIds === null
-                ? undefined
-                : inArray(referralBonuses.upline_player_id, playerIds),
-            )
+            .where(inPlayerScope(referralBonuses.upline_player_id))
             .orderBy(desc(referralBonuses.bonus_id))
             .limit(500)
         : Promise.resolve([]),
