@@ -8,12 +8,11 @@
  */
 
 /**
- * A percentage of a figure, floored to whole ringgit.
+ * A percentage of a figure, to the cent: RM 50 at 5% is RM 2.50.
  *
- * The house pays down, never up: RM 50 at 5% is RM 2, not RM 2.50. All 1,877
- * bonuses in the operator's own book do this — rounding to the nearest cent
- * matches only 1,343 of them.
+ * It was floored to whole ringgit for a while (a0be4c5, to match Pokercity's
+ * book); the house pays the decimals, so that was reverted on 2026-09-30.
  */
 export function bonusOn(base: number, percentage: number): number {
-  return Math.floor((base * percentage) / 100);
+  return +((base * percentage) / 100).toFixed(2);
 }
