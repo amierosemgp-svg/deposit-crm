@@ -2845,20 +2845,21 @@ export default function TransactionsPage() {
       if (isViewer) return false;
 
       /**
-       * A row is edited by whoever holds it.
+       * A held row is edited by whoever holds it.
        *
        * Two people working the same deposit is how a top-up gets done twice,
-       * so a claim is the lock: take the row first, and until you do, it is
-       * read-only. The claim cell itself is the way in and the way out — it
-       * opens on an unheld row (to take it) and on your own (to release it),
-       * and never on a colleague's, which the server refuses anyway.
+       * so a claim is the lock: a colleague's row is read-only until they
+       * release it. An unheld row is open to anyone, as the server allows. The
+       * claim cell itself is the way in and the way out — it opens on an
+       * unheld row (to take it) and on your own (to release it), and never on
+       * a colleague's, which the server refuses anyway.
        * A company leader edits the cells of any row; the claim stays its holder's.
        */
       const owner = ownerOf(rowIndex);
       if (owner !== undefined) {
         const mine = owner !== null && owner === me?.user_id;
         if (colIndex === assignColOf(tab)) return owner === null || mine;
-        if (!mine && me?.role !== "company_leader") return false;
+        if (owner !== null && !mine && me?.role !== "company_leader") return false;
       } else if (colIndex === assignColOf(tab)) {
         return true;
       }
