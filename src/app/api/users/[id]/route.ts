@@ -1,7 +1,7 @@
 import { and, eq, ne } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { entities, users } from "@/db/schema";
+import { activityLog, authChallenges, entities, userDevices, users } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import { companyOfEntity, diffFields, logActivity } from "@/lib/activity-log";
@@ -155,6 +155,20 @@ export async function DELETE(
     }
 
     await db.transaction(async (txn) => {
+      // What only belongs to the login goes with it: its bound devices and any
+      // sign-in codes still pending. The activity log keeps its rows — each one
+      // carries actor_label, so it still names them — and just lets go of the id.
+      // Without this, anyone who had ever signed in could not be deleted.
+      await txn.delete(userDevices).where(eq(userDevices.user_id, target.user_id));
+      await txn
+        .update(userDevices)
+        .set({ approved_by_user_id: null })
+        .where(eq(userDevices.approved_by_user_id, target.user_id));
+      await txn.delete(authChallenges).where(eq(authChallenges.user_id, target.user_id));
+      await txn
+        .update(activityLog)
+        .set({ actor_user_id: null })
+        .where(eq(activityLog.actor_user_id, target.user_id));
       await txn.delete(users).where(eq(users.user_id, target.user_id));
       // Clean up an orphaned CS desk entity
       const [entity] = await txn
@@ -188,6 +202,22 @@ export async function DELETE(
 
     return Response.json({ ok: true });
   } catch (e) {
+    // Deposits, withdrawals, transfers and the rest point at the user who
+    // handled them; deleting that user would orphan the history. Say so.
+    if (isForeignKeyViolation(e)) {
+      return jsonError(
+        "This login has handled deposits, withdrawals or other records, so it can't be deleted. Set it to inactive instead — it can no longer sign in, and its history keeps its name.",
+        422,
+      );
+    }
     return authErrorResponse(e) ?? (console.error(e), jsonError("Server error", 500));
   }
+}
+
+/** Postgres 23503, possibly wrapped by drizzle as the error's cause. */
+function isForeignKeyViolation(e: unknown): boolean {
+  for (let err = e; err && typeof err === "object"; err = (err as { cause?: unknown }).cause) {
+    if ((err as { code?: string }).code === "23503") return true;
+  }
+  return false;
 }
