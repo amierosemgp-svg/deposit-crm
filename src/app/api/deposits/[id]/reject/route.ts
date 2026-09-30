@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
-import { deposits, transactions } from "@/db/schema";
+import { deposits, gatewayPayments, transactions } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 
@@ -36,7 +36,20 @@ export async function POST(
       if (!row.skip_bot) {
         throw new AuthError(422, "Only manual (skip-agent) deposits are rejected here");
       }
-      if (!["pending", "matched", "processing"].includes(row.status)) {
+      // A gateway deposit waits at "pending_match" until the player pays, and
+      // a link nobody pays has to be closable. If the money comes after all,
+      // the callback reopens it (see applyGatewayResult).
+      const [gatewayPayment] =
+        row.status === "pending_match"
+          ? await txn
+              .select({ id: gatewayPayments.payment_id })
+              .from(gatewayPayments)
+              .where(eq(gatewayPayments.deposit_id, row.deposit_id))
+          : [];
+      if (
+        !["pending", "matched", "processing"].includes(row.status) &&
+        !gatewayPayment
+      ) {
         throw new AuthError(409, `Deposit is "${row.status}", cannot reject`);
       }
 

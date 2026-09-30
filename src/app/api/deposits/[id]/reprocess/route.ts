@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
-import { deposits, transactions } from "@/db/schema";
+import { deposits, gatewayPayments, transactions } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 
@@ -36,6 +36,19 @@ export async function POST(
       }
       if (row.status !== "failed") {
         throw new AuthError(409, `Only failed deposits can be reprocessed (this one is "${row.status}")`);
+      }
+      // A gateway deposit that failed because the player never paid has no
+      // money behind it; reopening it would let it be credited anyway. One
+      // that was paid and failed later (a rejected top-up) reprocesses as usual.
+      const [payment] = await txn
+        .select({ status: gatewayPayments.status })
+        .from(gatewayPayments)
+        .where(eq(gatewayPayments.deposit_id, row.deposit_id));
+      if (payment && payment.status !== "success") {
+        throw new AuthError(
+          409,
+          "FlyPay never confirmed this payment — make a new payment link instead",
+        );
       }
 
       const nowIso = new Date().toISOString();

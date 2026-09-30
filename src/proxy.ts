@@ -11,11 +11,14 @@ const PUBLIC_API = [
   "/api/auth/resend-2fa",
   // Telegram calls this one; it authenticates on the webhook secret header.
   "/api/telegram/webhook",
+  // FlyPay's payment callback; it authenticates on FlyPay's RSA signature.
+  "/api/flypay/notify",
   "/api/bot/",
   "/api/cron/",
 ];
-// Public, no-login pages (e.g. the agent API reference for the integration team)
-const PUBLIC_PAGES = ["/bot-api.html"];
+// Public, no-login pages (e.g. the agent API reference for the integration team,
+// and where FlyPay sends a player once they've paid)
+const PUBLIC_PAGES = ["/bot-api.html", "/payment-done.html"];
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;

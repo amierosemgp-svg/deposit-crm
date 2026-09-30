@@ -471,6 +471,50 @@ export type BankAccount = {
   created_at: string;
 };
 
+/** How a player pays on FlyPay's cashier page. */
+export type GatewayMethod = "DNQR" | "OB" | "TNG";
+
+export const GATEWAY_METHOD_LABEL: Record<GatewayMethod, string> = {
+  DNQR: "DuitNow QR",
+  OB: "Online Banking",
+  TNG: "Touch 'n Go",
+};
+
+/** A bank account that is really a FlyPay merchant balance. No secrets. */
+export type PaymentGateway = {
+  gateway_id: number;
+  account_id: number;
+  entity_id: number;
+  bank_name: string;
+  account_label: string;
+  provider: string;
+  merchant_code: string;
+  currency: string;
+  /** Ours — the half FlyPay's tech team needs to upload. */
+  merchant_public_key: string;
+  status: "active" | "inactive";
+  updated_at: string;
+};
+
+export type GatewayPayment = {
+  payment_id: number;
+  deposit_id: number;
+  merchant_txn_id: string;
+  provider_txn_id: string | null;
+  payment_method: string;
+  amount: number;
+  net_amount: number | null;
+  /** submitted → success | failed; "error" = FlyPay refused or never had it. */
+  status: string;
+  cashier_url: string | null;
+  error: string | null;
+  updated_at: string;
+};
+
+/** Deposits the CRM asked a gateway to collect carry our merchant id as their ref. */
+export const isGatewayDeposit = (d: { transaction_ref: string }) =>
+  d.transaction_ref.startsWith("FP");
+
 /**
  * One account's movement over a period, from /api/bank-movements.
  *

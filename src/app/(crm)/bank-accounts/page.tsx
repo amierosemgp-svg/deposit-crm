@@ -10,6 +10,7 @@ import {
   ArrowUpRight,
   Banknote,
   Check,
+  CreditCard,
   Hourglass,
   Undo2,
   Landmark,
@@ -21,7 +22,7 @@ import {
 } from "lucide-react";
 import { useStore } from "@/lib/store";
 import { formatRM, formatDateTime, formatRelative } from "@/lib/format";
-import type { BankAccount, BankCashOut, BankTransfer } from "@/lib/types";
+import type { BankAccount, BankCashOut, BankTransfer, PaymentGateway } from "@/lib/types";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/status-badge";
@@ -30,6 +31,7 @@ import { BankAccountFormModal } from "@/components/bank-account-form-modal";
 import { ListLoading } from "@/components/list-loading";
 import { BankTransferModal } from "@/components/bank-transfer-modal";
 import { BankCashOutModal } from "@/components/bank-cash-out-modal";
+import { PaymentGatewayModal } from "@/components/payment-gateway-modal";
 import {
   ConfirmActionDialog,
   type SummaryRow,
@@ -102,6 +104,20 @@ export default function BankAccountsPage() {
   const selectedCompanyId = useStore((s) => s.selectedCompanyId);
   const selectedLeaderId = useStore((s) => s.selectedLeaderId);
   const companyInScope = useStore((s) => s.companyInScope);
+  const loadPaymentGateways = useStore((s) => s.loadPaymentGateways);
+
+  // Accounts that are really a FlyPay merchant balance, by account id.
+  const [gateways, setGateways] = useState<Map<number, PaymentGateway>>(new Map());
+  const [gatewayAccount, setGatewayAccount] = useState<BankAccount | null>(null);
+  useEffect(() => {
+    let live = true;
+    void loadPaymentGateways().then((list) => {
+      if (live) setGateways(new Map(list.map((g) => [g.account_id, g])));
+    });
+    return () => {
+      live = false;
+    };
+  }, [loadPaymentGateways]);
 
   const [formOpen, setFormOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<BankAccount | null>(null);
@@ -612,6 +628,11 @@ export default function BankAccountsPage() {
                                 {a.label}
                               </div>
                             )}
+                            {gateways.has(a.account_id) && (
+                              <div className="text-[10px] font-medium text-violet-700 dark:text-violet-300 leading-tight">
+                                FlyPay · {gateways.get(a.account_id)!.merchant_code}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </td>
@@ -690,6 +711,23 @@ export default function BankAccountsPage() {
                                 <ArrowRightLeft className="h-3.5 w-3.5" />
                               </Button>
                             )}
+                            {canManage &&
+                              managesEntity(a.entity_id) &&
+                              (gateways.has(a.account_id) || /flypay/i.test(a.bank_name)) && (
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => setGatewayAccount(a)}
+                                  className="cursor-pointer h-7 px-2"
+                                  title={
+                                    gateways.has(a.account_id)
+                                      ? "FlyPay settings"
+                                      : "Connect this account to FlyPay"
+                                  }
+                                >
+                                  <CreditCard className="h-3.5 w-3.5" />
+                                </Button>
+                              )}
                             {canManage && (
                             <>
                             <Button
@@ -938,6 +976,13 @@ export default function BankAccountsPage() {
         onOpenChange={(o) => !o && setCashOutAccount(null)}
         account={cashOutAccount}
         onRecorded={() => setCashOutsVersion((v) => v + 1)}
+      />
+      <PaymentGatewayModal
+        open={gatewayAccount !== null}
+        onOpenChange={(o) => !o && setGatewayAccount(null)}
+        account={gatewayAccount}
+        gateway={gatewayAccount ? (gateways.get(gatewayAccount.account_id) ?? null) : null}
+        onSaved={(g) => setGateways((prev) => new Map(prev).set(g.account_id, g))}
       />
       <ConfirmActionDialog
         open={confirmReverse !== null}

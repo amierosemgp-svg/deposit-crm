@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
 import { useHydratePlayers } from "@/lib/use-players";
 import {
@@ -29,6 +29,7 @@ import { PlayerNameLink } from "@/components/player-name-link";
 import { ApprovalFlowModal } from "@/components/approval-flow-modal";
 import { AssignPlayerSheet } from "@/components/assign-player-sheet";
 import { ManualDepositDialog } from "@/components/manual-deposit-dialog";
+import { GatewayDepositDialog } from "@/components/gateway-deposit-dialog";
 import {
   ConfirmActionDialog,
   type SummaryRow,
@@ -44,6 +45,8 @@ import {
   Search,
   Zap,
   CheckCircle2,
+  Copy,
+  CreditCard,
   Paperclip,
   Inbox,
   Loader2,
@@ -53,8 +56,8 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { BotCommand, Deposit } from "@/lib/types";
-import { OPEN_BOT_COMMAND_STATUSES } from "@/lib/types";
+import type { BotCommand, Deposit, PaymentGateway } from "@/lib/types";
+import { OPEN_BOT_COMMAND_STATUSES, isGatewayDeposit } from "@/lib/types";
 import { extractSenderName } from "@/lib/bank-remark";
 
 const STATUS_FILTERS: { value: string; tab: string }[] = [
@@ -142,6 +145,9 @@ export default function DepositsPage() {
   const bonusPlanById = useStore((s) => s.bonusPlanById);
   const botCommands = useStore((s) => s.botCommands);
   const requestBankCrawl = useStore((s) => s.requestBankCrawl);
+  const loadPaymentGateways = useStore((s) => s.loadPaymentGateways);
+  const getGatewayPayment = useStore((s) => s.getGatewayPayment);
+  const checkGatewayDeposit = useStore((s) => s.checkGatewayDeposit);
 
   const banks = banksFn();
   const isViewer = me?.role === "viewer";
@@ -174,6 +180,46 @@ export default function DepositsPage() {
   const [bulkAssigning, setBulkAssigning] = useState(false);
   const [manualDepositOpen, setManualDepositOpen] = useState(false);
   const [crawlRequesting, setCrawlRequesting] = useState(false);
+  // FlyPay accounts in reach. Empty for every company that banks normally,
+  // which keeps the FlyPay button off their screen entirely.
+  const [gateways, setGateways] = useState<PaymentGateway[]>([]);
+  const [gatewayDepositOpen, setGatewayDepositOpen] = useState(false);
+  const [checkingId, setCheckingId] = useState<number | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    void loadPaymentGateways().then((g) => {
+      if (live) setGateways(g);
+    });
+    return () => {
+      live = false;
+    };
+  }, [loadPaymentGateways]);
+  const gatewaysInScope = gateways.filter(
+    (g) => g.status === "active" && companyInScope(g.entity_id),
+  );
+
+  async function copyPaymentLink(depositId: number) {
+    const r = await getGatewayPayment(depositId);
+    if (!r.ok || !r.payment?.cashier_url) {
+      toast.error(r.error ?? "FlyPay never returned a link for this one — press Check");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(r.payment.cashier_url);
+      toast.success("Payment link copied");
+    } catch {
+      toast.error("Couldn't copy the link");
+    }
+  }
+
+  async function checkGateway(depositId: number) {
+    setCheckingId(depositId);
+    const r = await checkGatewayDeposit(depositId);
+    setCheckingId(null);
+    if (!r.ok) toast.error(r.error ?? "Couldn't reach FlyPay");
+    else toast.info(`FlyPay says: ${r.status ?? "no status"}`);
+  }
 
   const scopedDeposits = useMemo(
     () =>
@@ -598,6 +644,17 @@ export default function DepositsPage() {
                     : "Queued…"
                   : "Crawl banks"}
               </Button>
+              {gatewaysInScope.length > 0 && (
+                <Button
+                  variant="outline"
+                  onClick={() => setGatewayDepositOpen(true)}
+                  title="Make a FlyPay payment link for a player"
+                  className="cursor-pointer"
+                >
+                  <CreditCard className="h-3.5 w-3.5" />
+                  FlyPay deposit
+                </Button>
+              )}
               <Button
                 onClick={() => setManualDepositOpen(true)}
                 className="cursor-pointer"
@@ -1253,6 +1310,42 @@ export default function DepositsPage() {
                                 <Loader2 className="h-3 w-3 animate-spin" />
                                 Agent topping up…
                               </span>
+                            ) : d.status === "pending_match" && isGatewayDeposit(d) ? (
+                              <>
+                                <span className="text-[11px] text-muted-foreground">
+                                  Waiting for the player to pay
+                                </span>
+                                {!isViewer && (
+                                  <>
+                                    <Button
+                                      size="xs"
+                                      variant="outline"
+                                      onClick={() => void copyPaymentLink(d.deposit_id)}
+                                      title="Copy the FlyPay payment link to send again"
+                                      className="cursor-pointer"
+                                    >
+                                      <Copy className="h-3 w-3" />
+                                      Link
+                                    </Button>
+                                    <Button
+                                      size="xs"
+                                      variant="outline"
+                                      onClick={() => void checkGateway(d.deposit_id)}
+                                      disabled={checkingId === d.deposit_id}
+                                      title="Ask FlyPay whether it has been paid"
+                                      className="cursor-pointer"
+                                    >
+                                      {checkingId === d.deposit_id ? (
+                                        <Loader2 className="h-3 w-3 animate-spin" />
+                                      ) : (
+                                        <RefreshCw className="h-3 w-3" />
+                                      )}
+                                      Check
+                                    </Button>
+                                    <RejectDepositButton onClick={() => setConfirmRejectId(d.deposit_id)} />
+                                  </>
+                                )}
+                              </>
                             ) : d.status === "pending_match" ? (
                               <span className="text-[11px] text-muted-foreground">
                                 Waiting for agent
@@ -1436,6 +1529,12 @@ export default function DepositsPage() {
       <ManualDepositDialog
         open={manualDepositOpen}
         onOpenChange={setManualDepositOpen}
+      />
+
+      <GatewayDepositDialog
+        open={gatewayDepositOpen}
+        onOpenChange={setGatewayDepositOpen}
+        gateways={gatewaysInScope}
       />
     </div>
   );

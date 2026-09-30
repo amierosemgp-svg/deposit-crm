@@ -101,6 +101,34 @@ the open one. Nothing on a command moves money, so a failure reverses nothing.
 
 An existing database needs `migrations/2026-08-21-bot-commands.sql`.
 
+## FlyPay (payment-gateway deposits)
+
+Some leaders take deposits through FlyPay instead of a bank. FlyPay's API has
+nothing to crawl — no transaction list, only lookups by an id the merchant
+chose — so the CRM is the merchant: it asks for each payment and hears back.
+
+1. **Setup** (leader/admin, Bank Accounts): add an account with bank name
+   `FlyPay`, then its card button → enter the merchant code, AES key and FlyPay's
+   public key. The CRM generates our RSA key pair and shows the public half;
+   send that to FlyPay's tech team. FlyPay also whitelists the **outgoing IP** of
+   whatever server calls it — without a fixed egress IP every call is refused.
+2. **Deposit** (CS, Deposits → FlyPay deposit): player, amount, DuitNow QR /
+   Online Banking / TNG, game and bonus as usual. The deposit is written at
+   `pending_match`, FlyPay is asked, and CS gets a cashier link to send.
+3. **Callback**: FlyPay posts to `/api/flypay/notify`. The body is decrypted and
+   its RSA signature checked against FlyPay's key; paid → `matched`, failed →
+   `failed`. From `matched` it is approved and completed like any deposit, and
+   completion credits the FlyPay account's balance.
+4. **Check**: on a waiting row, asks FlyPay directly (GetDepositDetail) for when
+   a callback never came. **Reject** on a waiting row cancels an unpaid link; if
+   the money lands anyway the callback reopens it.
+
+`gateway_payments` keeps FlyPay's id, the link, net-of-fee amount and the last
+decrypted response for each payment. `APP_URL` overrides the origin used in
+the callback/return URLs; `FLYPAY_API_BASE` overrides `https://mapi.flypay.site`.
+
+An existing database needs `migrations/2026-09-30-payment-gateways.sql`.
+
 ## Sign-in security
 
 Three checks sit between the password and the session cookie, on

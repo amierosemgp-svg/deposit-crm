@@ -23,7 +23,10 @@ import type {
   GameAccountStock,
   GameCredit,
   GameTransfer,
+  GatewayMethod,
+  GatewayPayment,
   Me,
+  PaymentGateway,
   Player,
   ProviderBoAccount,
   ProviderBoAdjustment,
@@ -241,6 +244,32 @@ type Store = {
     receipt_url?: string;
     skip_bot?: boolean;
   }) => Promise<MutationResult>;
+  /** Payment gateways on accounts the caller can see (no secrets). */
+  loadPaymentGateways: () => Promise<PaymentGateway[]>;
+  /** Connect a bank account to its FlyPay merchant, or change its settings. */
+  savePaymentGateway: (input: {
+    account_id: number;
+    merchant_code: string;
+    aes_key?: string;
+    provider_public_key?: string;
+    regenerate_keys?: boolean;
+    status?: "active" | "inactive";
+  }) => Promise<MutationResult & { gateway?: PaymentGateway }>;
+  /** Open a FlyPay payment for a player; the result carries the cashier link. */
+  createGatewayDeposit: (
+    gatewayId: number,
+    input: {
+      player_id: number;
+      amount: number;
+      payment_method: GatewayMethod;
+      selected_game?: string;
+      bonus_plan_id?: number | null;
+      bonus_override_reason?: string;
+    },
+  ) => Promise<MutationResult & { payment?: GatewayPayment }>;
+  getGatewayPayment: (depositId: number) => Promise<MutationResult & { payment?: GatewayPayment }>;
+  /** Ask FlyPay where a payment stands, and apply the answer. */
+  checkGatewayDeposit: (depositId: number) => Promise<MutationResult & { status?: string }>;
   createWithdrawal: (input: {
     player_id: number;
     /** Omit when withdraw_all is set — the agent discovers the figure. */
@@ -926,6 +955,46 @@ export const useStore = create<Store>((set, get) => {
 
     createDepositIntent: (input) =>
       mutate("/api/deposits", { method: "POST", body: JSON.stringify(input) }),
+
+    loadPaymentGateways: async () => {
+      const res = await api<{ gateways: PaymentGateway[] }>("/api/payment-gateways");
+      return res.data?.gateways ?? [];
+    },
+
+    savePaymentGateway: async (input) => {
+      const res = await api<{ gateway: PaymentGateway }>("/api/payment-gateways", {
+        method: "POST",
+        body: JSON.stringify(input),
+      });
+      if (!res.ok) return { ok: false, error: res.error };
+      return { ok: true, gateway: res.data?.gateway };
+    },
+
+    createGatewayDeposit: async (gatewayId, input) => {
+      const res = await api<{ payment: GatewayPayment }>(
+        `/api/payment-gateways/${gatewayId}/deposits`,
+        { method: "POST", body: JSON.stringify(input) },
+      );
+      // Refresh either way: a refused or unanswered request still leaves a row.
+      await get().refresh();
+      if (!res.ok) return { ok: false, error: res.error };
+      return { ok: true, payment: res.data?.payment };
+    },
+
+    getGatewayPayment: async (depositId) => {
+      const res = await api<{ payment: GatewayPayment }>(`/api/deposits/${depositId}/gateway`);
+      if (!res.ok) return { ok: false, error: res.error };
+      return { ok: true, payment: res.data?.payment };
+    },
+
+    checkGatewayDeposit: async (depositId) => {
+      const res = await api<{ status: string }>(`/api/deposits/${depositId}/gateway`, {
+        method: "POST",
+      });
+      if (!res.ok) return { ok: false, error: res.error };
+      await get().refresh();
+      return { ok: true, status: res.data?.status };
+    },
 
     createWithdrawal: (input) =>
       mutate("/api/withdrawals", { method: "POST", body: JSON.stringify(input) }),
