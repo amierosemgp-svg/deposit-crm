@@ -10,6 +10,10 @@
     {
       "path": "/api/cron/retry-stuck-transfers",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/tally-pokercity",
+      "schedule": "0 22 * * *"
     }
   ]
 }

@@ -43,3 +43,10 @@ public/uploads/
 
 # db backups / dumps
 backups/
+
+# supabase CLI local link cache
+supabase/.temp
+supabase/.branches
+
+# Google service-account keys (the tally cron reads GOOGLE_SERVICE_ACCOUNT_JSON from env instead)
+mycrm-*.json

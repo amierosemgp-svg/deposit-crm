@@ -1,0 +1,428 @@
+import { sql } from "drizzle-orm";
+import type { db as Db } from "@/db";
+import { BUSINESS_TZ } from "@/lib/report-sql";
+
+/**
+ * The daily check of Pokercity's own Google Sheet against the CRM.
+ *
+ * Pokercity's staff keep every deposit and withdrawal in a sheet, one file a
+ * month, alongside keying them into the CRM. The two drift: a row typed in one
+ * place and not the other, a wrong member code, an amount mistyped, a deposit
+ * left sitting at "processing". This finds those, row by row.
+ *
+ * Why row by row and not day totals: day totals are mostly noise. A deposit at
+ * 23:40 is filed under tomorrow on the sheet and today in the CRM; a batch
+ * keyed in late carries the time it was keyed. Totals then disagree on two days
+ * that are both right. Matching each sheet row to the nearest CRM entry for the
+ * same member and amount (within MATCH_WINDOW) absorbs all of that, and what's
+ * left over is what actually disagrees.
+ *
+ * Everything here is pure except loadCrmRows, so it can be run against any
+ * grid and any list of rows.
+ */
+
+export const POKERCITY_ENTITY_ID = 30;
+
+/** How far apart the sheet's time and the CRM's can be and still be one entry. */
+const MATCH_WINDOW_MIN = 36 * 60;
+
+/** Bank movements, not a player's money — they live in bank_cash_outs, not here. */
+const NON_GAME = new Set(["clear bank", "bank charge", "expenses"]);
+/** Deposit-sheet "banks" that are internal credit, never a bank credit. */
+const PSEUDO_BANKS = new Set(["rekemen", "id to id"]);
+
+export type Kind = "deposit" | "withdrawal";
+
+export type SheetRow = {
+  kind: Kind;
+  row: number; // 1-based sheet row, for "row 4101" in the report
+  day: string; // YYYY-MM-DD
+  time: string | null; // HH:MM, null when the cell isn't a readable time
+  code: string;
+  cents: number;
+  bank: string;
+  product: string;
+};
+
+export type CrmRow = {
+  kind: Kind;
+  id: number;
+  day: string;
+  time: string | null;
+  code: string;
+  cents: number;
+  bank: string;
+  status: string;
+};
+
+export const MONTHS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+// ── parsing the sheet ───────────────────────────────────────────────────────
+
+const pad = (n: number) => String(n).padStart(2, "0");
+
+/**
+ * The sheet's date cell, as displayed, to a day of this month — or null.
+ *
+ * The column is a mix. Staff type "1/9/2026" meaning 1 September, into a sheet
+ * whose locale reads m/d: days 1–12 become real dates in January…December that
+ * DISPLAY as "1/9/2026", and 13 onwards stay text. Either way the display is
+ * day/month, which is why this reads the display and not the value. A date
+ * someone entered properly shows month/day, and is read that way.
+ */
+export function parseSheetDay(cell: string, year: number, month: number): string | null {
+  const s = cell.trim();
+  let day: number | null = null;
+  const iso = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (iso) {
+    if (+iso[1] === year && +iso[2] === month) day = +iso[3];
+  } else {
+    const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (!m || +m[3] !== year) return null;
+    if (+m[2] === month) day = +m[1];
+    else if (+m[1] === month) day = +m[2];
+  }
+  const last = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  if (day == null || day < 1 || day > last) return null;
+  return `${year}-${pad(month)}-${pad(day)}`;
+}
+
+/** "2355", "122", "23:55" → "23:55" / "01:22". */
+export function parseSheetTime(cell: string): string | null {
+  const s = cell.trim().replace(/[:.]/g, "");
+  if (!/^\d{1,4}$/.test(s)) return null;
+  const v = Number(s);
+  const hh = Math.floor(v / 100);
+  const mm = v % 100;
+  return hh < 24 && mm < 60 ? `${pad(hh)}:${pad(mm)}` : null;
+}
+
+/** "1,250.00" / "RM 50" → cents; 0 when it isn't a number. */
+export function parseCents(cell: string): number {
+  const n = Number(cell.replace(/rm|,|\s/gi, ""));
+  return Number.isFinite(n) ? Math.round(n * 100) : 0;
+}
+
+const norm = (s: string) => s.trim().toLowerCase();
+
+/**
+ * A +Deposit or -Withdrawal tab to rows.
+ *
+ * The header is found by its labels, not a fixed row: this month it's row 15
+ * on one tab and row 12 on the other, and the block above it (bank balances,
+ * targets, a lookup box) grows and shrinks. Rows without a readable date are
+ * the drag-filled padding at the bottom, or that block, and are skipped.
+ */
+export function parseTab(grid: string[][], kind: Kind, year: number, month: number): SheetRow[] {
+  const headerAt = grid.findIndex((r) => {
+    const cells = r.map(norm);
+    return cells.includes("date") && cells.includes("member code") && cells.includes("amount");
+  });
+  if (headerAt < 0) {
+    throw new Error(`No header row (Date / Member Code / Amount) on the ${kind} tab`);
+  }
+  const header = grid[headerAt].map(norm);
+  const col = (name: string) => header.indexOf(name);
+  const c = {
+    date: col("date"),
+    time: col("time"),
+    code: col("member code"),
+    product: col("product"),
+    bank: col("bank"),
+    amount: col("amount"),
+  };
+  for (const [name, i] of Object.entries(c)) {
+    if (i < 0) throw new Error(`No "${name}" column on the ${kind} tab`);
+  }
+
+  const rows: SheetRow[] = [];
+  grid.slice(headerAt + 1).forEach((r, i) => {
+    const cell = (j: number) => (r[j] ?? "").trim();
+    const day = parseSheetDay(cell(c.date), year, month);
+    const product = cell(c.product);
+    const bank = cell(c.bank);
+    const cents = parseCents(cell(c.amount));
+    if (!day || !product || NON_GAME.has(norm(product)) || cents <= 0) return;
+    if (kind === "deposit" && (!bank || PSEUDO_BANKS.has(norm(bank)))) return;
+    rows.push({
+      kind,
+      row: headerAt + 2 + i,
+      day,
+      time: parseSheetTime(cell(c.time)),
+      code: cell(c.code).toUpperCase(),
+      cents,
+      bank,
+      product,
+    });
+  });
+  return rows;
+}
+
+// ── the CRM side ────────────────────────────────────────────────────────────
+
+/** Settled in the CRM — what the sheet's rows should match. */
+const DONE = new Set(["completed", "paid"]);
+
+/**
+ * Pokercity's deposits and withdrawals in [from, to), business dates.
+ * Failed ones are left out; the rest come back with their status, so a sheet
+ * row can be told "it's in the CRM, but stuck at processing".
+ */
+export async function loadCrmRows(db: typeof Db, from: string, to: string): Promise<CrmRow[]> {
+  const res = await db.execute(sql`
+    SELECT 'deposit' AS kind, d.deposit_id AS id,
+           upper(trim(p.username)) AS code,
+           round(d.deposit_amount * 100)::bigint AS cents,
+           d.status::text AS status, coalesce(d.bank_name, '') AS bank,
+           to_char(d.deposit_date AT TIME ZONE ${BUSINESS_TZ}, 'YYYY-MM-DD') AS day,
+           CASE WHEN d.deposit_time_known
+                THEN to_char(d.deposit_date AT TIME ZONE ${BUSINESS_TZ}, 'HH24:MI') END AS time
+      FROM deposits d JOIN players p ON p.player_id = d.player_id
+     WHERE p.company_entity_id = ${POKERCITY_ENTITY_ID}
+       AND d.status <> 'failed'
+       AND d.deposit_date >= (${from}::date)::timestamp AT TIME ZONE ${BUSINESS_TZ}
+       AND d.deposit_date <  (${to}::date)::timestamp AT TIME ZONE ${BUSINESS_TZ}
+    UNION ALL
+    SELECT 'withdrawal', w.withdrawal_id,
+           upper(trim(p.username)),
+           round(w.requested_amount * 100)::bigint,
+           w.status::text, coalesce(w.bank_name, ''),
+           to_char(coalesce(w.paid_at, w.created_at) AT TIME ZONE ${BUSINESS_TZ}, 'YYYY-MM-DD'),
+           to_char(coalesce(w.paid_at, w.created_at) AT TIME ZONE ${BUSINESS_TZ}, 'HH24:MI')
+      FROM withdrawals w JOIN players p ON p.player_id = w.player_id
+     WHERE p.company_entity_id = ${POKERCITY_ENTITY_ID}
+       AND w.status <> 'failed'
+       AND coalesce(w.paid_at, w.created_at) >= (${from}::date)::timestamp AT TIME ZONE ${BUSINESS_TZ}
+       AND coalesce(w.paid_at, w.created_at) <  (${to}::date)::timestamp AT TIME ZONE ${BUSINESS_TZ}
+  `);
+  return (res.rows as Record<string, unknown>[]).map((r) => ({
+    kind: r.kind as Kind,
+    id: Number(r.id),
+    code: String(r.code ?? ""),
+    cents: Number(r.cents),
+    status: String(r.status),
+    bank: String(r.bank ?? ""),
+    day: String(r.day),
+    time: r.time == null ? null : String(r.time),
+  }));
+}
+
+// ── matching ────────────────────────────────────────────────────────────────
+
+/** Minutes since epoch, reading the local wall clock as if it were UTC. */
+function minutes(day: string, time: string | null): number {
+  const [y, m, d] = day.split("-").map(Number);
+  const [hh, mm] = (time ?? "12:00").split(":").map(Number);
+  return Date.UTC(y, m - 1, d, hh, mm) / 60000;
+}
+
+/** Distance between two entries; an unknown time only matches its own day. */
+function gap(a: { day: string; time: string | null }, b: { day: string; time: string | null }) {
+  if (a.time && b.time) return Math.abs(minutes(a.day, a.time) - minutes(b.day, b.time));
+  return a.day === b.day ? 0 : Infinity;
+}
+
+/**
+ * Pair each sheet row with a CRM row of the same member and amount, closest in
+ * time first. Greedy by gap is enough: two same-member same-amount entries an
+ * hour apart pair with their own neighbours rather than crossing.
+ */
+function pairUp(sheet: SheetRow[], crm: CrmRow[]) {
+  const byKey = new Map<string, CrmRow[]>();
+  for (const c of crm) {
+    const k = `${c.kind}|${c.code}|${c.cents}`;
+    byKey.set(k, [...(byKey.get(k) ?? []), c]);
+  }
+  const pairs: { g: number; s: SheetRow; c: CrmRow }[] = [];
+  for (const s of sheet) {
+    for (const c of byKey.get(`${s.kind}|${s.code}|${s.cents}`) ?? []) {
+      const g = gap(s, c);
+      if (g <= MATCH_WINDOW_MIN) pairs.push({ g, s, c });
+    }
+  }
+  pairs.sort((a, b) => a.g - b.g || a.s.row - b.s.row || a.c.id - b.c.id);
+  const usedS = new Set<SheetRow>();
+  const usedC = new Set<CrmRow>();
+  const matched = new Map<SheetRow, CrmRow>();
+  for (const { s, c } of pairs) {
+    if (usedS.has(s) || usedC.has(c)) continue;
+    usedS.add(s);
+    usedC.add(c);
+    matched.set(s, c);
+  }
+  return {
+    matched,
+    sheetLeft: sheet.filter((s) => !usedS.has(s)),
+    crmLeft: crm.filter((c) => !usedC.has(c)),
+  };
+}
+
+export type Finding =
+  | { type: "stuck"; s: SheetRow; c: CrmRow } // in the CRM, never settled
+  | { type: "amount"; s: SheetRow; c: CrmRow } // same member, near time, other amount
+  | { type: "code"; s: SheetRow; c: CrmRow } // same amount, near time, other member
+  | { type: "sheet-only"; s: SheetRow }
+  | { type: "crm-only"; c: CrmRow };
+
+export const findingDay = (f: Finding) => ("s" in f ? f.s.day : f.c.day);
+
+/**
+ * What doesn't agree, for sheet rows and settled CRM rows dated up to
+ * `through`. Rows after it are loaded only so that a late-evening entry can
+ * find its partner across midnight; they are never reported, because the day
+ * they belong to isn't over.
+ */
+export function reconcile(sheet: SheetRow[], crm: CrmRow[], through: string): Finding[] {
+  const done = crm.filter((c) => DONE.has(c.status));
+  const open = crm.filter((c) => !DONE.has(c.status));
+  const first = pairUp(sheet, done);
+  // A leftover sheet row that matches an unsettled CRM row: the money arrived
+  // per the sheet, the CRM entry is still waiting on someone.
+  const second = pairUp(first.sheetLeft, open);
+
+  const findings: Finding[] = [];
+  for (const [s, c] of second.matched) findings.push({ type: "stuck", s, c });
+
+  // Near misses, so the report can say "this is probably that" instead of two
+  // unrelated-looking lines. One-to-one, tightest first.
+  const sheetLeft = new Set(second.sheetLeft);
+  const crmLeft = new Set(first.crmLeft);
+  const near = (type: "amount" | "code", limit: number) => {
+    const cands: { g: number; s: SheetRow; c: CrmRow }[] = [];
+    for (const s of sheetLeft) {
+      for (const c of crmLeft) {
+        if (s.kind !== c.kind) continue;
+        const sameCode = s.code === c.code;
+        const sameAmount = s.cents === c.cents;
+        if (type === "amount" ? !(sameCode && !sameAmount) : !(sameAmount && !sameCode)) continue;
+        const g = gap(s, c);
+        if (g <= limit) cands.push({ g, s, c });
+      }
+    }
+    cands.sort((a, b) => a.g - b.g || a.s.row - b.s.row);
+    for (const { s, c } of cands) {
+      if (!sheetLeft.has(s) || !crmLeft.has(c)) continue;
+      sheetLeft.delete(s);
+      crmLeft.delete(c);
+      findings.push({ type, s, c });
+    }
+  };
+  near("amount", 60);
+  near("code", 10);
+
+  for (const s of sheetLeft) findings.push({ type: "sheet-only", s });
+  for (const c of crmLeft) findings.push({ type: "crm-only", c });
+
+  return findings
+    .filter((f) => findingDay(f) <= through)
+    .sort((a, b) => {
+      const ka = "s" in a ? `${a.s.day} ${a.s.time ?? ""}` : `${a.c.day} ${a.c.time ?? ""}`;
+      const kb = "s" in b ? `${b.s.day} ${b.s.time ?? ""}` : `${b.c.day} ${b.c.time ?? ""}`;
+      return ka.localeCompare(kb);
+    });
+}
+
+// ── the report ──────────────────────────────────────────────────────────────
+
+const rm = (cents: number) =>
+  `RM ${(cents / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+const shortDate = (day: string) => {
+  const [, m, d] = day.split("-").map(Number);
+  return `${d} ${MONTHS[m - 1].slice(0, 3)}`;
+};
+
+const at = (r: { time: string | null }) => (r.time ? ` at ${r.time}` : "");
+const kindWord = (k: Kind) => (k === "deposit" ? "Deposit" : "Withdrawal");
+const statusWord = (s: string) => s.replace(/_/g, " ");
+
+function describe(f: Finding, withDate: boolean): string {
+  const d = (day: string) => (withDate ? `${shortDate(day)} ` : "");
+  switch (f.type) {
+    case "stuck":
+      return `${d(f.s.day)}${kindWord(f.s.kind)} ${f.s.code} ${rm(f.s.cents)}${at(f.s)} — in the CRM (#${f.c.id}) but still "${statusWord(f.c.status)}"`;
+    case "amount":
+      return `${d(f.s.day)}${kindWord(f.s.kind)} ${f.s.code}: sheet ${rm(f.s.cents)}${at(f.s)}, CRM ${rm(f.c.cents)}${at(f.c)} (#${f.c.id}) — amounts differ`;
+    case "code":
+      return `${d(f.s.day)}${kindWord(f.s.kind)} ${rm(f.s.cents)}${at(f.s)}: sheet says ${f.s.code}, CRM says ${f.c.code} (#${f.c.id}) — member code differs`;
+    case "sheet-only":
+      return `${d(f.s.day)}${kindWord(f.s.kind)} ${f.s.code} ${rm(f.s.cents)}${at(f.s)} (${f.s.bank || "no bank"}, ${f.s.product}) — on the sheet, not in the CRM`;
+    case "crm-only":
+      return `${d(f.c.day)}${kindWord(f.c.kind)} ${f.c.code} ${rm(f.c.cents)}${at(f.c)} (#${f.c.id}, ${f.c.bank || "no bank"}) — in the CRM, not on the sheet`;
+  }
+}
+
+function dayTotals(rows: { day: string; cents: number; kind: Kind }[], day: string, kind: Kind) {
+  const r = rows.filter((x) => x.day === day && x.kind === kind);
+  return { n: r.length, cents: r.reduce((a, x) => a + x.cents, 0) };
+}
+
+/** Older open items listed individually up to this many; the rest are counted. */
+const OLDER_LIST_MAX = 25;
+
+export function buildReport(args: {
+  day: string;
+  sheetName: string;
+  sheet: SheetRow[];
+  crm: CrmRow[];
+  findings: Finding[];
+}): string {
+  const { day, sheetName, sheet, crm, findings } = args;
+  const done = crm.filter((c) => DONE.has(c.status));
+  const lines: string[] = [];
+  const [y, m, d] = day.split("-").map(Number);
+  const weekday = new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-GB", {
+    weekday: "short",
+    timeZone: "UTC",
+  });
+  lines.push(`Pokercity sheet vs CRM — ${weekday} ${shortDate(day)} ${y}`);
+  lines.push(`Sheet: ${sheetName}`);
+  lines.push("");
+  for (const kind of ["deposit", "withdrawal"] as Kind[]) {
+    const s = dayTotals(sheet, day, kind);
+    const c = dayTotals(done, day, kind);
+    const mark = s.n === c.n && s.cents === c.cents ? "" : "  ≠";
+    lines.push(
+      `${kindWord(kind)}s: sheet ${s.n} / ${rm(s.cents)} · CRM ${c.n} / ${rm(c.cents)}${mark}`,
+    );
+  }
+
+  const today = findings.filter((f) => findingDay(f) === day);
+  const older = findings.filter((f) => findingDay(f) < day);
+  lines.push("");
+  if (!today.length) {
+    lines.push(`${shortDate(day)}: every row matches ✅`);
+  } else {
+    lines.push(`${shortDate(day)}: ${today.length} to check`);
+    for (const f of today) lines.push(`• ${describe(f, false)}`);
+  }
+  if (!today.length && lines.some((l) => l.endsWith("≠"))) {
+    lines.push("(The day totals differ only because of entries across midnight or keyed in late.)");
+  }
+
+  if (older.length) {
+    lines.push("");
+    lines.push(`Still open from earlier this month: ${older.length}`);
+    for (const f of older.slice(0, OLDER_LIST_MAX)) lines.push(`• ${describe(f, true)}`);
+    if (older.length > OLDER_LIST_MAX) lines.push(`…and ${older.length - OLDER_LIST_MAX} more`);
+  }
+  return lines.join("\n");
+}
+
+/** Telegram caps a message at 4096 characters; split on line breaks. */
+export function chunkMessage(text: string, max = 3900): string[] {
+  const out: string[] = [];
+  let cur = "";
+  for (const line of text.split("\n")) {
+    if (cur && cur.length + line.length + 1 > max) {
+      out.push(cur);
+      cur = "";
+    }
+    cur = cur ? `${cur}\n${line}` : line;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
