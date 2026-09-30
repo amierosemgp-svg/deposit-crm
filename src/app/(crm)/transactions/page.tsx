@@ -2852,12 +2852,13 @@ export default function TransactionsPage() {
        * read-only. The claim cell itself is the way in and the way out — it
        * opens on an unheld row (to take it) and on your own (to release it),
        * and never on a colleague's, which the server refuses anyway.
+       * A company leader edits the cells of any row; the claim stays its holder's.
        */
       const owner = ownerOf(rowIndex);
       if (owner !== undefined) {
         const mine = owner !== null && owner === me?.user_id;
         if (colIndex === assignColOf(tab)) return owner === null || mine;
-        if (!mine) return false;
+        if (!mine && me?.role !== "company_leader") return false;
       } else if (colIndex === assignColOf(tab)) {
         return true;
       }

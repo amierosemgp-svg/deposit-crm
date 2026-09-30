@@ -80,8 +80,10 @@ export async function PATCH(
      * courtesy, not a rule — two desks editing the same row is how a figure
      * gets corrected twice in opposite directions. An unheld row stays open:
      * the bot and the admin flows patch those, and nobody is racing for it.
+     * A company leader can correct any row in their scope, held or not.
      */
     if (
+      user.role !== "company_leader" &&
       row.assigned_to_user_id !== null &&
       row.assigned_to_user_id !== user.user_id
     ) {
