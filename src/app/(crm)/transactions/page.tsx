@@ -2865,6 +2865,10 @@ export default function TransactionsPage() {
         if (!DEPOSIT_EDITABLE_COLS.has(colIndex)) return false;
         const dep = depositById.get(Number(rows[rowIndex]?.id));
         if (!dep) return false;
+        // An auto row's amount and bank are the bank statement's, not ours.
+        if (!dep.skip_bot && (colIndex === COL.deposit.amount || colIndex === COL.deposit.bank)) {
+          return false;
+        }
         if (DEPOSIT_EDITABLE_STATUS.has(dep.status)) return true;
         // A completed row a person entered is still correctable: the server
         // unwinds the credit it booked and lays down the new one. A row the
@@ -3067,7 +3071,18 @@ export default function TransactionsPage() {
           toast.error("Bank is required");
           return;
         }
-        const res = await updateDepositDraft(dep.deposit_id, { bank_name: v });
+        // The cell names one of our accounts, same as a new entry — the account
+        // is what moves the balance; the bank's name alone moved nothing.
+        const into = accountByLabel.get(v.toLowerCase());
+        if (!into) {
+          toast.error(`"${v}" is not one of our accounts — pick one from the list`);
+          return;
+        }
+        if (into.account_id === dep.received_into_account_id) return;
+        const res = await updateDepositDraft(dep.deposit_id, {
+          received_into_account_id: into.account_id,
+          bank_name: into.bank_name,
+        });
         report(res, "Failed to set the bank");
       }
     },
@@ -3081,6 +3096,7 @@ export default function TransactionsPage() {
       playerByCode,
       gameByName,
       updateDeposit,
+      accountByLabel,
       patchRangeRow,
       loadRangeRows,
     ],

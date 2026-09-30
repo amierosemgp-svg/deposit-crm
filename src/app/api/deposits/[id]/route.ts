@@ -1,10 +1,11 @@
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { deposits, players, referralBonuses, transactions } from "@/db/schema";
+import { bankAccounts, deposits, players, referralBonuses, transactions } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import { canOverrideEligibility, resolveBonusForDeposit } from "@/lib/bonus";
+import { InsufficientBankBalanceError } from "@/lib/bank-balance";
 import { bonusOn } from "@/lib/bonus-math";
 import { rebookCompletedDeposit, reverseCompletedDeposit } from "@/lib/deposit-complete";
 import { InsufficientKioskCreditError } from "@/lib/kiosk-credit";
@@ -30,6 +31,8 @@ const patchSchema = z.object({
   // refused below — so correcting a mistyped figure here costs nothing to undo.
   deposit_amount: z.number().positive().optional(),
   bank_name: z.string().min(1).max(60).optional(),
+  // Which of our accounts the money landed in — the one whose balance moves.
+  received_into_account_id: z.number().int().positive().optional(),
   selected_game_username: z.string().max(120).nullable().optional(),
   deposit_date: z.string().datetime({ offset: true }).optional(),
 });
@@ -113,6 +116,25 @@ export async function PATCH(
     }
     if (row.status === "failed") {
       return jsonError("Deposit is already failed", 409);
+    }
+    /**
+     * An auto row's amount and bank are what the bank statement said.
+     *
+     * The agent matched the row off a real credit into a real account; typing
+     * a different figure or account over it would leave the CRM disagreeing
+     * with the statement it was read from. Player, game and bonus stay open —
+     * those are CS's to decide.
+     */
+    if (
+      !row.skip_bot &&
+      (body.deposit_amount !== undefined ||
+        body.bank_name !== undefined ||
+        body.received_into_account_id !== undefined)
+    ) {
+      return jsonError(
+        "That's an auto deposit — its amount and bank come from the bank statement and can't be edited",
+        409,
+      );
     }
 
     let playerPatch = {};
@@ -224,6 +246,41 @@ export async function PATCH(
      * alone, correcting 500 to 50 would keep a bonus struck on the larger
      * number and the deposit would credit more than it took in.
      */
+    /**
+     * A new bank account moves the money with it.
+     *
+     * The account id is what a completion credits; the name alone was only a
+     * label, so changing it used to leave the money in the old account.
+     */
+    let bankPatch: Record<string, unknown> = {};
+    // For the edit note: "AMBANK 2 → CIMB 1" reads; two account ids don't.
+    let accountMove: { from: string | null; to: string } | null = null;
+    if (
+      body.received_into_account_id !== undefined &&
+      body.received_into_account_id !== row.received_into_account_id
+    ) {
+      const [account] = await db
+        .select()
+        .from(bankAccounts)
+        .where(eq(bankAccounts.account_id, body.received_into_account_id));
+      if (!account) return jsonError("Bank account not found", 404);
+      if (companyEntityId !== null && account.entity_id !== companyEntityId) {
+        throw new AuthError(403, "That account belongs to another company");
+      }
+      bankPatch = { received_into_account_id: account.account_id, bank_name: account.bank_name };
+      const labelOf = (a: typeof account) => a.label?.trim() || `${a.bank_name} ${a.account_number}`;
+      const [old] =
+        row.received_into_account_id === null
+          ? []
+          : await db
+              .select()
+              .from(bankAccounts)
+              .where(eq(bankAccounts.account_id, row.received_into_account_id));
+      accountMove = { from: old ? labelOf(old) : null, to: labelOf(account) };
+    } else if (body.bank_name !== undefined) {
+      bankPatch = { bank_name: body.bank_name };
+    }
+
     let amountPatch = {};
     if (body.deposit_amount !== undefined && body.deposit_amount !== row.deposit_amount) {
       const pct =
@@ -242,7 +299,7 @@ export async function PATCH(
       ...playerPatch,
       ...bonusPatch,
       ...amountPatch,
-      ...(body.bank_name !== undefined ? { bank_name: body.bank_name } : {}),
+      ...bankPatch,
       ...(body.selected_game_username !== undefined
         ? { selected_game_username: body.selected_game_username }
         : {}),
@@ -269,6 +326,7 @@ export async function PATCH(
       const moved =
         saved.total_amount !== row.total_amount ||
         saved.deposit_amount !== row.deposit_amount ||
+        saved.received_into_account_id !== row.received_into_account_id ||
         saved.selected_game !== row.selected_game ||
         saved.selected_game_username !== row.selected_game_username ||
         saved.player_id !== row.player_id;
@@ -337,6 +395,7 @@ export async function PATCH(
       {
         deposit_amount: row.deposit_amount,
         bank_name: row.bank_name,
+        bank_account: accountMove?.from,
         selected_game: row.selected_game,
         selected_game_username: row.selected_game_username,
         deposit_date: row.deposit_date,
@@ -347,6 +406,7 @@ export async function PATCH(
       {
         deposit_amount: updated.deposit_amount,
         bank_name: updated.bank_name,
+        bank_account: accountMove?.to,
         selected_game: updated.selected_game,
         selected_game_username: updated.selected_game_username,
         deposit_date: updated.deposit_date,
@@ -395,6 +455,7 @@ export async function PATCH(
     });
   } catch (e) {
     if (e instanceof InsufficientKioskCreditError) return jsonError(e.message, 422);
+    if (e instanceof InsufficientBankBalanceError) return jsonError(e.message, 422);
     return (
       authErrorResponse(e) ?? (console.error(e), jsonError("Server error", 500))
     );
@@ -560,6 +621,7 @@ export async function DELETE(
     });
   } catch (e) {
     if (e instanceof InsufficientKioskCreditError) return jsonError(e.message, 422);
+    if (e instanceof InsufficientBankBalanceError) return jsonError(e.message, 422);
     return (
       authErrorResponse(e) ?? (console.error(e), jsonError("Server error", 500))
     );

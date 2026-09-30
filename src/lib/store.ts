@@ -57,6 +57,7 @@ export type DepositPatch = Partial<
     | "player_id"
     | "deposit_amount"
     | "bank_name"
+    | "received_into_account_id"
     | "deposit_date"
   >
 > & { bonus_override_reason?: string };
