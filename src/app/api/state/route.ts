@@ -1,4 +1,5 @@
 import { aliasedTable, and, asc, desc, eq, getTableColumns, gte, inArray, isNull, or, sql } from "drizzle-orm";
+import { csCutoff } from "@/lib/report-sql";
 import { db } from "@/db";
 import {
   bankAccounts,
@@ -170,12 +171,9 @@ export async function GET() {
           .groupBy(players.company_entity_id)
       : [];
 
-    // CS agents work a rolling day: transactions older than 24h are not
-    // theirs to browse. Leaders and admins see the full window.
-    const csCutoffIso =
-      user.role === "cs_agent"
-        ? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
-        : null;
+    // CS agents' look-back window (see csCutoff). Leaders and admins see the
+    // full window.
+    const csCutoffIso = csCutoff(user);
 
     const accountEntityIds =
       entityIds ?? entityTree.map((e) => e.entity_id);

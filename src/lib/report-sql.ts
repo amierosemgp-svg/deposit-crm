@@ -69,10 +69,15 @@ export type ReportParams = {
  * Returned as an ISO instant rather than a business day, so the window rolls
  * with the clock instead of snapping to midnight and emptying the sheet at the
  * start of a shift.
+ *
+ * Off for now: CS see all-time data until the business says otherwise. Set
+ * CS_WINDOW_HOURS back to 24 to restore the rolling day everywhere at once.
  */
+const CS_WINDOW_HOURS: number | null = null;
+
 export function csCutoff(user: AuthedUser): string | null {
-  return user.role === "cs_agent"
-    ? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+  return user.role === "cs_agent" && CS_WINDOW_HOURS !== null
+    ? new Date(Date.now() - CS_WINDOW_HOURS * 60 * 60 * 1000).toISOString()
     : null;
 }
 

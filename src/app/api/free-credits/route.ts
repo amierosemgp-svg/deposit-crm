@@ -1,4 +1,5 @@
 import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
+import { csCutoff } from "@/lib/report-sql";
 import { z } from "zod";
 import { db } from "@/db";
 import { players, transactions } from "@/db/schema";
@@ -102,15 +103,9 @@ export async function GET() {
           : sql`false`,
       );
     }
-    // CS agents see a rolling day, matching the rest of the sheet.
-    if (user.role === "cs_agent") {
-      conds.push(
-        gte(
-          transactions.created_at,
-          new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
-        ),
-      );
-    }
+    // CS agents' look-back window, matching the rest of the sheet.
+    const cutoff = csCutoff(user);
+    if (cutoff) conds.push(gte(transactions.created_at, cutoff));
 
     const rows = await db
       .select()

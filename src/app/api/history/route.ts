@@ -1,3 +1,4 @@
+import { csCutoff } from "@/lib/report-sql";
 import {
   and,
   desc,
@@ -82,15 +83,9 @@ export async function GET(request: Request) {
 
     const conds: SQL[] = [];
 
-    // CS agents work a rolling day — history past 24h is not theirs to browse.
-    if (user.role === "cs_agent") {
-      conds.push(
-        gte(
-          transactions.created_at,
-          new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
-        ),
-      );
-    }
+    // CS agents' look-back window (see csCutoff).
+    const cutoff = csCutoff(user);
+    if (cutoff) conds.push(gte(transactions.created_at, cutoff));
 
     // When narrowed to specific companies, only rows for players in those
     // companies are visible (system/null-player events are excluded). A fully

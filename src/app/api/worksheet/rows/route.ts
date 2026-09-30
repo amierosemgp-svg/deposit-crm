@@ -68,7 +68,7 @@ export async function GET(request: Request) {
     const offset = Math.max(Number(sp.get("offset") ?? 0) || 0, 0);
 
     /**
-     * A CS agent sees a rolling day, whatever range they ask for.
+     * A CS agent sees their look-back window, whatever range they ask for.
      *
      * The sheet's date filter is theirs to move, and without this a CS could
      * simply widen it and read the month — the row cap that used to hide older
