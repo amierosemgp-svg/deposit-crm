@@ -56,6 +56,7 @@ import { cn } from "@/lib/utils";
 import type { BotCommand, Deposit } from "@/lib/types";
 import { OPEN_BOT_COMMAND_STATUSES } from "@/lib/types";
 import { extractSenderName } from "@/lib/bank-remark";
+import { canActOnClaim } from "@/lib/claims";
 
 const STATUS_FILTERS: { value: string; tab: string }[] = [
   { value: "pending", tab: "Pending" },
@@ -274,10 +275,10 @@ export default function DepositsPage() {
             selected.includes(d.deposit_id) &&
             d.player_id !== null &&
             !!d.selected_game &&
-            d.assigned_to_user_id === me?.user_id,
+            canActOnClaim(me, d.assigned_to_user_id),
         )
         .map((d) => d.deposit_id),
-    [filtered, selected, me?.user_id],
+    [filtered, selected, me],
   );
 
   const depositById = (id: number | null) =>
@@ -884,12 +885,12 @@ export default function DepositsPage() {
               {filtered.map((d) => {
                 const actionable = d.status === "pending" || d.status === "matched";
                 const editable = actionable && !isViewer;
-                const isMine = d.assigned_to_user_id === me?.user_id;
+                const canAct = canActOnClaim(me, d.assigned_to_user_id);
                 const canApprove =
-                  editable && d.player_id !== null && !!d.selected_game && isMine;
+                  editable && d.player_id !== null && !!d.selected_game && canAct;
                 const approveHint = !editable
                   ? undefined
-                  : !isMine
+                  : !canAct
                     ? d.assigned_to_user_id
                       ? "Handled by someone else"
                       : "Assign this deposit to yourself first"

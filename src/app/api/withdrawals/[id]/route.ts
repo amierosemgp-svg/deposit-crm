@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { players, transactions, withdrawals } from "@/db/schema";
+import { canActOnClaim } from "@/lib/claims";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import { appendEditNote, describeChanges, diffFields, logActivity } from "@/lib/activity-log";
@@ -232,9 +233,9 @@ export async function DELETE(
       if (user.companyIds !== null && !user.companyIds.includes(player.company_entity_id)) {
         throw new AuthError(403, "Withdrawal is outside your company scope");
       }
-      // Held by the person deleting it — see the deposit delete for why a
-      // delete demands the claim where an edit does not.
-      if (wd.assigned_to_user_id !== user.user_id) {
+      // Held by the person deleting it (or a company leader) — see the deposit
+      // delete for why a delete demands the claim where an edit does not.
+      if (!canActOnClaim(user, wd.assigned_to_user_id)) {
         throw new AuthError(
           409,
           wd.assigned_to_user_id === null

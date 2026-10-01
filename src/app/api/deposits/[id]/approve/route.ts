@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { deposits, transactions } from "@/db/schema";
+import { canActOnClaim } from "@/lib/claims";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 
@@ -39,8 +40,9 @@ export async function POST(
         throw new AuthError(409, `Deposit is "${row.status}", expected pending/matched`);
       }
       // Claim first, then act: whoever dispatches a deposit to the agent owns
-      // it, and the claim is what stops two agents pushing the same one.
-      if (row.assigned_to_user_id !== user.user_id) {
+      // it, and the claim is what stops two agents pushing the same one. A
+      // company leader may dispatch a colleague's, and the claim moves to them.
+      if (!canActOnClaim(user, row.assigned_to_user_id)) {
         throw new AuthError(
           409,
           row.assigned_to_user_id
@@ -61,6 +63,7 @@ export async function POST(
         .set({
           status: "processing",
           handled_by_user_id: user.user_id,
+          assigned_to_user_id: user.user_id,
           // The moment it stopped waiting on a human. Kept apart from
           // updated_at, which the completion overwrites minutes later.
           approved_at: nowIso,

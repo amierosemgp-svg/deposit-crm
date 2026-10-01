@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { bankAccounts, deposits, players, referralBonuses, transactions } from "@/db/schema";
+import { canActOnClaim } from "@/lib/claims";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import { canOverrideEligibility, resolveBonusForDeposit } from "@/lib/bonus";
@@ -511,9 +512,10 @@ export async function DELETE(
        * back, and the case it exists for is a duplicate: two people clearing
        * "the extra one" at the same moment would take out both copies. So the
        * row must be held by the person removing it, which costs one keystroke
-       * (⌘A) and makes the log say who owned it.
+       * (⌘A) and makes the log say who owned it. A company leader may remove
+       * a colleague's — still one person, and the log carries the leader.
        */
-      if (row.assigned_to_user_id !== user.user_id) {
+      if (!canActOnClaim(user, row.assigned_to_user_id)) {
         throw new AuthError(
           409,
           row.assigned_to_user_id === null

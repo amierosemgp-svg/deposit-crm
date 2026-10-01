@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { gameCredits, players, transactions, withdrawals } from "@/db/schema";
+import { canActOnClaim } from "@/lib/claims";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { creditWhere, resolveGameLogin } from "@/lib/game-credits";
 import { moveKioskCredit } from "@/lib/kiosk-credit";
@@ -31,8 +32,9 @@ export async function POST(
         throw new AuthError(409, `Withdrawal is "${row.status}", expected requested`);
       }
       // Same rule as approving a deposit: claim it, then act. Pulling moves
-      // real credit under your name, so it needs an owner.
-      if (row.assigned_to_user_id !== user.user_id) {
+      // real credit under your name, so it needs an owner — a company leader
+      // pulling a colleague's takes the claim with it.
+      if (!canActOnClaim(user, row.assigned_to_user_id)) {
         throw new AuthError(
           409,
           row.assigned_to_user_id
@@ -97,6 +99,7 @@ export async function POST(
           status: "credits_pulled",
           credit_pulled_amount: pulled,
           handled_by_user_id: user.user_id,
+          assigned_to_user_id: user.user_id,
           updated_at: nowIso,
         })
         .where(eq(withdrawals.withdrawal_id, withdrawalId))

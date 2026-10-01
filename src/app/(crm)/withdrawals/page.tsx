@@ -49,6 +49,7 @@ import {
   type SummaryRow,
 } from "@/components/confirm-action-dialog";
 import { paysWithdrawals } from "@/lib/types";
+import { canActOnClaim } from "@/lib/claims";
 
 const STATUS_FILTERS: { value: string; tab: string }[] = [
   { value: "requested", tab: "Requested" },
@@ -226,10 +227,10 @@ export default function WithdrawalsPage() {
           (w) =>
             selected.includes(w.withdrawal_id) &&
             w.status === "requested" &&
-            w.assigned_to_user_id === me?.user_id,
+            canActOnClaim(me, w.assigned_to_user_id),
         )
         .map((w) => w.withdrawal_id),
-    [sorted, selected, me?.user_id],
+    [sorted, selected, me],
   );
 
   function toggleRow(withdrawalId: number) {
@@ -599,11 +600,11 @@ export default function WithdrawalsPage() {
                   (b) => b.account_number === w.bank_account_number,
                 ) ??
                 player?.bank_accounts?.find((b) => b.bank_name === w.bank_name);
-              const isMine = w.assigned_to_user_id === me?.user_id;
+              const canAct = canActOnClaim(me, w.assigned_to_user_id);
               // Pulling needs the claim, same as approving a deposit.
-              const canPull = !isViewer && w.status === "requested" && isMine;
+              const canPull = !isViewer && w.status === "requested" && canAct;
               const showPull = !isViewer && w.status === "requested";
-              const pullHint = !isMine
+              const pullHint = !canAct
                 ? w.assigned_to_user_id
                   ? "Handled by someone else"
                   : "Assign this withdrawal to yourself first"

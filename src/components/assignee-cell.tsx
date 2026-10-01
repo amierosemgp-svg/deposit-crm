@@ -15,6 +15,9 @@ type Kind = "deposit" | "withdrawal" | "game_transfer";
  * the row has moved past the point where it can be handed back (an approved
  * deposit stays with whoever sent it to the agent); the server enforces the
  * same rule.
+ *
+ * A company leader sees "take" and "release" on a colleague's claim too — the
+ * server lets them clear claims at the companies they run.
  */
 export function AssigneeCell({
   kind,
@@ -39,11 +42,12 @@ export function AssigneeCell({
 
   const isViewer = me?.role === "viewer";
   const isMine = !!me && assignedToUserId === me.user_id;
+  const isLeader = me?.role === "company_leader";
 
-  async function toggle() {
+  async function setClaim(assign: boolean) {
     if (busy) return;
     setBusy(true);
-    const res = await setAssignment({ kind, id, assign: !isMine });
+    const res = await setAssignment({ kind, id, assign });
     setBusy(false);
     if (!res.ok) toast.error(res.error ?? "Could not update assignment");
   }
@@ -62,9 +66,19 @@ export function AssigneeCell({
             {isMine ? "You" : userName(assignedToUserId)}
           </span>
         </span>
-        {isMine && !isViewer && !locked && (
+        {!isMine && isLeader && !locked && (
           <button
-            onClick={toggle}
+            onClick={() => setClaim(true)}
+            disabled={busy}
+            title="Take this transaction over"
+            className="text-[11px] text-muted-foreground underline-offset-2 hover:underline cursor-pointer disabled:cursor-not-allowed"
+          >
+            take
+          </button>
+        )}
+        {(isMine || isLeader) && !isViewer && !locked && (
+          <button
+            onClick={() => setClaim(false)}
             disabled={busy}
             title="Release this transaction"
             className="text-[11px] text-muted-foreground underline-offset-2 hover:underline cursor-pointer disabled:cursor-not-allowed"
@@ -82,7 +96,7 @@ export function AssigneeCell({
 
   return (
     <button
-      onClick={toggle}
+      onClick={() => setClaim(true)}
       disabled={busy}
       className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground cursor-pointer disabled:cursor-not-allowed disabled:opacity-60"
     >

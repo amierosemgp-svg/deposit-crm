@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { applyDepositPatch, useStore, type DepositPatch, type MutationResult } from "@/lib/store";
 import { bonusOn } from "@/lib/bonus-math";
+import { canActOnClaim } from "@/lib/claims";
 import { formatClock, formatRelative, formatRM } from "@/lib/format";
 import { byBankOrder } from "@/lib/bank-order";
 import { extractSenderName } from "@/lib/bank-remark";
@@ -2853,12 +2854,15 @@ export default function TransactionsPage() {
        * claim cell itself is the way in and the way out — it opens on an
        * unheld row (to take it) and on your own (to release it), and never on
        * a colleague's, which the server refuses anyway.
-       * A company leader edits the cells of any row; the claim stays its holder's.
+       * A company leader edits the cells of any row, and may take or release
+       * a colleague's claim from the claim cell too.
        */
       const owner = ownerOf(rowIndex);
       if (owner !== undefined) {
         const mine = owner !== null && owner === me?.user_id;
-        if (colIndex === assignColOf(tab)) return owner === null || mine;
+        if (colIndex === assignColOf(tab)) {
+          return owner === null || mine || me?.role === "company_leader";
+        }
         if (owner !== null && !mine && me?.role !== "company_leader") return false;
       } else if (colIndex === assignColOf(tab)) {
         return true;
@@ -3352,7 +3356,7 @@ export default function TransactionsPage() {
     // otherwise, and the keyboard path checks the same flag.
     const ids = selectedDeposits
       .filter(
-        (d) => ["pending", "matched"].includes(d.status) && d.assigned_to_user_id === me?.user_id,
+        (d) => ["pending", "matched"].includes(d.status) && canActOnClaim(me, d.assigned_to_user_id),
       )
       .map((d) => d.deposit_id);
     await runBulk("Approve", ids, approveDeposit);
@@ -3361,8 +3365,9 @@ export default function TransactionsPage() {
   // Approve and Reject act only on rows the caller has claimed — a claim is
   // what says "I'm on this one", and two agents rejecting the same deposit is
   // exactly the collision the claim exists to prevent. The rows are still
-  // selectable; the buttons show, disabled, with the hint to claim first.
-  const mine = (userId: number | null | undefined) => !!me && userId === me.user_id;
+  // selectable; the buttons show, disabled, with the hint to claim first. A
+  // company leader may act on a colleague's claim (see lib/claims).
+  const mine = (userId: number | null | undefined) => canActOnClaim(me, userId);
   const approvable = selectedDeposits.filter((d) => ["pending", "matched"].includes(d.status));
   const rejectableDep = selectedDeposits.filter((d) =>
     ["pending_match", "matched", "pending"].includes(d.status),
@@ -3478,7 +3483,7 @@ export default function TransactionsPage() {
           .filter(
             (d) =>
               ["pending_match", "matched", "pending"].includes(d.status) &&
-              d.assigned_to_user_id === me?.user_id,
+              canActOnClaim(me, d.assigned_to_user_id),
           )
           .map((d) => d.deposit_id),
       }),
@@ -3511,7 +3516,7 @@ export default function TransactionsPage() {
       setConfirming({
         kind: "reject-withdrawal",
         ids: selectedWithdrawals
-          .filter((w) => w.status === "requested" && w.assigned_to_user_id === me?.user_id)
+          .filter((w) => w.status === "requested" && canActOnClaim(me, w.assigned_to_user_id))
           .map((w) => w.withdrawal_id),
       }),
     [selectedWithdrawals, me],
@@ -3569,7 +3574,7 @@ export default function TransactionsPage() {
       setConfirming({
         kind: "delete-deposit",
         ids: selectedDeposits
-          .filter((d) => d.skip_bot && !!me && d.assigned_to_user_id === me.user_id)
+          .filter((d) => d.skip_bot && canActOnClaim(me, d.assigned_to_user_id))
           .map((d) => d.deposit_id),
       }),
     [selectedDeposits, me],
@@ -3579,7 +3584,7 @@ export default function TransactionsPage() {
       setConfirming({
         kind: "delete-withdrawal",
         ids: selectedWithdrawals
-          .filter((w) => w.skip_bot && !!me && w.assigned_to_user_id === me.user_id)
+          .filter((w) => w.skip_bot && canActOnClaim(me, w.assigned_to_user_id))
           .map((w) => w.withdrawal_id),
       }),
     [selectedWithdrawals, me],

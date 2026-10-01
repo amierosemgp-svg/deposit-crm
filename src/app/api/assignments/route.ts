@@ -1,8 +1,8 @@
-import { and, eq, inArray, isNull, or } from "drizzle-orm";
+import { and, eq, inArray, isNull, or, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { deposits, gameTransfers, withdrawals } from "@/db/schema";
-import { authErrorResponse, requireWriteUser } from "@/lib/auth";
+import { deposits, gameTransfers, players, withdrawals } from "@/db/schema";
+import { authErrorResponse, requireWriteUser, type AuthedUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 
 /**
@@ -19,6 +19,7 @@ const KINDS = {
     // stops being advisory at that point — it is the record of who dispatched
     // it. Only a deposit still awaiting action can be handed back.
     releasable: inArray(deposits.status, ["pending", "matched"]),
+    inScope: (ids: number[]) => inArray(deposits.company_entity_id, ids),
     lockedMessage:
       "Already approved — an approved deposit stays with whoever dispatched it",
   },
@@ -27,6 +28,7 @@ const KINDS = {
     id: withdrawals.withdrawal_id,
     assignee: withdrawals.assigned_to_user_id,
     releasable: undefined,
+    inScope: (ids: number[]) => inArray(withdrawals.player_id, playersOf(ids)),
     lockedMessage: undefined,
   },
   game_transfer: {
@@ -34,9 +36,34 @@ const KINDS = {
     id: gameTransfers.transfer_id,
     assignee: gameTransfers.assigned_to_user_id,
     releasable: undefined,
+    inScope: (ids: number[]) => inArray(gameTransfers.player_id, playersOf(ids)),
     lockedMessage: undefined,
   },
 } as const;
+
+// Withdrawals and game transfers carry no company of their own; the player does.
+const playersOf = (companyIds: number[]) =>
+  db
+    .select({ id: players.player_id })
+    .from(players)
+    .where(inArray(players.company_entity_id, companyIds));
+
+/**
+ * Rows held by someone else that this user may still take or release.
+ *
+ * Only a company leader, and only inside the companies they run: they clear
+ * the claims a CS agent left behind, but a claim at another company's desk is
+ * none of theirs. A deposit already dispatched stays with whoever sent it —
+ * the same line `releasable` draws for its own holder.
+ */
+function othersClaims(
+  user: AuthedUser,
+  target: (typeof KINDS)[keyof typeof KINDS],
+): SQL | undefined {
+  if (user.role !== "company_leader") return undefined;
+  if (!user.companyIds?.length) return undefined;
+  return and(target.inScope(user.companyIds), target.releasable);
+}
 
 const bodySchema = z
   .object({
@@ -57,7 +84,8 @@ const bodySchema = z
  * Both directions refuse to touch someone else's claim. Silently reassigning
  * twenty transactions out from under a colleague mid-queue is exactly the
  * confusion this feature exists to prevent, so those are skipped and counted
- * rather than taken.
+ * rather than taken. The exception is a company leader, who may take or
+ * release any claim at the companies they run.
  */
 export async function POST(request: Request) {
   try {
@@ -74,11 +102,13 @@ export async function POST(request: Request) {
 
     const nowIso = new Date().toISOString();
 
-    // Only rows that are unclaimed or already ours. Anything held by someone
-    // else falls out here and is reported as skipped.
+    // Only rows that are unclaimed or already ours — or, for a company leader,
+    // a colleague's at one of their companies. Anything else falls out here
+    // and is reported as skipped.
     const claimable = or(
       isNull(target.assignee),
       eq(target.assignee, user.user_id),
+      othersClaims(user, target),
     )!;
 
     // Releasing can be blocked per kind once the row has moved on (see KINDS).
