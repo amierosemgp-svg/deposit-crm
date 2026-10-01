@@ -128,8 +128,9 @@ export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
     account_number: !form.account_number.trim() ? "Required" : null,
     account_holder: !form.account_holder.trim() ? "Required" : null,
     current_balance:
-      !isEdit &&
-      (form.current_balance === "" || isNaN(Number(form.current_balance)))
+      form.current_balance === "" ||
+      isNaN(Number(form.current_balance)) ||
+      Number(form.current_balance) < 0
         ? "Enter a valid amount"
         : null,
   };
@@ -159,6 +160,11 @@ export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
         login_pin: form.login_pin.trim() || null,
         device_id: form.device_id.trim() || null,
         status: form.status,
+        // Sent only when touched: an untouched field would carry the balance
+        // as it was when the modal opened and undo any deposit since.
+        ...(Number(form.current_balance) !== account.current_balance && {
+          current_balance: Number(form.current_balance),
+        }),
       });
     } else {
       result = await addAccount({
@@ -454,19 +460,26 @@ export function BankAccountFormModal({ open, onOpenChange, account }: Props) {
             </div>
 
             <div className="grid grid-cols-2 gap-3">
-              {!isEdit && (
-                <div className="space-y-1.5">
-                  <Label htmlFor="ba-bal">Opening balance (RM)</Label>
-                  <Input
-                    id="ba-bal"
-                    type="number"
-                    step="0.01"
-                    value={form.current_balance}
-                    onChange={(e) => update("current_balance", e.target.value)}
-                    aria-invalid={!!errors.current_balance}
-                  />
-                </div>
-              )}
+              <div className="space-y-1.5">
+                <Label htmlFor="ba-bal">
+                  {isEdit ? "Current balance (RM)" : "Opening balance (RM)"}
+                </Label>
+                <Input
+                  id="ba-bal"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={form.current_balance}
+                  onChange={(e) => update("current_balance", e.target.value)}
+                  aria-invalid={!!errors.current_balance}
+                />
+                {isEdit && (
+                  <p className="text-[11px] text-muted-foreground">
+                    Set it to what the bank shows. The difference goes into the
+                    opening balance and is logged.
+                  </p>
+                )}
+              </div>
               <div className="space-y-1.5">
                 <Label>Status</Label>
                 <Select

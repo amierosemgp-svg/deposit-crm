@@ -7,7 +7,7 @@ import { jsonError } from "@/lib/api-helpers";
 import { companyOfEntity, describeChanges, diffFields, logActivity } from "@/lib/activity-log";
 
 const patchSchema = z.object({
-  role: z.enum(["deposit", "withdrawal"]).optional(),
+  role: z.enum(["deposit", "withdrawal", "both"]).optional(),
   bank_name: z.string().min(1).optional(),
   account_number: z.string().min(4).optional(),
   account_holder: z.string().min(1).optional(),
@@ -17,6 +17,15 @@ const patchSchema = z.object({
   login_password: z.string().nullable().optional(),
   login_pin: z.string().nullable().optional(),
   device_id: z.string().max(120).nullable().optional(),
+  /**
+   * What the bank says the account holds now — a correction, not a movement.
+   *
+   * An account added without its opening balance, or one that has drifted
+   * from the bank, had no way back: the balance was editable only by moving
+   * money, and an account short of its real balance can't send a transfer.
+   * The difference goes into opening_balance, so `opening + in - out =
+   * current` still holds and the movements report keeps adding up.
+   */
   current_balance: z.number().min(0).optional(),
   status: z.enum(["active", "inactive"]).optional(),
 });
@@ -48,14 +57,37 @@ export async function PATCH(
     const parsed = patchSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return jsonError("Invalid payload");
 
-    const [updated] = await db
-      .update(bankAccounts)
-      .set(parsed.data)
-      .where(eq(bankAccounts.account_id, Number(id)))
-      .returning();
+    const { current_balance, ...fields } = parsed.data;
+    const updated = await db.transaction(async (txn) => {
+      // Re-read under a lock: a deposit landing mid-correction would otherwise
+      // be folded into the opening balance and counted twice.
+      const [locked] = await txn
+        .select()
+        .from(bankAccounts)
+        .where(eq(bankAccounts.account_id, Number(id)))
+        .for("update");
+      const delta =
+        current_balance === undefined ? 0 : +(current_balance - locked.current_balance).toFixed(2);
+      const [row] = await txn
+        .update(bankAccounts)
+        .set({
+          ...fields,
+          ...(delta !== 0 && {
+            current_balance,
+            opening_balance: +(locked.opening_balance + delta).toFixed(2),
+            opening_balance_at: locked.opening_balance_at ?? locked.created_at,
+          }),
+        })
+        .where(eq(bankAccounts.account_id, Number(id)))
+        .returning();
+      return row;
+    });
 
     const label = `${updated.bank_name} ••••${updated.account_number.slice(-4)}`;
-    const changes = diffFields(before, parsed.data);
+    const changes = diffFields(before, {
+      ...parsed.data,
+      opening_balance: updated.opening_balance,
+    });
     if (changes.length) {
       await logActivity({
         category: "bank_account",

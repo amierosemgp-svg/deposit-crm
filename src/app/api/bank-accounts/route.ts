@@ -48,7 +48,16 @@ export async function POST(request: Request) {
       return jsonError("Bank accounts belong to companies, leaders, or the main company");
     }
 
-    const [created] = await db.insert(bankAccounts).values(body).returning();
+    // What it was opened with is its opening balance, so the movements report's
+    // `opening + in - out = current` holds from the first day.
+    const [created] = await db
+      .insert(bankAccounts)
+      .values({
+        ...body,
+        opening_balance: body.current_balance,
+        opening_balance_at: new Date().toISOString(),
+      })
+      .returning();
 
     // The account number is masked: the log says which account without
     // becoming a place to harvest full numbers from.
