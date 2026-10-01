@@ -40,6 +40,7 @@ export type SheetRow = {
   time: string | null; // HH:MM, null when the cell isn't a readable time
   code: string;
   cents: number;
+  bonusCents: number; // deposits only; 0 on withdrawals and a blank cell
   bank: string;
   product: string;
 };
@@ -51,6 +52,7 @@ export type CrmRow = {
   time: string | null;
   code: string;
   cents: number;
+  bonusCents: number;
   bank: string;
   status: string;
 };
@@ -137,6 +139,11 @@ export function parseTab(grid: string[][], kind: Kind, year: number, month: numb
   for (const [name, i] of Object.entries(c)) {
     if (i < 0) throw new Error(`No "${name}" column on the ${kind} tab`);
   }
+  // The RM figure, next to "Bonus %". Only the deposit tab has one.
+  const bonusCol = col("bonus");
+  if (kind === "deposit" && bonusCol < 0) {
+    throw new Error(`No "bonus" column on the ${kind} tab`);
+  }
 
   const rows: SheetRow[] = [];
   grid.slice(headerAt + 1).forEach((r, i) => {
@@ -154,6 +161,7 @@ export function parseTab(grid: string[][], kind: Kind, year: number, month: numb
       time: parseSheetTime(cell(c.time)),
       code: cell(c.code).toUpperCase(),
       cents,
+      bonusCents: bonusCol < 0 ? 0 : parseCents(cell(bonusCol)),
       bank,
       product,
     });
@@ -176,6 +184,7 @@ export async function loadCrmRows(db: typeof Db, from: string, to: string): Prom
     SELECT 'deposit' AS kind, d.deposit_id AS id,
            upper(trim(p.username)) AS code,
            round(d.deposit_amount * 100)::bigint AS cents,
+           round(d.bonus_amount * 100)::bigint AS bonus_cents,
            d.status::text AS status, coalesce(d.bank_name, '') AS bank,
            to_char(d.deposit_date AT TIME ZONE ${BUSINESS_TZ}, 'YYYY-MM-DD') AS day,
            CASE WHEN d.deposit_time_known
@@ -189,6 +198,7 @@ export async function loadCrmRows(db: typeof Db, from: string, to: string): Prom
     SELECT 'withdrawal', w.withdrawal_id,
            upper(trim(p.username)),
            round(w.requested_amount * 100)::bigint,
+           0::bigint,
            w.status::text, coalesce(w.bank_name, ''),
            to_char(coalesce(w.paid_at, w.created_at) AT TIME ZONE ${BUSINESS_TZ}, 'YYYY-MM-DD'),
            to_char(coalesce(w.paid_at, w.created_at) AT TIME ZONE ${BUSINESS_TZ}, 'HH24:MI')
@@ -203,6 +213,7 @@ export async function loadCrmRows(db: typeof Db, from: string, to: string): Prom
     id: Number(r.id),
     code: String(r.code ?? ""),
     cents: Number(r.cents),
+    bonusCents: Number(r.bonus_cents),
     status: String(r.status),
     bank: String(r.bank ?? ""),
     day: String(r.day),
@@ -236,14 +247,16 @@ function pairUp(sheet: SheetRow[], crm: CrmRow[]) {
     const k = `${c.kind}|${c.code}|${c.cents}`;
     byKey.set(k, [...(byKey.get(k) ?? []), c]);
   }
-  const pairs: { g: number; s: SheetRow; c: CrmRow }[] = [];
+  const pairs: { g: number; b: number; s: SheetRow; c: CrmRow }[] = [];
   for (const s of sheet) {
     for (const c of byKey.get(`${s.kind}|${s.code}|${s.cents}`) ?? []) {
       const g = gap(s, c);
-      if (g <= MATCH_WINDOW_MIN) pairs.push({ g, s, c });
+      if (g <= MATCH_WINDOW_MIN) pairs.push({ g, b: s.bonusCents === c.bonusCents ? 0 : 1, s, c });
     }
   }
-  pairs.sort((a, b) => a.g - b.g || a.s.row - b.s.row || a.c.id - b.c.id);
+  // Two same-member same-amount deposits hours apart are told apart by their
+  // bonus before their time: the times are often keyed late, the bonus isn't.
+  pairs.sort((a, b) => a.b - b.b || a.g - b.g || a.s.row - b.s.row || a.c.id - b.c.id);
   const usedS = new Set<SheetRow>();
   const usedC = new Set<CrmRow>();
   const matched = new Map<SheetRow, CrmRow>();
@@ -264,17 +277,19 @@ export type Finding =
   | { type: "stuck"; s: SheetRow; c: CrmRow } // in the CRM, never settled
   | { type: "amount"; s: SheetRow; c: CrmRow } // same member, near time, other amount
   | { type: "code"; s: SheetRow; c: CrmRow } // same amount, near time, other member
+  | { type: "bonus"; s: SheetRow; c: CrmRow } // matched, but the bonus differs
   | { type: "late"; s: SheetRow; c: CrmRow } // same member and amount, days apart: a late fix
   | { type: "sheet-only"; s: SheetRow }
   | { type: "crm-only"; c: CrmRow };
 
 /**
- * The day a finding is reported under. A late fix belongs to the later of its
- * two dates, the day the pair became complete, so it's mentioned the morning
- * after it was keyed in and never before.
+ * The day a finding is reported under. A late fix (and a bonus difference,
+ * which can be one) belongs to the later of its two dates, the day the pair
+ * became complete, so it's mentioned the morning after it was keyed in and
+ * never before.
  */
 export const findingDay = (f: Finding) =>
-  f.type === "late"
+  f.type === "late" || f.type === "bonus"
     ? f.s.day > f.c.day ? f.s.day : f.c.day
     : "s" in f ? f.s.day : f.c.day;
 
@@ -303,6 +318,10 @@ export function reconcile(
 
   const findings: Finding[] = [];
   for (const [s, c] of second.matched) findings.push({ type: "stuck", s, c });
+  // Same deposit on both sides, but the player was credited a different bonus.
+  for (const [s, c] of first.matched) {
+    if (s.bonusCents !== c.bonusCents) findings.push({ type: "bonus", s, c });
+  }
 
   // Near misses, so the report can say "this is probably that" instead of two
   // unrelated-looking lines. One-to-one, tightest first.
@@ -326,7 +345,9 @@ export function reconcile(
       if (!sheetLeft.has(s) || !crmLeft.has(c)) continue;
       sheetLeft.delete(s);
       crmLeft.delete(c);
-      findings.push({ type, s, c });
+      // A late fix keyed with the wrong bonus isn't done yet.
+      const wrongBonus = type === "late" && s.bonusCents !== c.bonusCents;
+      findings.push({ type: wrongBonus ? "bonus" : type, s, c });
     }
   };
   claim("amount", (s, c) => s.code === c.code && s.cents !== c.cents, 60);
@@ -374,6 +395,7 @@ const GROUPS: { type: Finding["type"]; title: string }[] = [
   { type: "stuck", title: "Not completed in CRM" },
   { type: "amount", title: "Amount differs" },
   { type: "code", title: "Member code differs" },
+  { type: "bonus", title: "Bonus differs" },
 ];
 
 function item(f: Finding): string {
@@ -388,6 +410,8 @@ function item(f: Finding): string {
       return `${kindAbbr(f.s.kind)} ${f.s.code}${t(f.s)} sheet ${amt(f.s.cents)}, CRM ${amt(f.c.cents)} #${f.c.id}`;
     case "code":
       return `${kindAbbr(f.s.kind)} ${amt(f.s.cents)}${t(f.s)} sheet ${f.s.code}, CRM ${f.c.code} #${f.c.id}`;
+    case "bonus":
+      return `${kindAbbr(f.s.kind)} ${f.s.code} ${amt(f.s.cents)}${t(f.s)} sheet ${amt(f.s.bonusCents)}, CRM ${amt(f.c.bonusCents)} #${f.c.id}`;
     case "late":
       return "";
   }
@@ -437,17 +461,23 @@ export function buildReport(args: {
   const status = today.length ? `⚠️ ${today.length} to check` : "✅ all match";
   const lines = [`Pokercity tally · ${weekday} ${shortDate(day)} — ${status}`];
   let totalsDiffer = false;
-  for (const kind of ["deposit", "withdrawal"] as Kind[]) {
-    const s = dayTotals(sheet, day, kind);
-    const c = dayTotals(done, day, kind);
-    const label = kind === "deposit" ? "Deposits" : "Withdrawals";
+  const total = (label: string, s: { n?: number; cents: number }, c: { n?: number; cents: number }) => {
+    const n = (x: { n?: number }) => (x.n == null ? "" : ` (${x.n})`);
     if (s.n === c.n && s.cents === c.cents) {
-      lines.push(`${label}: RM ${amt(s.cents)} (${s.n}) ✓`);
+      lines.push(`${label}: RM ${amt(s.cents)}${n(s)} ✓`);
     } else {
       totalsDiffer = true;
-      lines.push(`${label}: sheet RM ${amt(s.cents)} (${s.n}) · CRM RM ${amt(c.cents)} (${c.n})`);
+      lines.push(`${label}: sheet RM ${amt(s.cents)}${n(s)} · CRM RM ${amt(c.cents)}${n(c)}`);
     }
-  }
+  };
+  total("Deposits", dayTotals(sheet, day, "deposit"), dayTotals(done, day, "deposit"));
+  const bonus = (rows: { day: string; kind: Kind; bonusCents: number }[]) => ({
+    cents: rows
+      .filter((x) => x.day === day && x.kind === "deposit")
+      .reduce((a, x) => a + x.bonusCents, 0),
+  });
+  total("Bonus", bonus(sheet), bonus(done));
+  total("Withdrawals", dayTotals(sheet, day, "withdrawal"), dayTotals(done, day, "withdrawal"));
   if (late.length) {
     lines.push(`${late.length} keyed in late, now matched. No action.`);
   } else if (totalsDiffer && !today.length) {
