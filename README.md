@@ -193,6 +193,14 @@ SEED_PASSWORD=Mpg@2026            # optional; password for seeded accounts
 SUPABASE_URL=https://<project>.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=<service-role key>   # for receipt uploads
 CRON_SECRET=<random>              # protects /api/cron/auto-confirm
+# Daily sheet-vs-CRM tally (/api/cron/tally), emailed at 06:00 MYT:
+GOOGLE_SERVICE_ACCOUNT_JSON=<key file>   # share each casino's sheet with its client_email
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=465
+SMTP_USER=<sender@gmail.com>
+SMTP_PASS=<Gmail app password>
+EMAIL_FROM=<optional; defaults to SMTP_USER>
+TALLY_EMAIL_TO=<optional; defaults to medusachurchill@gmail.com>
 ```
 
 ## Seeded accounts

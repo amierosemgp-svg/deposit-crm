@@ -3,10 +3,11 @@ import type { db as Db } from "@/db";
 import { BUSINESS_TZ } from "@/lib/report-sql";
 
 /**
- * The daily check of Pokercity's own Google Sheet against the CRM.
+ * The daily check of each casino's own Google Sheet against the CRM.
  *
- * Pokercity's staff keep every deposit and withdrawal in a sheet, one file a
- * month, alongside keying them into the CRM. The two drift: a row typed in one
+ * Each casino's staff keep every deposit and withdrawal in a sheet alongside
+ * keying them into the CRM (which casinos, and where their sheets are, is
+ * TALLY_COMPANIES in casino-tally.ts). The two drift: a row typed in one
  * place and not the other, a wrong member code, an amount mistyped, a deposit
  * left sitting at "processing". This finds those, row by row.
  *
@@ -20,8 +21,6 @@ import { BUSINESS_TZ } from "@/lib/report-sql";
  * Everything here is pure except loadCrmRows, so it can be run against any
  * grid and any list of rows.
  */
-
-export const POKERCITY_ENTITY_ID = 30;
 
 /** How far apart the sheet's time and the CRM's can be and still be one entry. */
 const MATCH_WINDOW_MIN = 36 * 60;
@@ -40,7 +39,9 @@ export type SheetRow = {
   time: string | null; // HH:MM, null when the cell isn't a readable time
   code: string;
   cents: number;
-  bonusCents: number; // deposits only; 0 on withdrawals and a blank cell
+  // Deposits only; 0 on withdrawals and a blank cell. null when the tab has
+  // no Bonus column at all, and then bonuses aren't compared.
+  bonusCents: number | null;
   bank: string;
   product: string;
 };
@@ -74,18 +75,28 @@ const pad = (n: number) => String(n).padStart(2, "0");
  * DISPLAY as "1/9/2026", and 13 onwards stay text. Either way the display is
  * day/month, which is why this reads the display and not the value. A date
  * someone entered properly shows month/day, and is read that way.
+ *
+ * The other casinos' sheets may format dates their own way, so "1-9-2026",
+ * "1.9.26", "2026/09/01", "1 Sep 2026" and "1-Sep-2026" are read too, and a
+ * trailing time ("1/9/2026 14:05:00") is ignored.
  */
 export function parseSheetDay(cell: string, year: number, month: number): string | null {
-  const s = cell.trim();
+  const s = cell.trim().replace(/[\sT]+\d{1,2}:\d{2}(:\d{2})?(\s*[ap]m)?$/i, "");
+  const fullYear = (y: string) => (y.length === 2 ? 2000 + Number(y) : Number(y));
   let day: number | null = null;
-  const iso = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  const iso = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+  const num = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4}|\d{2})$/);
+  const named = s.match(/^(\d{1,2})[\s-]+([a-z]{3,})[\s,-]+(\d{4}|\d{2})$/i);
   if (iso) {
     if (+iso[1] === year && +iso[2] === month) day = +iso[3];
-  } else {
-    const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-    if (!m || +m[3] !== year) return null;
-    if (+m[2] === month) day = +m[1];
-    else if (+m[1] === month) day = +m[2];
+  } else if (num) {
+    if (fullYear(num[3]) !== year) return null;
+    if (+num[2] === month) day = +num[1];
+    else if (+num[1] === month) day = +num[2];
+  } else if (named) {
+    if (fullYear(named[3]) !== year) return null;
+    const m = MONTHS.findIndex((x) => x.slice(0, 3).toLowerCase() === named[2].slice(0, 3).toLowerCase());
+    if (m + 1 === month) day = +named[1];
   }
   const last = new Date(Date.UTC(year, month, 0)).getUTCDate();
   if (day == null || day < 1 || day > last) return null;
@@ -117,43 +128,73 @@ const norm = (s: string) => s.trim().toLowerCase();
  * on one tab and row 12 on the other, and the block above it (bank balances,
  * targets, a lookup box) grows and shrinks. Rows without a readable date are
  * the drag-filled padding at the bottom, or that block, and are skipped.
+ *
+ * Only Date, Member Code and Amount are required, each under any of the names
+ * in HEADERS (the casinos don't all label them alike). Product and Bank filter
+ * out non-player rows when the tab has them; Time sharpens matching when it
+ * has that. Bonus is compared when the deposit tab has it, and `requireBonus`
+ * makes its absence an error rather than a quietly skipped check.
  */
-export function parseTab(grid: string[][], kind: Kind, year: number, month: number): SheetRow[] {
+const HEADERS = {
+  date: ["date", "tarikh"],
+  time: ["time", "masa"],
+  code: ["member code", "member id", "member", "username", "user name", "user id", "login id", "login", "id"],
+  product: ["product", "game"],
+  bank: ["bank"],
+  amount: ["amount", "amount (rm)", "deposit amount", "withdrawal amount", "withdraw amount"],
+  // The RM figure, next to "Bonus %".
+  bonus: ["bonus", "bonus (rm)", "bonus amount"],
+};
+
+function findColumns(row: string[]) {
+  const cells = row.map(norm);
+  const col = (names: string[]) => {
+    for (const n of names) {
+      const i = cells.indexOf(n);
+      if (i >= 0) return i;
+    }
+    return -1;
+  };
+  return {
+    date: col(HEADERS.date),
+    time: col(HEADERS.time),
+    code: col(HEADERS.code),
+    product: col(HEADERS.product),
+    bank: col(HEADERS.bank),
+    amount: col(HEADERS.amount),
+    bonus: col(HEADERS.bonus),
+  };
+}
+
+export function parseTab(
+  grid: string[][],
+  kind: Kind,
+  year: number,
+  month: number,
+  opts: { requireBonus?: boolean } = {},
+): SheetRow[] {
   const headerAt = grid.findIndex((r) => {
-    const cells = r.map(norm);
-    return cells.includes("date") && cells.includes("member code") && cells.includes("amount");
+    const c = findColumns(r);
+    return c.date >= 0 && c.code >= 0 && c.amount >= 0;
   });
   if (headerAt < 0) {
     throw new Error(`No header row (Date / Member Code / Amount) on the ${kind} tab`);
   }
-  const header = grid[headerAt].map(norm);
-  const col = (name: string) => header.indexOf(name);
-  const c = {
-    date: col("date"),
-    time: col("time"),
-    code: col("member code"),
-    product: col("product"),
-    bank: col("bank"),
-    amount: col("amount"),
-  };
-  for (const [name, i] of Object.entries(c)) {
-    if (i < 0) throw new Error(`No "${name}" column on the ${kind} tab`);
-  }
-  // The RM figure, next to "Bonus %". Only the deposit tab has one.
-  const bonusCol = col("bonus");
-  if (kind === "deposit" && bonusCol < 0) {
+  const c = findColumns(grid[headerAt]);
+  if (kind === "deposit" && opts.requireBonus && c.bonus < 0) {
     throw new Error(`No "bonus" column on the ${kind} tab`);
   }
 
   const rows: SheetRow[] = [];
   grid.slice(headerAt + 1).forEach((r, i) => {
-    const cell = (j: number) => (r[j] ?? "").trim();
+    const cell = (j: number) => (j < 0 ? "" : (r[j] ?? "").trim());
     const day = parseSheetDay(cell(c.date), year, month);
     const product = cell(c.product);
     const bank = cell(c.bank);
     const cents = parseCents(cell(c.amount));
-    if (!day || !product || NON_GAME.has(norm(product)) || cents <= 0) return;
-    if (kind === "deposit" && (!bank || PSEUDO_BANKS.has(norm(bank)))) return;
+    if (!day || cents <= 0) return;
+    if (c.product >= 0 && (!product || NON_GAME.has(norm(product)))) return;
+    if (kind === "deposit" && c.bank >= 0 && (!bank || PSEUDO_BANKS.has(norm(bank)))) return;
     rows.push({
       kind,
       row: headerAt + 2 + i,
@@ -161,7 +202,7 @@ export function parseTab(grid: string[][], kind: Kind, year: number, month: numb
       time: parseSheetTime(cell(c.time)),
       code: cell(c.code).toUpperCase(),
       cents,
-      bonusCents: bonusCol < 0 ? 0 : parseCents(cell(bonusCol)),
+      bonusCents: kind === "withdrawal" ? 0 : c.bonus < 0 ? null : parseCents(cell(c.bonus)),
       bank,
       product,
     });
@@ -175,11 +216,16 @@ export function parseTab(grid: string[][], kind: Kind, year: number, month: numb
 const DONE = new Set(["completed", "paid"]);
 
 /**
- * Pokercity's deposits and withdrawals in [from, to), business dates.
+ * One casino's deposits and withdrawals in [from, to), business dates.
  * Failed ones are left out; the rest come back with their status, so a sheet
  * row can be told "it's in the CRM, but stuck at processing".
  */
-export async function loadCrmRows(db: typeof Db, from: string, to: string): Promise<CrmRow[]> {
+export async function loadCrmRows(
+  db: typeof Db,
+  entityId: number,
+  from: string,
+  to: string,
+): Promise<CrmRow[]> {
   const res = await db.execute(sql`
     SELECT 'deposit' AS kind, d.deposit_id AS id,
            upper(trim(p.username)) AS code,
@@ -190,7 +236,7 @@ export async function loadCrmRows(db: typeof Db, from: string, to: string): Prom
            CASE WHEN d.deposit_time_known
                 THEN to_char(d.deposit_date AT TIME ZONE ${BUSINESS_TZ}, 'HH24:MI') END AS time
       FROM deposits d JOIN players p ON p.player_id = d.player_id
-     WHERE p.company_entity_id = ${POKERCITY_ENTITY_ID}
+     WHERE p.company_entity_id = ${entityId}
        AND d.status <> 'failed'
        AND d.deposit_date >= (${from}::date)::timestamp AT TIME ZONE ${BUSINESS_TZ}
        AND d.deposit_date <  (${to}::date)::timestamp AT TIME ZONE ${BUSINESS_TZ}
@@ -203,7 +249,7 @@ export async function loadCrmRows(db: typeof Db, from: string, to: string): Prom
            to_char(coalesce(w.paid_at, w.created_at) AT TIME ZONE ${BUSINESS_TZ}, 'YYYY-MM-DD'),
            to_char(coalesce(w.paid_at, w.created_at) AT TIME ZONE ${BUSINESS_TZ}, 'HH24:MI')
       FROM withdrawals w JOIN players p ON p.player_id = w.player_id
-     WHERE p.company_entity_id = ${POKERCITY_ENTITY_ID}
+     WHERE p.company_entity_id = ${entityId}
        AND w.status <> 'failed'
        AND coalesce(w.paid_at, w.created_at) >= (${from}::date)::timestamp AT TIME ZONE ${BUSINESS_TZ}
        AND coalesce(w.paid_at, w.created_at) <  (${to}::date)::timestamp AT TIME ZONE ${BUSINESS_TZ}
@@ -230,6 +276,9 @@ function minutes(day: string, time: string | null): number {
   return Date.UTC(y, m - 1, d, hh, mm) / 60000;
 }
 
+/** The bonus was keyed differently. A sheet without a Bonus column never differs. */
+const bonusDiffers = (s: SheetRow, c: CrmRow) => s.bonusCents != null && s.bonusCents !== c.bonusCents;
+
 /** Distance between two entries; an unknown time only matches its own day. */
 function gap(a: { day: string; time: string | null }, b: { day: string; time: string | null }) {
   if (a.time && b.time) return Math.abs(minutes(a.day, a.time) - minutes(b.day, b.time));
@@ -251,7 +300,7 @@ function pairUp(sheet: SheetRow[], crm: CrmRow[]) {
   for (const s of sheet) {
     for (const c of byKey.get(`${s.kind}|${s.code}|${s.cents}`) ?? []) {
       const g = gap(s, c);
-      if (g <= MATCH_WINDOW_MIN) pairs.push({ g, b: s.bonusCents === c.bonusCents ? 0 : 1, s, c });
+      if (g <= MATCH_WINDOW_MIN) pairs.push({ g, b: bonusDiffers(s, c) ? 1 : 0, s, c });
     }
   }
   // Two same-member same-amount deposits hours apart are told apart by their
@@ -320,7 +369,7 @@ export function reconcile(
   for (const [s, c] of second.matched) findings.push({ type: "stuck", s, c });
   // Same deposit on both sides, but the player was credited a different bonus.
   for (const [s, c] of first.matched) {
-    if (s.bonusCents !== c.bonusCents) findings.push({ type: "bonus", s, c });
+    if (bonusDiffers(s, c)) findings.push({ type: "bonus", s, c });
   }
 
   // Near misses, so the report can say "this is probably that" instead of two
@@ -346,7 +395,7 @@ export function reconcile(
       sheetLeft.delete(s);
       crmLeft.delete(c);
       // A late fix keyed with the wrong bonus isn't done yet.
-      const wrongBonus = type === "late" && s.bonusCents !== c.bonusCents;
+      const wrongBonus = type === "late" && bonusDiffers(s, c);
       findings.push({ type: wrongBonus ? "bonus" : type, s, c });
     }
   };
@@ -411,7 +460,7 @@ function item(f: Finding): string {
     case "code":
       return `${kindAbbr(f.s.kind)} ${amt(f.s.cents)}${t(f.s)} sheet ${f.s.code}, CRM ${f.c.code} #${f.c.id}`;
     case "bonus":
-      return `${kindAbbr(f.s.kind)} ${f.s.code} ${amt(f.s.cents)}${t(f.s)} sheet ${amt(f.s.bonusCents)}, CRM ${amt(f.c.bonusCents)} #${f.c.id}`;
+      return `${kindAbbr(f.s.kind)} ${f.s.code} ${amt(f.s.cents)}${t(f.s)} sheet ${amt(f.s.bonusCents ?? 0)}, CRM ${amt(f.c.bonusCents)} #${f.c.id}`;
     case "late":
       return "";
   }
@@ -437,20 +486,26 @@ function dayTotals(rows: { day: string; cents: number; kind: Kind }[], day: stri
 /** Older open items listed individually up to this many; the rest are counted. */
 const OLDER_LIST_MAX = 15;
 
+/** "Wed 30 Sep". */
+export function dayLabel(day: string): string {
+  const [y, m, d] = day.split("-").map(Number);
+  const weekday = new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-GB", {
+    weekday: "short",
+    timeZone: "UTC",
+  });
+  return `${weekday} ${shortDate(day)}`;
+}
+
 export function buildReport(args: {
+  company: string;
   day: string;
   sheet: SheetRow[];
   crm: CrmRow[];
   findings: Finding[];
   notes?: string[];
 }): string {
-  const { day, sheet, crm, findings, notes = [] } = args;
+  const { company, day, sheet, crm, findings, notes = [] } = args;
   const done = crm.filter((c) => DONE.has(c.status));
-  const [y, m, d] = day.split("-").map(Number);
-  const weekday = new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-GB", {
-    weekday: "short",
-    timeZone: "UTC",
-  });
 
   const onDay = findings.filter((f) => findingDay(f) === day);
   const today = onDay.filter(needsAction);
@@ -459,7 +514,7 @@ export function buildReport(args: {
   const older = findings.filter((f) => findingDay(f) < day && needsAction(f));
 
   const status = today.length ? `⚠️ ${today.length} to check` : "✅ all match";
-  const lines = [`Pokercity tally · ${weekday} ${shortDate(day)} — ${status}`];
+  const lines = [`${company} tally · ${dayLabel(day)} — ${status}`];
   let totalsDiffer = false;
   const total = (label: string, s: { n?: number; cents: number }, c: { n?: number; cents: number }) => {
     const n = (x: { n?: number }) => (x.n == null ? "" : ` (${x.n})`);
@@ -471,12 +526,15 @@ export function buildReport(args: {
     }
   };
   total("Deposits", dayTotals(sheet, day, "deposit"), dayTotals(done, day, "deposit"));
-  const bonus = (rows: { day: string; kind: Kind; bonusCents: number }[]) => ({
+  const bonus = (rows: { day: string; kind: Kind; bonusCents: number | null }[]) => ({
     cents: rows
       .filter((x) => x.day === day && x.kind === "deposit")
-      .reduce((a, x) => a + x.bonusCents, 0),
+      .reduce((a, x) => a + (x.bonusCents ?? 0), 0),
   });
-  total("Bonus", bonus(sheet), bonus(done));
+  // Only when the sheet keeps bonuses; otherwise there's nothing to compare.
+  if (sheet.some((x) => x.kind === "deposit" && x.bonusCents != null)) {
+    total("Bonus", bonus(sheet), bonus(done));
+  }
   total("Withdrawals", dayTotals(sheet, day, "withdrawal"), dayTotals(done, day, "withdrawal"));
   if (late.length) {
     lines.push(`${late.length} keyed in late, now matched. No action.`);
@@ -492,19 +550,4 @@ export function buildReport(args: {
   }
   if (notes.length) lines.push("", ...notes);
   return lines.join("\n");
-}
-
-/** Telegram caps a message at 4096 characters; split on line breaks. */
-export function chunkMessage(text: string, max = 3900): string[] {
-  const out: string[] = [];
-  let cur = "";
-  for (const line of text.split("\n")) {
-    if (cur && cur.length + line.length + 1 > max) {
-      out.push(cur);
-      cur = "";
-    }
-    cur = cur ? `${cur}\n${line}` : line;
-  }
-  if (cur) out.push(cur);
-  return out;
 }

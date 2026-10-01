@@ -111,6 +111,21 @@ export async function googleSheets() {
       return body.files ?? [];
     },
 
+    /** The file's title and its tab names, in order. */
+    async describe(spreadsheetId: string): Promise<{ title: string; tabs: string[] }> {
+      const url =
+        `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?` +
+        new URLSearchParams({ fields: "properties.title,sheets.properties.title" });
+      const body = await googleGet<{
+        properties?: { title?: string };
+        sheets?: { properties?: { title?: string } }[];
+      }>(token, url);
+      return {
+        title: body.properties?.title ?? spreadsheetId,
+        tabs: (body.sheets ?? []).map((s) => s.properties?.title ?? "").filter(Boolean),
+      };
+    },
+
     /**
      * One tab as the grid of what each cell displays. Displayed text rather
      * than raw values on purpose: the date column mixes real dates and typed
