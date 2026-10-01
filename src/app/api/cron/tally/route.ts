@@ -15,7 +15,8 @@ import { dayLabel } from "@/lib/sheet-tally";
  *
  * Query parameters, for running it by hand:
  *   date=YYYY-MM-DD  check that day instead of yesterday
- *   company=<key>    only this casino (pokercity, fishingstar, robinhood, genting)
+ *   company=<key>    only this casino (pokercity, fishingstar, robinhood, genting),
+ *                    paused ones included
  *   sheet=<id>       with company=, use this spreadsheet instead of the configured one
  *   send=0           don't email, just return the report
  *
@@ -87,7 +88,10 @@ export async function GET(request: Request) {
   if (sheetId && !only) {
     return Response.json({ error: "sheet= needs company= to say whose sheet it is" }, { status: 400 });
   }
-  const companies = only ? TALLY_COMPANIES.filter((c) => c.key === only) : TALLY_COMPANIES;
+  // A paused casino is skipped in the daily run but can still be named.
+  const companies = only
+    ? TALLY_COMPANIES.filter((c) => c.key === only)
+    : TALLY_COMPANIES.filter((c) => !c.paused);
   if (!companies.length) {
     return Response.json(
       { error: `company must be one of ${TALLY_COMPANIES.map((c) => c.key).join(", ")}` },

@@ -78,16 +78,20 @@ const pad = (n: number) => String(n).padStart(2, "0");
  *
  * The other casinos' sheets may format dates their own way, so "1-9-2026",
  * "1.9.26", "2026/09/01", "1 Sep 2026" and "1-Sep-2026" are read too, and a
- * trailing time ("1/9/2026 14:05:00") is ignored.
+ * trailing time ("1/9/2026 14:05:00") is ignored. Robin Hood types only the
+ * day ("1"); the file is one month's, so that's the day of `month`.
  */
 export function parseSheetDay(cell: string, year: number, month: number): string | null {
   const s = cell.trim().replace(/[\sT]+\d{1,2}:\d{2}(:\d{2})?(\s*[ap]m)?$/i, "");
   const fullYear = (y: string) => (y.length === 2 ? 2000 + Number(y) : Number(y));
   let day: number | null = null;
+  const bare = s.match(/^(\d{1,2})$/);
   const iso = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
   const num = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4}|\d{2})$/);
   const named = s.match(/^(\d{1,2})[\s-]+([a-z]{3,})[\s,-]+(\d{4}|\d{2})$/i);
-  if (iso) {
+  if (bare) {
+    day = +bare[1];
+  } else if (iso) {
     if (+iso[1] === year && +iso[2] === month) day = +iso[3];
   } else if (num) {
     if (fullYear(num[3]) !== year) return null;
@@ -166,13 +170,7 @@ function findColumns(row: string[]) {
   };
 }
 
-export function parseTab(
-  grid: string[][],
-  kind: Kind,
-  year: number,
-  month: number,
-  opts: { requireBonus?: boolean } = {},
-): SheetRow[] {
+function findHeader(grid: string[][], kind: Kind) {
   const headerAt = grid.findIndex((r) => {
     const c = findColumns(r);
     return c.date >= 0 && c.code >= 0 && c.amount >= 0;
@@ -180,7 +178,30 @@ export function parseTab(
   if (headerAt < 0) {
     throw new Error(`No header row (Date / Member Code / Amount) on the ${kind} tab`);
   }
-  const c = findColumns(grid[headerAt]);
+  return { headerAt, c: findColumns(grid[headerAt]) };
+}
+
+/**
+ * Rows with a member and an amount but nothing in the Date column. Robin
+ * Hood's Withdrawal tab is all like this; such a tab can't be checked, and the
+ * report says so rather than calling every CRM withdrawal "not on the sheet".
+ */
+export function countUndated(grid: string[][], kind: Kind): number {
+  const { headerAt, c } = findHeader(grid, kind);
+  return grid
+    .slice(headerAt + 1)
+    .filter((r) => !(r[c.date] ?? "").trim() && (r[c.code] ?? "").trim() && parseCents(r[c.amount] ?? "") > 0)
+    .length;
+}
+
+export function parseTab(
+  grid: string[][],
+  kind: Kind,
+  year: number,
+  month: number,
+  opts: { requireBonus?: boolean } = {},
+): SheetRow[] {
+  const { headerAt, c } = findHeader(grid, kind);
   if (kind === "deposit" && opts.requireBonus && c.bonus < 0) {
     throw new Error(`No "bonus" column on the ${kind} tab`);
   }
@@ -503,8 +524,10 @@ export function buildReport(args: {
   crm: CrmRow[];
   findings: Finding[];
   notes?: string[];
+  /** Leave the withdrawal total out, when the sheet's withdrawals couldn't be read. */
+  withdrawals?: boolean;
 }): string {
-  const { company, day, sheet, crm, findings, notes = [] } = args;
+  const { company, day, sheet, crm, findings, notes = [], withdrawals = true } = args;
   const done = crm.filter((c) => DONE.has(c.status));
 
   const onDay = findings.filter((f) => findingDay(f) === day);
@@ -535,7 +558,9 @@ export function buildReport(args: {
   if (sheet.some((x) => x.kind === "deposit" && x.bonusCents != null)) {
     total("Bonus", bonus(sheet), bonus(done));
   }
-  total("Withdrawals", dayTotals(sheet, day, "withdrawal"), dayTotals(done, day, "withdrawal"));
+  if (withdrawals) {
+    total("Withdrawals", dayTotals(sheet, day, "withdrawal"), dayTotals(done, day, "withdrawal"));
+  }
   if (late.length) {
     lines.push(`${late.length} keyed in late, now matched. No action.`);
   } else if (totalsDiffer && !today.length) {

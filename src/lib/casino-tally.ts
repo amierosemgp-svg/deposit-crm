@@ -4,6 +4,7 @@ import { googleClientEmail, googleSheets } from "@/lib/google-sheets";
 import {
   MONTHS,
   buildReport,
+  countUndated,
   dayLabel,
   findingDay,
   loadCrmRows,
@@ -33,6 +34,9 @@ import {
  *
  * `requireBonus` makes a deposit tab without a Bonus column an error. Without
  * it, a sheet that doesn't keep bonuses just isn't checked for them.
+ *
+ * `paused` keeps a casino out of the morning email, with the reason. It can
+ * still be run by hand with ?company=<key>.
  */
 export type TallyCompany = {
   key: string; // ?company=<key> runs just this one
@@ -42,38 +46,48 @@ export type TallyCompany = {
     | { id: string }
     | { monthly: (month: string, year: number) => { words: string[]; like: string } };
   requireBonus?: boolean;
+  paused?: string;
 };
+
+/**
+ * Each casino keeps a new file a month, named "<Casino> Transaction <Month>
+ * <Year>". Drive's "name contains" matches word prefixes, so "Robin" finds
+ * "RobinHood".
+ */
+const monthlyFile = (words: string[], label: string) => ({
+  monthly: (month: string, year: number) => ({
+    words: [...words, "Transaction", month, String(year)],
+    like: `${label} Transaction ${month} ${year}`,
+  }),
+});
 
 export const TALLY_COMPANIES: TallyCompany[] = [
   {
     key: "pokercity",
     name: "Pokercity",
     entity: { id: 30 },
-    sheet: {
-      monthly: (month, year) => ({
-        words: ["Poker", "Transaction", month, String(year)],
-        like: `Poker City Transaction ${month} ${year}`,
-      }),
-    },
+    sheet: monthlyFile(["Poker"], "Poker City"),
     requireBonus: true,
   },
   {
     key: "fishingstar",
     name: "Fishing Star",
     entity: { names: ["Fishing Star"] },
-    sheet: { id: "143KmB5vFOTw6Iica47dat5hn4DZEGwc7BwOJR97kZP0" },
+    sheet: monthlyFile(["Fishing", "Star"], "Fishing Star"),
+    paused: "no deposits in the CRM yet",
   },
   {
     key: "robinhood",
     name: "Robin Hood",
     entity: { names: ["Robin Hood"] },
-    sheet: { id: "10gMthes2UaVg5FQCeFv30hOnlAuJ6HI_C8hsONV5KOo" },
+    sheet: monthlyFile(["Robin"], "RobinHood"),
   },
   {
     key: "genting",
     name: "Genting Casino",
     entity: { names: ["Genting Casino", "Genting"] },
-    sheet: { id: "1h7v_yPK5p07dVidgC40-f8m27FQmXueYYU2hkvNvb24" },
+    sheet: monthlyFile(["Genting"], "Genting Casino"),
+    paused: "no deposits in the CRM yet",
   },
 ];
 
@@ -171,7 +185,7 @@ export async function runTally(
       ...parseTab(dep, "deposit", y, m, { requireBonus: company.requireBonus }),
       ...parseTab(wdr, "withdrawal", y, m),
     ];
-    return { title: meta.title, parse };
+    return { title: meta.title, parse, undatedWithdrawals: countUndated(wdr, "withdrawal") };
   };
 
   const findMonthly = async (y: number, m: number) => {
@@ -195,7 +209,16 @@ export async function runTally(
   } catch (e) {
     return failed(e instanceof Error ? e.message : String(e));
   }
-  const sheet = file.parse(year, month);
+  let sheet = file.parse(year, month);
+  // A withdrawal tab whose rows have no dates can't be checked. Leave
+  // withdrawals out on both sides and say so, rather than reporting every CRM
+  // withdrawal as "not on the sheet".
+  const withdrawals = !(file.undatedWithdrawals > 0 && !sheet.some((r) => r.kind === "withdrawal"));
+  const notes: string[] = [];
+  if (!withdrawals) {
+    sheet = sheet.filter((r) => r.kind === "deposit");
+    notes.push(`(Withdrawals not checked: ${file.undatedWithdrawals} rows on the sheet have no date.)`);
+  }
   // Nothing readable for the month means the wrong file or an unreadable date
   // column; listing every CRM row as "not on the sheet" would bury that.
   if (!sheet.length) {
@@ -209,7 +232,6 @@ export async function runTally(
   // after midnight on the 1st finds its sheet row. A monthly casino keeps them
   // in last month's file; a fixed sheet has them in the same one. Only for
   // pairing: nothing before monthStart is reported.
-  const notes: string[] = [];
   if (day < addDays(monthStart, MARGIN_DAYS)) {
     const edge = addDays(monthStart, -MARGIN_DAYS);
     try {
@@ -219,15 +241,17 @@ export async function runTally(
         if (!found?.file) throw new Error("not shared");
         prev = await openSheet(found.file.id);
       }
-      sheet.push(...prev.parse(py, pm).filter((r) => r.day >= edge));
+      sheet.push(...prev.parse(py, pm).filter((r) => r.day >= edge && (withdrawals || r.kind === "deposit")));
     } catch {
       notes.push(`(${MONTHS[pm - 1]} sheet not found; entries just after midnight on the 1st may show.)`);
     }
   }
 
-  const crm = await loadCrmRows(db, entityId, addDays(monthStart, -MARGIN_DAYS), addDays(day, 3));
+  const crm = (await loadCrmRows(db, entityId, addDays(monthStart, -MARGIN_DAYS), addDays(day, 3))).filter(
+    (c) => withdrawals || c.kind === "deposit",
+  );
   const findings = reconcile(sheet, crm, monthStart, day);
-  const text = buildReport({ company: company.name, day, sheet, crm, findings, notes });
+  const text = buildReport({ company: company.name, day, sheet, crm, findings, notes, withdrawals });
   const open = findings.filter(needsAction);
   const toCheck = open.filter((f) => findingDay(f) === day).length;
   return { ok: true, day, sheet: file.title, toCheck, stillOpen: open.length - toCheck, text };
