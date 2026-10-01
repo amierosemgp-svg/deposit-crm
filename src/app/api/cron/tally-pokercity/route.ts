@@ -57,7 +57,7 @@ export async function GET(request: Request) {
     return Response.json({ ...result, ...(await post(result.text, send)) });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
-    const text = `Pokercity sheet vs CRM — couldn't run for ${day}.\n\n${message}`;
+    const text = `Pokercity tally · ${day} — ❌ couldn't run\n${message}`;
     return Response.json({ ok: false, day, error: message, ...(await post(text, send)) }, { status: 500 });
   }
 }

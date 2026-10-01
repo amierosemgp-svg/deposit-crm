@@ -350,34 +350,59 @@ export function reconcile(
 
 // ── the report ──────────────────────────────────────────────────────────────
 
-const rm = (cents: number) =>
-  `RM ${(cents / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+// Finance reads this on a phone: short lines, items grouped under what's wrong
+// so the reason is said once, amounts without "RM" or ".00".
+
+/** 1250 → "1,250"; 2.5 → "2.50". */
+const amt = (cents: number) =>
+  (cents / 100).toLocaleString("en-US", {
+    minimumFractionDigits: cents % 100 ? 2 : 0,
+    maximumFractionDigits: 2,
+  });
 
 const shortDate = (day: string) => {
   const [, m, d] = day.split("-").map(Number);
   return `${d} ${MONTHS[m - 1].slice(0, 3)}`;
 };
 
-const at = (r: { time: string | null }) => (r.time ? ` at ${r.time}` : "");
-const kindWord = (k: Kind) => (k === "deposit" ? "Deposit" : "Withdrawal");
-const statusWord = (s: string) => s.replace(/_/g, " ");
+const t = (r: { time: string | null }) => (r.time ? ` ${r.time}` : "");
+const kindAbbr = (k: Kind) => (k === "deposit" ? "Dep" : "Wd");
 
-function describe(f: Finding, withDate: boolean): string {
-  const d = (day: string) => (withDate ? `${shortDate(day)} ` : "");
+const GROUPS: { type: Finding["type"]; title: string }[] = [
+  { type: "sheet-only", title: "On sheet, not in CRM" },
+  { type: "crm-only", title: "In CRM, not on sheet" },
+  { type: "stuck", title: "Not completed in CRM" },
+  { type: "amount", title: "Amount differs" },
+  { type: "code", title: "Member code differs" },
+];
+
+function item(f: Finding): string {
   switch (f.type) {
-    case "stuck":
-      return `${d(f.s.day)}${kindWord(f.s.kind)} ${f.s.code} ${rm(f.s.cents)}${at(f.s)} — in the CRM (#${f.c.id}) but still "${statusWord(f.c.status)}"`;
-    case "amount":
-      return `${d(f.s.day)}${kindWord(f.s.kind)} ${f.s.code}: sheet ${rm(f.s.cents)}${at(f.s)}, CRM ${rm(f.c.cents)}${at(f.c)} (#${f.c.id}) — amounts differ`;
-    case "code":
-      return `${d(f.s.day)}${kindWord(f.s.kind)} ${rm(f.s.cents)}${at(f.s)}: sheet says ${f.s.code}, CRM says ${f.c.code} (#${f.c.id}) — member code differs`;
-    case "late":
-      return `${kindWord(f.s.kind)} ${f.s.code} ${rm(f.s.cents)}: sheet ${shortDate(f.s.day)}${at(f.s)}, CRM ${shortDate(f.c.day)}${at(f.c)} (#${f.c.id})`;
     case "sheet-only":
-      return `${d(f.s.day)}${kindWord(f.s.kind)} ${f.s.code} ${rm(f.s.cents)}${at(f.s)} (${f.s.bank || "no bank"}, ${f.s.product}) — on the sheet, not in the CRM`;
+      return `${kindAbbr(f.s.kind)} ${f.s.code} ${amt(f.s.cents)}${t(f.s)}`;
     case "crm-only":
-      return `${d(f.c.day)}${kindWord(f.c.kind)} ${f.c.code} ${rm(f.c.cents)}${at(f.c)} (#${f.c.id}, ${f.c.bank || "no bank"}) — in the CRM, not on the sheet`;
+      return `${kindAbbr(f.c.kind)} ${f.c.code} ${amt(f.c.cents)}${t(f.c)} #${f.c.id}`;
+    case "stuck":
+      return `${kindAbbr(f.s.kind)} ${f.s.code} ${amt(f.s.cents)}${t(f.s)} #${f.c.id} ${f.c.status.replace(/_/g, " ")}`;
+    case "amount":
+      return `${kindAbbr(f.s.kind)} ${f.s.code}${t(f.s)} sheet ${amt(f.s.cents)}, CRM ${amt(f.c.cents)} #${f.c.id}`;
+    case "code":
+      return `${kindAbbr(f.s.kind)} ${amt(f.s.cents)}${t(f.s)} sheet ${f.s.code}, CRM ${f.c.code} #${f.c.id}`;
+    case "late":
+      return "";
   }
+}
+
+/** Findings under one heading per problem; `dated` prefixes each with its day. */
+function grouped(findings: Finding[], dated: boolean): string[] {
+  const out: string[] = [];
+  for (const { type, title } of GROUPS) {
+    const fs = findings.filter((f) => f.type === type);
+    if (!fs.length) continue;
+    out.push(`${title} (${fs.length})`);
+    for (const f of fs) out.push(`• ${dated ? `${shortDate(findingDay(f))} ` : ""}${item(f)}`);
+  }
+  return out;
 }
 
 function dayTotals(rows: { day: string; cents: number; kind: Kind }[], day: string, kind: Kind) {
@@ -386,63 +411,54 @@ function dayTotals(rows: { day: string; cents: number; kind: Kind }[], day: stri
 }
 
 /** Older open items listed individually up to this many; the rest are counted. */
-const OLDER_LIST_MAX = 25;
+const OLDER_LIST_MAX = 15;
 
 export function buildReport(args: {
   day: string;
-  sheetName: string;
   sheet: SheetRow[];
   crm: CrmRow[];
   findings: Finding[];
   notes?: string[];
 }): string {
-  const { day, sheetName, sheet, crm, findings, notes = [] } = args;
+  const { day, sheet, crm, findings, notes = [] } = args;
   const done = crm.filter((c) => DONE.has(c.status));
-  const lines: string[] = [];
   const [y, m, d] = day.split("-").map(Number);
   const weekday = new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-GB", {
     weekday: "short",
     timeZone: "UTC",
   });
-  lines.push(`Pokercity sheet vs CRM — ${weekday} ${shortDate(day)} ${y}`);
-  lines.push(`Sheet: ${sheetName}`);
-  lines.push("");
-  for (const kind of ["deposit", "withdrawal"] as Kind[]) {
-    const s = dayTotals(sheet, day, kind);
-    const c = dayTotals(done, day, kind);
-    const mark = s.n === c.n && s.cents === c.cents ? "" : "  ≠";
-    lines.push(
-      `${kindWord(kind)}s: sheet ${s.n} / ${rm(s.cents)} · CRM ${c.n} / ${rm(c.cents)}${mark}`,
-    );
-  }
 
   const onDay = findings.filter((f) => findingDay(f) === day);
   const today = onDay.filter(needsAction);
   const late = onDay.filter((f) => !needsAction(f));
   // A late fix is mentioned the once, on its own day; after that it's settled.
   const older = findings.filter((f) => findingDay(f) < day && needsAction(f));
-  lines.push("");
-  if (!today.length) {
-    lines.push(`${shortDate(day)}: every row matches ✅`);
-  } else {
-    lines.push(`${shortDate(day)}: ${today.length} to check`);
-    for (const f of today) lines.push(`• ${describe(f, false)}`);
-  }
-  if (!today.length && lines.some((l) => l.endsWith("≠"))) {
-    lines.push("(The day totals differ only because of entries across midnight or keyed in late.)");
-  }
 
+  const status = today.length ? `⚠️ ${today.length} to check` : "✅ all match";
+  const lines = [`Pokercity tally · ${weekday} ${shortDate(day)} — ${status}`];
+  let totalsDiffer = false;
+  for (const kind of ["deposit", "withdrawal"] as Kind[]) {
+    const s = dayTotals(sheet, day, kind);
+    const c = dayTotals(done, day, kind);
+    const label = kind === "deposit" ? "Deposits" : "Withdrawals";
+    if (s.n === c.n && s.cents === c.cents) {
+      lines.push(`${label}: RM ${amt(s.cents)} (${s.n}) ✓`);
+    } else {
+      totalsDiffer = true;
+      lines.push(`${label}: sheet RM ${amt(s.cents)} (${s.n}) · CRM RM ${amt(c.cents)} (${c.n})`);
+    }
+  }
   if (late.length) {
-    lines.push("");
-    lines.push(`Keyed in late, now matched (no action): ${late.length}`);
-    for (const f of late) lines.push(`• ${describe(f, false)}`);
+    lines.push(`${late.length} keyed in late, now matched. No action.`);
+  } else if (totalsDiffer && !today.length) {
+    lines.push("Totals differ only by entries across midnight.");
   }
 
+  if (today.length) lines.push("", ...grouped(today, false));
   if (older.length) {
-    lines.push("");
-    lines.push(`Still open from earlier this month: ${older.length}`);
-    for (const f of older.slice(0, OLDER_LIST_MAX)) lines.push(`• ${describe(f, true)}`);
-    if (older.length > OLDER_LIST_MAX) lines.push(`…and ${older.length - OLDER_LIST_MAX} more`);
+    lines.push("", `Still open from earlier: ${older.length}`);
+    lines.push(...grouped(older.slice(0, OLDER_LIST_MAX), true));
+    if (older.length > OLDER_LIST_MAX) lines.push(`+${older.length - OLDER_LIST_MAX} more`);
   }
   if (notes.length) lines.push("", ...notes);
   return lines.join("\n");

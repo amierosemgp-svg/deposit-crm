@@ -60,9 +60,9 @@ export async function runPokercityTally(
         ok: false,
         day,
         text:
-          `Pokercity sheet vs CRM — couldn't run for ${day}.\n\n` +
-          `No Google Sheet named like "Poker City Transaction ${MONTHS[month - 1]} ${year}" ` +
-          `is shared with ${googleClientEmail()}. Share this month's file with that email as Viewer.`,
+          `Pokercity tally · ${day} — ❌ couldn't run\n` +
+          `Sheet "Poker City Transaction ${MONTHS[month - 1]} ${year}" not found. ` +
+          `Share it with ${googleClientEmail()} as Viewer.`,
       };
     }
     sheetId = file.id;
@@ -83,15 +83,13 @@ export async function runPokercityTally(
       const edge = addDays(monthStart, -MARGIN_DAYS);
       sheet.push(...(await readSheet(prev.id, py, pm)).filter((r) => r.day >= edge));
     } catch {
-      notes.push(
-        `(Couldn't read ${MONTHS[pm - 1]}'s sheet, so an entry just after midnight on the 1st may show up here.)`,
-      );
+      notes.push(`(${MONTHS[pm - 1]} sheet not found; entries just after midnight on the 1st may show.)`);
     }
   }
 
   const crm = await loadCrmRows(db, addDays(monthStart, -MARGIN_DAYS), addDays(day, 3));
   const findings = reconcile(sheet, crm, monthStart, day);
-  const text = buildReport({ day, sheetName, sheet, crm, findings, notes });
+  const text = buildReport({ day, sheet, crm, findings, notes });
   const open = findings.filter(needsAction);
   const toCheck = open.filter((f) => findingDay(f) === day).length;
   return { ok: true, day, sheet: sheetName, toCheck, stillOpen: open.length - toCheck, text };
