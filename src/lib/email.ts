@@ -28,6 +28,7 @@ export async function sendEmail(msg: {
   subject: string;
   text: string;
   html?: string;
+  attachments?: { filename: string; content: Uint8Array; contentType?: string }[];
 }): Promise<EmailResult> {
   const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, EMAIL_FROM } = process.env;
   if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS) {
@@ -50,6 +51,11 @@ export async function sendEmail(msg: {
       subject: msg.subject,
       text: msg.text,
       html: msg.html,
+      attachments: msg.attachments?.map((a) => ({
+        filename: a.filename,
+        content: Buffer.from(a.content),
+        contentType: a.contentType,
+      })),
     });
     return { ok: true };
   } catch (e) {

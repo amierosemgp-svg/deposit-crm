@@ -235,6 +235,7 @@ export function parseTab(
 
 /** Settled in the CRM — what the sheet's rows should match. */
 const DONE = new Set(["completed", "paid"]);
+export const isSettled = (c: CrmRow) => DONE.has(c.status);
 
 /**
  * One casino's deposits and withdrawals in [from, to), business dates.
@@ -451,7 +452,8 @@ const amt = (cents: number) =>
     maximumFractionDigits: 2,
   });
 
-const shortDate = (day: string) => {
+/** "1 Oct". */
+export const shortDate = (day: string) => {
   const [, m, d] = day.split("-").map(Number);
   return `${d} ${MONTHS[m - 1].slice(0, 3)}`;
 };
@@ -459,7 +461,8 @@ const shortDate = (day: string) => {
 const t = (r: { time: string | null }) => (r.time ? ` ${r.time}` : "");
 const kindAbbr = (k: Kind) => (k === "deposit" ? "Dep" : "Wd");
 
-const GROUPS: { type: Finding["type"]; title: string }[] = [
+/** What's wrong, in the order a report lists it. */
+export const GROUPS: { type: Finding["type"]; title: string }[] = [
   { type: "sheet-only", title: "On sheet, not in CRM" },
   { type: "crm-only", title: "In CRM, not on sheet" },
   { type: "stuck", title: "Not completed in CRM" },

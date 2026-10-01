@@ -11,6 +11,8 @@ import {
   needsAction,
   parseTab,
   reconcile,
+  type CrmRow,
+  type Finding,
   type Kind,
   type SheetRow,
 } from "@/lib/sheet-tally";
@@ -142,9 +144,45 @@ export function pickTab(tabs: string[], kind: Kind): string {
   return found;
 }
 
+/** The CRM leader running a casino, whose PDF its section goes in. */
+export type Leader = { id: number; name: string };
+
+/** Everything one run matched, for the PDF to lay out beyond the email's text. */
+export type TallyData = {
+  monthStart: string;
+  sheet: SheetRow[];
+  crm: CrmRow[];
+  findings: Finding[];
+  notes: string[];
+  withdrawals: boolean;
+};
+
 export type TallyResult =
-  | { ok: true; day: string; sheet: string; toCheck: number; stillOpen: number; text: string }
-  | { ok: false; day: string; text: string };
+  | {
+      ok: true;
+      day: string;
+      sheet: string;
+      toCheck: number;
+      stillOpen: number;
+      text: string;
+      leader: Leader | null;
+      data: TallyData;
+    }
+  | { ok: false; day: string; text: string; leader?: Leader | null };
+
+/** The casino's current leader: the live primary row in company_leaders. */
+export async function leaderOf(db: typeof Db, entityId: number): Promise<Leader | null> {
+  const res = await db.execute(sql`
+    SELECT l.entity_id, l.name
+      FROM company_leaders cl JOIN entities l ON l.entity_id = cl.leader_entity_id
+     WHERE cl.company_entity_id = ${entityId}
+       AND cl.valid_from <= now() AND (cl.valid_to IS NULL OR cl.valid_to > now())
+     ORDER BY cl.is_primary DESC, cl.valid_from DESC
+     LIMIT 1
+  `);
+  const r = res.rows[0] as { entity_id: number; name: string } | undefined;
+  return r ? { id: Number(r.entity_id), name: String(r.name).replace(/\s+/g, " ").trim() } : null;
+}
 
 type Google = Awaited<ReturnType<typeof googleSheets>>;
 
@@ -160,13 +198,15 @@ export async function runTally(
   const pm = month === 1 ? 12 : month - 1;
   const google = opts.google ?? (await googleSheets());
   const shareWith = googleClientEmail() ?? "the service account";
+
+  const entityId = await resolveCompanyEntity(db, company);
+  const leader = await leaderOf(db, entityId);
   const failed = (why: string): TallyResult => ({
     ok: false,
     day,
+    leader,
     text: `${company.name} tally · ${dayLabel(day)} — ❌ couldn't run\n${why}`,
   });
-
-  const entityId = await resolveCompanyEntity(db, company);
 
   /** Both tabs of one file, read once; parse them for whichever month. */
   const openSheet = async (id: string) => {
@@ -254,5 +294,14 @@ export async function runTally(
   const text = buildReport({ company: company.name, day, sheet, crm, findings, notes, withdrawals });
   const open = findings.filter(needsAction);
   const toCheck = open.filter((f) => findingDay(f) === day).length;
-  return { ok: true, day, sheet: file.title, toCheck, stillOpen: open.length - toCheck, text };
+  return {
+    ok: true,
+    day,
+    sheet: file.title,
+    toCheck,
+    stillOpen: open.length - toCheck,
+    text,
+    leader,
+    data: { monthStart, sheet, crm, findings, notes, withdrawals },
+  };
 }

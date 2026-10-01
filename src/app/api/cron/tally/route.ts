@@ -1,14 +1,15 @@
 import { db } from "@/db";
-import { TALLY_COMPANIES, type TallyResult, runTally } from "@/lib/casino-tally";
+import { TALLY_COMPANIES, runTally } from "@/lib/casino-tally";
 import { sendEmail } from "@/lib/email";
 import { googleSheets } from "@/lib/google-sheets";
 import { dayLabel } from "@/lib/sheet-tally";
+import { type CasinoOutcome, type LeaderPdf, buildLeaderPdfs } from "@/lib/tally-pdf";
 
 /**
  * GET /api/cron/tally — Vercel Cron target (see vercel.json), 06:00 Malaysian
  * time. Checks each casino in TALLY_COMPANIES — its Google Sheet against the
  * CRM — for the day before and the month so far, and emails one report
- * covering all of them.
+ * covering all of them, with a PDF per CRM leader attached (lib/tally-pdf.ts).
  *
  * One casino failing (sheet not shared, tab renamed, company missing from the
  * CRM) is reported as that in the email; the others still run.
@@ -34,7 +35,7 @@ function yesterday(): string {
   return now.toISOString().slice(0, 10);
 }
 
-type Outcome = TallyResult & { company: string };
+type Outcome = CasinoOutcome;
 
 function overviewLine(o: Outcome): string {
   if (!o.ok) return `• ${o.company}: ❌ couldn't run`;
@@ -46,7 +47,7 @@ function overviewLine(o: Outcome): string {
 const escapeHtml = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-function compose(day: string, outcomes: Outcome[]) {
+function compose(day: string, outcomes: Outcome[], pdfs: LeaderPdf[]) {
   const toCheck = outcomes.reduce((a, o) => a + (o.ok ? o.toCheck : 0), 0);
   const broken = outcomes.filter((o) => !o.ok).length;
   const status = [
@@ -56,7 +57,14 @@ function compose(day: string, outcomes: Outcome[]) {
   const year = day.slice(0, 4);
   const subject = `Tally · ${dayLabel(day)} ${year} — ${status.join(" · ") || "all match"}`;
 
-  const overview = [`Sheet vs CRM · ${dayLabel(day)} ${year}`, ...outcomes.map(overviewLine)].join("\n");
+  const attached = pdfs.length
+    ? [`Attached: full report per leader (${pdfs.map((p) => p.leader.name).join(", ")}).`]
+    : [];
+  const overview = [
+    `Sheet vs CRM · ${dayLabel(day)} ${year}`,
+    ...outcomes.map(overviewLine),
+    ...(attached.length ? ["", ...attached] : []),
+  ].join("\n");
   const sections = [overview, ...outcomes.map((o) => o.text)];
   const text = sections.join(`\n\n${"─".repeat(30)}\n\n`);
 
@@ -119,7 +127,15 @@ export async function GET(request: Request) {
       }
     }),
   );
-  const mail = compose(day, outcomes);
+  // A PDF that fails to build mustn't cost the email; it goes without them.
+  let pdfs: LeaderPdf[] = [];
+  let pdfError: string | undefined;
+  try {
+    pdfs = await buildLeaderPdfs(day, outcomes);
+  } catch (e) {
+    pdfError = e instanceof Error ? e.message : String(e);
+  }
+  const mail = compose(day, outcomes, pdfs);
 
   const to = (process.env.TALLY_EMAIL_TO ?? DEFAULT_TO)
     .split(",")
@@ -127,7 +143,11 @@ export async function GET(request: Request) {
     .filter(Boolean);
   let email: { sent: boolean; to: string[]; error?: string } = { sent: false, to };
   if (send) {
-    const r = await sendEmail({ to, ...mail });
+    const r = await sendEmail({
+      to,
+      ...mail,
+      attachments: pdfs.map((p) => ({ filename: p.filename, content: p.content, contentType: "application/pdf" })),
+    });
     email = r.ok ? { sent: true, to } : { sent: false, to, error: r.error };
   }
 
@@ -142,6 +162,8 @@ export async function GET(request: Request) {
       ),
       subject: mail.subject,
       text: mail.text,
+      pdfs: pdfs.map((p) => ({ leader: p.leader.name, filename: p.filename, bytes: p.content.length })),
+      ...(pdfError ? { pdfError } : {}),
       email,
     },
     // A report that should have gone out and didn't is the failure worth
