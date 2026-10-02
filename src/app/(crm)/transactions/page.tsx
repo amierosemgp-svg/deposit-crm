@@ -2339,6 +2339,12 @@ export default function TransactionsPage() {
           ok: false,
           error: `"${paidCell}" is not one of our accounts — pick one from the list`,
         };
+      // A manual row with a figure is pulled and paid the moment it saves —
+      // but only if it says which account paid. Without one it stopped at
+      // Credits pulled with the bank never deducted, and the warning that said
+      // so was easy to miss. An ALL row still waits: nobody knows the figure.
+      if (mode.skip_bot && !all && !paidFrom)
+        return { ok: false, error: "Fill Paid From — the account the money left from" };
       return {
         ok: true,
         payload: {
@@ -2899,9 +2905,14 @@ export default function TransactionsPage() {
         return dep.status === "completed" && !!dep.skip_bot;
       }
       if (tab === "withdrawal") {
-        if (!WITHDRAWAL_EDITABLE_COLS.has(colIndex)) return false;
         const w = withdrawalById.get(Number(rows[rowIndex]?.id));
         if (!w) return false;
+        // A manual row left at Credits pulled with no Paid From: naming the
+        // account is what finishes it (see onCommittedEdit).
+        if (colIndex === COL.withdrawal.paidfrom) {
+          return w.status === "credits_pulled" && !!w.skip_bot && w.paid_from_account_id == null;
+        }
+        if (!WITHDRAWAL_EDITABLE_COLS.has(colIndex)) return false;
         if (w.status === "requested") return true;
         // A manual row is created already pulled, so it stays correctable —
         // the server re-books the float and the wallet. The agent's own pulls
@@ -2955,6 +2966,22 @@ export default function TransactionsPage() {
         const v = value.trim();
         const c = COL.withdrawal;
         let patch: Record<string, unknown> | null = null;
+
+        // Paid From on a pulled row pays it, from that account, in one step.
+        if (colIndex === c.paidfrom) {
+          if (!v) return;
+          const account = accountByLabel.get(v.toLowerCase());
+          if (!account) {
+            toast.error(`"${v}" is not one of our accounts — pick one from the list`);
+            return;
+          }
+          const res = await markWithdrawalPaid(w.withdrawal_id, {
+            paid_from_account_id: account.account_id,
+          });
+          if (!res.ok) toast.error(res.error ?? "Could not mark it paid");
+          else void loadRangeRows("withdrawal");
+          return;
+        }
 
         if (colIndex === c.product) {
           const g = gameByName.get(v.toLowerCase());
@@ -3110,6 +3137,7 @@ export default function TransactionsPage() {
     },
     [
       tab,
+      markWithdrawalPaid,
       assignColOf,
       setAssignment,
       depositById,
