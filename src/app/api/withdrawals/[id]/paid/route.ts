@@ -64,30 +64,39 @@ export async function POST(
        * is a payout that never moves a balance.
        */
       const payFrom = body.paid_from_account_id ?? row.paid_from_account_id;
-      if (payFrom) {
-        const [account] = await txn
-          .select()
-          .from(bankAccounts)
-          .where(eq(bankAccounts.account_id, payFrom))
-          .for("update");
-        if (!account) throw new AuthError(404, "Payout account not found");
-        // A hybrid account pays out too — asking the question rather than
-        // comparing to a literal is why paysWithdrawals exists.
-        if (!paysWithdrawals(account.role)) {
-          throw new AuthError(422, "Payouts must come from a withdrawal-role account");
-        }
-        if (account.current_balance < row.credit_pulled_amount) {
-          throw new AuthError(422, "Insufficient balance in payout account");
-        }
-        await txn
-          .update(bankAccounts)
-          .set({
-            current_balance: +(
-              account.current_balance - row.credit_pulled_amount
-            ).toFixed(2),
-          })
-          .where(eq(bankAccounts.account_id, account.account_id));
+      /**
+       * Paid means paid out of somewhere. This route used to mark a row paid
+       * with no account — the total went up, no bank came down — which is the
+       * one state the rest of the system can't undo cleanly: the entry path
+       * (bookManualPayout) never produces it, and a correction can't tell
+       * which bank to repay. So the account is required, the same rule the
+       * worksheet's Status cell follows.
+       */
+      if (!payFrom) {
+        throw new AuthError(422, "Fill Paid From first");
       }
+      const [account] = await txn
+        .select()
+        .from(bankAccounts)
+        .where(eq(bankAccounts.account_id, payFrom))
+        .for("update");
+      if (!account) throw new AuthError(404, "Payout account not found");
+      // A hybrid account pays out too — asking the question rather than
+      // comparing to a literal is why paysWithdrawals exists.
+      if (!paysWithdrawals(account.role)) {
+        throw new AuthError(422, "Payouts must come from a withdrawal-role account");
+      }
+      if (account.current_balance < row.credit_pulled_amount) {
+        throw new AuthError(422, "Insufficient balance in payout account");
+      }
+      await txn
+        .update(bankAccounts)
+        .set({
+          current_balance: +(
+            account.current_balance - row.credit_pulled_amount
+          ).toFixed(2),
+        })
+        .where(eq(bankAccounts.account_id, account.account_id));
 
       const nowIso = new Date().toISOString();
       const [updated] = await txn
@@ -119,7 +128,7 @@ export async function POST(
         user_id: user.user_id,
         details: {
           action: "paid",
-          paid_from_account_id: payFrom ?? null,
+          paid_from_account_id: payFrom,
         },
       });
 

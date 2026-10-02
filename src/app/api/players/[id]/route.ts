@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { players } from "@/db/schema";
@@ -10,6 +10,9 @@ import { recordGameAccountChanges } from "@/lib/game-account-audit";
 
 const patchSchema = z.object({
   full_name: z.string().min(1).optional(),
+  // The member code. Unique across the house, and what CS and the bots search
+  // by — so a rename is checked against every other member first.
+  username: z.string().trim().min(2).max(60).optional(),
   contact_number: z.string().nullable().optional(),
   telegram_username: z.string().min(2).optional(),
   wechat_id: z.string().nullable().optional(),
@@ -54,6 +57,19 @@ export async function PATCH(
     if (!parsed.success) return jsonError("Invalid payload");
 
     const patch = { ...parsed.data };
+    if (patch.username !== undefined) {
+      patch.username = patch.username.toUpperCase();
+      const [taken] = await db
+        .select({ id: players.player_id })
+        .from(players)
+        .where(
+          and(
+            sql`upper(${players.username}) = ${patch.username}`,
+            ne(players.player_id, playerId),
+          ),
+        );
+      if (taken) return jsonError(`Member code ${patch.username} is already taken`, 409);
+    }
     if (patch.game_accounts !== undefined) {
       patch.game_accounts = normaliseGameAccounts(
         patch.game_accounts,
@@ -80,7 +96,7 @@ export async function PATCH(
 
     // Player creation is already in the ledger as player_import; only edits
     // need recording here, and each action belongs to exactly one source.
-    const changes = diffFields(row, parsed.data);
+    const changes = diffFields(row, patch);
     if (changes.length) {
       // Archiving is the one correction CS has for adding the wrong member, so
       // the log has to say it happened rather than filing it as an edit —

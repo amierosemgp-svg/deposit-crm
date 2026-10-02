@@ -837,6 +837,8 @@ export function SheetGrid({
   widthStorageKey,
   flushRef,
   readOnly = false,
+  noEntry = false,
+  committedEditValue,
   /** Changing this key re-scrolls to the entry area and selects its first cell. */
   focusKey,
   committedEditable,
@@ -892,6 +894,17 @@ export function SheetGrid({
     null | (() => { draftIndex: number; col: number; value: string } | null)
   >;
   readOnly?: boolean;
+  /**
+   * Hide the NEW ENTRIES dock while saved rows stay editable — for a list
+   * whose new rows need something not chosen yet (the member roster with no
+   * single company picked) but whose saved rows can still be corrected.
+   */
+  noEntry?: boolean;
+  /**
+   * What a saved cell opens with when editing, when it differs from what it
+   * shows — a member's game accounts read with balances but edit as logins.
+   */
+  committedEditValue?: (rowIndex: number, colIndex: number) => string | undefined;
   focusKey?: string;
   /**
    * Which committed cells may be edited in place (e.g. a pending deposit's
@@ -1450,7 +1463,7 @@ export function SheetGrid({
       if (readOnly) return;
       if (r < draftStart && !committedEditable?.(r, c)) {
         flash(
-          "This cell is read-only — add rows in the NEW ENTRIES panel below; on a row you have claimed (Assign = Yes), Member/Product/Username/Bonus % edit in place.",
+          "This cell is read-only — agent rows and the cells the CRM works out itself don't edit here. Add rows in the NEW ENTRIES panel below.",
         );
         return;
       }
@@ -1472,12 +1485,15 @@ export function SheetGrid({
       setEditing({
         r,
         c,
-        value: seed !== undefined ? seed : cellValue(r, c),
+        value:
+          seed !== undefined
+            ? seed
+            : ((r < draftStart ? committedEditValue?.(r, c) : undefined) ?? cellValue(r, c)),
         replace: seed !== undefined,
         browse,
       });
     },
-    [readOnly, draftStart, cellValue, flash, committedEditable, onEditStart, entryColumns],
+    [readOnly, draftStart, cellValue, flash, committedEditable, committedEditValue, onEditStart, entryColumns],
   );
 
   const commitWith = useCallback(
@@ -2159,7 +2175,7 @@ export function SheetGrid({
 
       {/* NEW ENTRIES — docked below the rows, always visible, so "where do I
           type" answers itself. Same columns, x-scroll synced with the rows. */}
-      {!readOnly && (
+      {!readOnly && !noEntry && (
         <div className="relative shrink-0 border-t-2 border-emerald-600 dark:border-emerald-500">
           {/* The divider — drag to trade rows between the saved list and the
               dock, double-click to go back to the default split. */}

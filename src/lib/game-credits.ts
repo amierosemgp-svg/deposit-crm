@@ -1,5 +1,6 @@
 import { and, eq, sql, type SQL } from "drizzle-orm";
 import { gameCredits } from "@/db/schema";
+import { moveKioskCredit } from "./kiosk-credit";
 import type { PlayerGameAccount } from "./types";
 
 /**
@@ -207,4 +208,122 @@ export async function adjustGameCredit(
       set: { current_balance: next, last_updated_at: nowIso },
     });
   return next;
+}
+
+/** One leg of a re-booking: a player's wallet, or a company's kiosk float. */
+export type CreditLeg =
+  | {
+      kind: "wallet";
+      playerId: number;
+      gameName: string;
+      login: string;
+      /** Positive = into the player's wallet, negative = out of it. */
+      delta: number;
+    }
+  | {
+      kind: "kiosk";
+      companyEntityId: number | null;
+      gameName: string;
+      /** Positive = back into the float, negative = spent from it. */
+      delta: number;
+    };
+
+/**
+ * Lay down a set of credit movements as one netted booking.
+ *
+ * For correcting a manual row after it has already booked: the edit is "take
+ * the old booking out, put the new one in", and written leg by leg that would
+ * debit a kiosk for the full new figure before crediting the old one back —
+ * refusing a 500 → 510 correction for want of 510 in a float that only has to
+ * find 10. So every leg is netted first, per wallet and per float, and an
+ * unchanged game nets to the difference. Same approach rebookCompletedDeposit
+ * takes, for the same reason.
+ *
+ * Floats move through moveKioskCredit, so a debit the float cannot cover
+ * throws InsufficientKioskCreditError and the caller's transaction rolls back.
+ * Wallets move through adjustGameCredit, which does not refuse to go negative —
+ * the correction is the truth, and a wallet that ends below zero is reported
+ * back so CS can sync the kiosk rather than have it rounded away.
+ */
+export async function applyCreditRebook(
+  txn: Pick<typeof import("@/db").db, "select" | "insert" | "update">,
+  legs: CreditLeg[],
+  nowIso: string,
+): Promise<{ negativeWallets: Array<{ game: string; login: string; balance: number }> }> {
+  const kiosk = new Map<string, { companyEntityId: number; gameName: string; delta: number }>();
+  const wallet = new Map<
+    string,
+    { playerId: number; gameName: string; login: string; delta: number }
+  >();
+
+  for (const leg of legs) {
+    if (leg.delta === 0 || !leg.gameName) continue;
+    if (leg.kind === "kiosk") {
+      if (leg.companyEntityId === null) continue;
+      const key = `${leg.companyEntityId}::${leg.gameName.toLowerCase()}`;
+      const at = kiosk.get(key) ?? {
+        companyEntityId: leg.companyEntityId,
+        gameName: leg.gameName,
+        delta: 0,
+      };
+      at.delta = +(at.delta + leg.delta).toFixed(2);
+      kiosk.set(key, at);
+    } else {
+      const key = `${leg.playerId}::${leg.gameName.toLowerCase()}::${leg.login.toLowerCase()}`;
+      const at = wallet.get(key) ?? {
+        playerId: leg.playerId,
+        gameName: leg.gameName,
+        login: leg.login,
+        delta: 0,
+      };
+      at.delta = +(at.delta + leg.delta).toFixed(2);
+      wallet.set(key, at);
+    }
+  }
+
+  // Returns before spends: a float being credited back is never the one that
+  // refuses, and doing them first keeps the lock order predictable.
+  const floats = [...kiosk.values()].sort((a, b) => b.delta - a.delta);
+  for (const k of floats) {
+    await moveKioskCredit(txn, {
+      companyEntityId: k.companyEntityId,
+      gameName: k.gameName,
+      delta: k.delta,
+    });
+  }
+
+  const negativeWallets: Array<{ game: string; login: string; balance: number }> = [];
+  for (const w of wallet.values()) {
+    if (w.delta === 0) continue;
+    const balance = await adjustGameCredit(txn, {
+      playerId: w.playerId,
+      gameName: w.gameName,
+      gameUsername: w.login,
+      delta: w.delta,
+      nowIso,
+    });
+    if (balance < 0) negativeWallets.push({ game: w.gameName, login: w.login, balance });
+  }
+  return { negativeWallets };
+}
+
+/**
+ * Whether the player actually holds this login under this game.
+ *
+ * An empty login is the legacy/only-login row and always passes — it is what
+ * resolveGameLogin falls back to for a player with no linked account names.
+ * A named one has to be on the player's list, or a correction would credit a
+ * wallet nobody can reach.
+ */
+export function holdsGameLogin(
+  gameAccounts: PlayerGameAccount[] | null | undefined,
+  gameName: string,
+  login: string,
+): boolean {
+  if (!login) return true;
+  return (gameAccounts ?? []).some(
+    (a) =>
+      a.game_name.toLowerCase() === gameName.toLowerCase() &&
+      (a.game_username ?? "").toLowerCase() === login.toLowerCase(),
+  );
 }

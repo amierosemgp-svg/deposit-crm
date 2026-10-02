@@ -1,35 +1,61 @@
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { bankAccounts, claims, transactions, users } from "@/db/schema";
+import { bankAccounts, claims, entities, transactions, users } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
-import { logActivity } from "@/lib/activity-log";
+import { describeChanges, diffFields, logActivity } from "@/lib/activity-log";
 import { InsufficientBankBalanceError, moveBankBalance } from "@/lib/bank-balance";
 
+/**
+ * Every typed-in cell of the claim sheet, plus its status — each optional, so
+ * the worksheet can send just the cell that changed.
+ */
 const patchSchema = z.object({
-  status: z.enum(["outstanding", "settled", "cancelled"]),
+  /** "Owed By" — the casino whose debt it is. */
+  entity_id: z.number().int().positive().optional(),
+  /** "Owed To" — who put the money in. */
+  claimed_by_user_id: z.number().int().positive().optional(),
+  amount: z.number().positive().optional(),
+  occurred_at: z.string().min(1).optional(),
+  reason: z.string().trim().min(1).max(200).optional(),
+  notes: z.string().nullable().optional(),
+  /** "Paid Into" — where the claimant's money landed. Recorded, never moved. */
+  paid_into_account_id: z.number().int().positive().nullable().optional(),
+  status: z.enum(["outstanding", "settled", "cancelled"]).optional(),
   /**
-   * Which account paid the claimant back. Required to settle unless the money
-   * went out some other way — cash, or another company's account — in which
-   * case leave it out and no balance moves.
+   * Which account paid the claimant back. Leave it out to settle without
+   * moving a balance — cash, or another company's account — which is what the
+   * sheet does today. On a claim that is already settled, sending it (or
+   * null) changes which account the settlement came out of, re-booking both.
    */
   settled_from_account_id: z.number().int().positive().nullable().optional(),
 });
 
 /**
- * PATCH /api/claims/:id — settle a claim, or put it back.
+ * PATCH /api/claims/:id — correct a claim, settle it, or put it back.
+ *
+ * Any cell, by anyone who can write, in the claim's company. Who recorded it
+ * does not matter: the person who spots that the casino or the figure is wrong
+ * is usually the one settling it, not the one who typed it, and sending them to
+ * find the recorder is how the wrong figure gets paid. The guard that stays is
+ * whose claim it is — a user may only touch a claim booked against one of the
+ * companies they work for, and may only move it to another of those.
  *
  * Settling records that the debt is cleared. It does not move money: the desk
  * enters the payment itself as its own Clear Bank row, which is where that
- * movement belongs and where the account gets debited.
+ * movement belongs and where the account gets debited. Nothing in the UI sends
+ * `settled_from_account_id`, by decision (Arius, 2026-09-25: "just leave it as
+ * pure recording").
  *
- * `settled_from_account_id` is the exception. Pass it and the money leaves that
- * account here, in the same transaction, and reopening credits it back — so the
- * pair always nets to nothing. Nothing in the UI passes it today, by decision
- * (Arius, 2026-09-25: "just leave it as pure recording"), and the path is kept
- * because a claim settled straight out of a named account should never be able to
- * mark itself paid while the balance sits untouched.
+ * When it is sent, the money leaves that account here, and everything after
+ * keeps the booking honest: reopening or cancelling credits it back, and
+ * editing the amount of a claim settled out of an account re-books it. The
+ * rule is the same one every corrected row follows — take the old booking off,
+ * put the new one on, netted per account so only the difference touches a
+ * balance, all in one transaction under a lock on the claim. A claim whose
+ * settlement named no account moved nothing and re-books nothing; neither does
+ * Paid Into, which POST deliberately never books.
  */
 export async function PATCH(
   request: Request,
@@ -40,108 +66,199 @@ export async function PATCH(
     const isAdmin = user.role === "super_admin";
     const { id } = await params;
     const claimId = Number(id);
+    if (!Number.isInteger(claimId)) return jsonError("Bad claim id");
 
     const parsed = patchSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
       return jsonError("Invalid payload: " + parsed.error.issues[0]?.message);
     }
     const body = parsed.data;
+    const inMyCompanies = (entityId: number) =>
+      isAdmin || user.companyIds === null || user.companyIds.includes(entityId);
 
-    const [existing] = await db.select().from(claims).where(eq(claims.claim_id, claimId));
-    if (!existing) return jsonError("Claim not found", 404);
-
-    /**
-     * CS settles these, not just admins.
-     *
-     * This was admin-only while settling looked like authorising a payment. It is
-     * not: nothing here moves a bank balance, and the desk records the money going
-     * out as its own Clear Bank row. Marking a claim settled is bookkeeping — it
-     * says the debt is gone, and the row that proves it lives elsewhere. Holding
-     * that behind an admin is how the debt ends up unrecorded, which is the
-     * original problem.
-     *
-     * The guard that stays is whose claim it is. A user works for a set of
-     * companies, and may only settle a claim booked against one of them — the same
-     * scope POST applies when the claim is recorded.
-     */
-    if (!isAdmin && user.companyIds !== null && !user.companyIds.includes(existing.entity_id)) {
-      throw new AuthError(403, "Settle a claim against one of your own companies");
-    }
-    if (existing.status === body.status) {
-      return Response.json({ claim: existing });
-    }
-
-    if (body.settled_from_account_id != null) {
-      const [account] = await db
+    const result = await db.transaction(async (txn) => {
+      const [existing] = await txn
         .select()
-        .from(bankAccounts)
-        .where(eq(bankAccounts.account_id, body.settled_from_account_id));
-      if (!account) return jsonError("Bank account not found", 404);
-      if (user.ownedEntityIds !== null && !user.ownedEntityIds.includes(account.entity_id)) {
-        throw new AuthError(403, "That bank account is outside your organisation");
+        .from(claims)
+        .where(eq(claims.claim_id, claimId))
+        .for("update");
+      if (!existing) throw new AuthError(404, "Claim not found");
+      if (!inMyCompanies(existing.entity_id)) {
+        throw new AuthError(403, "Edit a claim against one of your own companies");
       }
-    }
 
-    const updated = await db.transaction(async (txn) => {
-      const settling = body.status === "settled";
-      const account = settling
-        ? (body.settled_from_account_id ?? null)
-        : existing.settled_from_account_id;
+      // Whose debt it is: still a company, still one of yours — as POST.
+      if (body.entity_id !== undefined && body.entity_id !== existing.entity_id) {
+        const [company] = await txn
+          .select()
+          .from(entities)
+          .where(eq(entities.entity_id, body.entity_id));
+        if (!company) throw new AuthError(404, "Company not found");
+        if (company.entity_type !== "company") {
+          throw new AuthError(400, `Entity ${body.entity_id} is not a company`);
+        }
+        if (!inMyCompanies(body.entity_id)) {
+          throw new AuthError(403, "Move the claim to one of your own companies");
+        }
+      }
+      if (
+        body.claimed_by_user_id !== undefined &&
+        body.claimed_by_user_id !== existing.claimed_by_user_id
+      ) {
+        const [claimant] = await txn
+          .select({ user_id: users.user_id })
+          .from(users)
+          .where(eq(users.user_id, body.claimed_by_user_id));
+        if (!claimant) throw new AuthError(404, "Claimant not found");
+      }
+
+      // Any account named here has to be inside the caller's organisation.
+      for (const accountId of [body.paid_into_account_id, body.settled_from_account_id]) {
+        if (accountId == null) continue;
+        const [account] = await txn
+          .select()
+          .from(bankAccounts)
+          .where(eq(bankAccounts.account_id, accountId));
+        if (!account) throw new AuthError(404, "Bank account not found");
+        if (user.ownedEntityIds !== null && !user.ownedEntityIds.includes(account.entity_id)) {
+          throw new AuthError(403, "That bank account is outside your organisation");
+        }
+      }
+
+      const wasSettled = existing.status === "settled";
+      const status = body.status ?? existing.status;
+      const settled = status === "settled";
+      const settling = settled && !wasSettled;
+      const amount = body.amount ?? existing.amount;
+
+      /**
+       * Where the settlement came out of, after the edit. A fresh settlement
+       * takes what was sent (nothing = no account); a claim staying settled
+       * keeps its account unless one was sent; anything not settled has none.
+       */
+      const settledFrom = !settled
+        ? null
+        : settling || body.settled_from_account_id !== undefined
+          ? (body.settled_from_account_id ?? null)
+          : existing.settled_from_account_id;
+
+      // Re-book: old settlement off, new one on, netted per account.
+      const net = new Map<number, number>();
+      if (wasSettled && existing.settled_from_account_id != null) {
+        net.set(existing.settled_from_account_id, existing.amount);
+      }
+      if (settledFrom != null) {
+        net.set(settledFrom, (net.get(settledFrom) ?? 0) - amount);
+      }
+      const moved: { account_id: number; delta: number; balance_after: number }[] = [];
+      for (const [accountId, raw] of [...net.entries()].sort((a, b) => a[0] - b[0])) {
+        const delta = +raw.toFixed(2);
+        if (delta === 0) continue;
+        moved.push({
+          account_id: accountId,
+          delta,
+          balance_after: await moveBankBalance(txn, { accountId, delta }),
+        });
+      }
 
       const [row] = await txn
         .update(claims)
         .set({
-          status: body.status,
-          settled_at: settling ? new Date().toISOString() : null,
-          settled_by_user_id: settling ? user.user_id : null,
-          settled_from_account_id: settling ? account : null,
+          ...(body.entity_id !== undefined ? { entity_id: body.entity_id } : {}),
+          ...(body.claimed_by_user_id !== undefined
+            ? { claimed_by_user_id: body.claimed_by_user_id }
+            : {}),
+          amount,
+          ...(body.occurred_at !== undefined ? { occurred_at: body.occurred_at } : {}),
+          ...(body.reason !== undefined ? { reason: body.reason } : {}),
+          ...(body.notes !== undefined ? { notes: body.notes?.trim() || null } : {}),
+          ...(body.paid_into_account_id !== undefined
+            ? { paid_into_account_id: body.paid_into_account_id }
+            : {}),
+          status,
+          // Who settled it and when belong to the settling, not to a later
+          // correction of a claim that stays settled.
+          settled_at: settling
+            ? new Date().toISOString()
+            : settled
+              ? existing.settled_at
+              : null,
+          settled_by_user_id: settling
+            ? user.user_id
+            : settled
+              ? existing.settled_by_user_id
+              : null,
+          settled_from_account_id: settledFrom,
         })
         .where(eq(claims.claim_id, claimId))
         .returning();
 
-      // Paying it out debits; taking the settlement back credits the same
-      // account by the same amount, so the pair always nets to nothing.
-      if (account != null && (settling || existing.status === "settled")) {
-        const delta = settling ? -row.amount : row.amount;
-        const balance = await moveBankBalance(txn, { accountId: account, delta });
+      const action = settling
+        ? "claim_settled"
+        : wasSettled && !settled
+          ? status === "cancelled"
+            ? "claim_cancelled"
+            : "claim_reopened"
+          : "claim_rebooked";
+      for (const m of moved) {
         const [acct] = await txn
           .select()
           .from(bankAccounts)
-          .where(eq(bankAccounts.account_id, account));
+          .where(eq(bankAccounts.account_id, m.account_id));
         await txn.insert(transactions).values({
           entity_id: acct?.entity_id ?? row.entity_id,
           type: "expense",
-          amount: row.amount,
+          amount: Math.abs(m.delta),
           reference_id: row.claim_id,
           user_id: user.user_id,
           details: {
-            action: settling ? "claim_settled" : "claim_reopened",
+            action,
             reason: row.reason,
-            account_id: account,
+            account_id: m.account_id,
             bank: acct ? `${acct.bank_name} ${acct.account_number}` : null,
-            balance_after: balance,
+            delta: m.delta,
+            balance_after: m.balance_after,
           },
         });
       }
-      return row;
+
+      const shape = (c: typeof existing) => ({
+        entity_id: c.entity_id,
+        claimed_by_user_id: c.claimed_by_user_id,
+        amount: c.amount,
+        occurred_at: c.occurred_at,
+        reason: c.reason,
+        notes: c.notes,
+        paid_into_account_id: c.paid_into_account_id,
+        status: c.status,
+        settled_from_account_id: c.settled_from_account_id,
+      });
+      return { existing, row, changes: diffFields(shape(existing), shape(row)), moved };
     });
 
-    const [claimant] = await db
-      .select()
-      .from(users)
-      .where(eq(users.user_id, updated.claimed_by_user_id));
-
-    await logActivity({
-      category: "expense",
-      action: `claim.${body.status}`,
-      summary: `Claim ${claimId} (${claimant?.username ?? "unknown"}, RM ${updated.amount.toFixed(2)}) marked ${body.status}`,
-      actor: user,
-      companyEntityId: updated.entity_id,
-      targetType: "claim",
-      targetId: updated.claim_id,
-      targetLabel: updated.reason,
-      context: { amount: updated.amount, status: body.status },
-    });
+    const { existing, row: updated, changes, moved } = result;
+    if (changes.length) {
+      const [claimant] = await db
+        .select()
+        .from(users)
+        .where(eq(users.user_id, updated.claimed_by_user_id));
+      const statusChanged = existing.status !== updated.status;
+      await logActivity({
+        category: "expense",
+        action: statusChanged ? `claim.${updated.status}` : "claim.edited",
+        summary:
+          `Claim ${claimId} (${claimant?.username ?? "unknown"}, RM ${updated.amount.toFixed(2)}) ` +
+          (statusChanged ? `marked ${updated.status}` : "edited") +
+          ` — ${describeChanges(changes)}`,
+        actor: user,
+        companyEntityId: updated.entity_id,
+        targetType: "claim",
+        targetId: updated.claim_id,
+        targetLabel: updated.reason,
+        changes,
+        context: { amount: updated.amount, status: updated.status, moved },
+      });
+    }
 
     return Response.json({ claim: updated });
   } catch (e) {

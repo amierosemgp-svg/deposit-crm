@@ -244,3 +244,64 @@ async function assertWithinMonthlyCap(
     );
   }
 }
+
+/** A free credit's position against the cap: whose month, when, how much. */
+type CapPosition = {
+  companyEntityId: number | null;
+  /** The ledger row's created_at, ISO. */
+  createdAt: string;
+  amount: number;
+};
+
+/** YYYY-MM of a timestamp in business time — the cap's own calendar. */
+function businessMonth(iso: string): string {
+  return new Date(iso)
+    .toLocaleDateString("en-CA", { timeZone: "Asia/Kuala_Lumpur" })
+    .slice(0, 7);
+}
+
+/**
+ * The monthly cap, applied to a correction rather than a new credit.
+ *
+ * The row being corrected is already inside "issued" when it sits in this
+ * month and this company, so checking the new figure on its own would charge
+ * it twice — a 500 → 510 edit refused for want of 510 when only 10 is new.
+ * What is checked is the headroom the edit actually consumes: the new figure
+ * if it lands in the current month, less the old one if that was already
+ * counted against the same company. Moving a row out of the month, down in
+ * amount, or to another month entirely consumes nothing and always passes.
+ *
+ * Only the current month is policed, as issueFreeCredit only polices it: the
+ * allowance is a property of the month, and a past month's has already been
+ * spent or not.
+ */
+export async function assertFreeCreditEditWithinCap(
+  txn: Tx,
+  before: CapPosition,
+  after: CapPosition,
+): Promise<void> {
+  if (after.companyEntityId === null) return;
+
+  const pct = await freeCreditCapPct(txn);
+  if (pct <= 0) return;
+
+  const [row] = await freeCreditAllowance(txn, [after.companyEntityId], pct);
+  if (!row) return;
+
+  const month = row.month.slice(0, 7);
+  const afterCounts = businessMonth(after.createdAt) === month;
+  const beforeCounted =
+    before.companyEntityId === after.companyEntityId &&
+    businessMonth(before.createdAt) === month;
+  const extra = +((afterCounts ? after.amount : 0) - (beforeCounted ? before.amount : 0)).toFixed(2);
+  if (extra <= 0) return;
+
+  if (extra > row.left) {
+    throw new AuthError(
+      422,
+      `Free credit for this month is capped at ${pct}% of deposits — ` +
+        `RM ${row.allowance.toFixed(2)} allowed, RM ${row.issued.toFixed(2)} already issued, ` +
+        `RM ${row.left.toFixed(2)} left; this edit adds RM ${extra.toFixed(2)}`,
+    );
+  }
+}

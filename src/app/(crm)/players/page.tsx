@@ -1135,6 +1135,98 @@ export default function PlayersPage() {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [handleCommit]);
 
+  /**
+   * Saved members edit in place: name, member code, status, game accounts.
+   *
+   * Deposits, withdrawals and last deposit are what the transactions say, so
+   * they stay read-only. Game accounts show with their balances but edit as
+   * "Mega888: login, Pussy888: login" — the balance belongs to the credit
+   * ledger, not to the member.
+   */
+  const MEMBER_EDIT_COLS = useMemo(() => new Set([0, 1, 2, 6]), []);
+  const memberEditable = useCallback(
+    (rowIndex: number, colIndex: number) =>
+      !isViewer && isRoster && !!pageRows[rowIndex] && MEMBER_EDIT_COLS.has(colIndex),
+    [isViewer, isRoster, pageRows, MEMBER_EDIT_COLS],
+  );
+  const memberEditValue = useCallback(
+    (rowIndex: number, colIndex: number) => {
+      const p = pageRows[rowIndex];
+      if (!p || colIndex !== 6) return undefined;
+      return (p.game_accounts ?? [])
+        .map((a) => `${a.game_name}: ${a.game_username}`)
+        .join(", ");
+    },
+    [pageRows],
+  );
+  const STATUS_OPTIONS = useMemo<SheetSuggestion[]>(
+    () => [
+      { value: "Active", hint: "plays as normal" },
+      { value: "Suspended", hint: "kept, but can't be booked against" },
+      { value: "Archived", hint: "drops out of search and the pickers" },
+    ],
+    [],
+  );
+  const memberSuggestions = useCallback(
+    (_rowIndex: number, colIndex: number) => (colIndex === 2 ? STATUS_OPTIONS : undefined),
+    [STATUS_OPTIONS],
+  );
+  const onMemberEdit = useCallback(
+    async (rowIndex: number, colIndex: number, value: string) => {
+      const p = pageRows[rowIndex];
+      if (!p) return;
+      const v = value.trim();
+      let patch: Record<string, unknown> | null = null;
+      if (colIndex === 0) {
+        if (!v) return void toast.error("A member needs a name");
+        if (v !== p.full_name) patch = { full_name: v };
+      } else if (colIndex === 1) {
+        if (!v) return void toast.error("A member needs a code");
+        if (v.toUpperCase() !== p.username.toUpperCase()) patch = { username: v };
+      } else if (colIndex === 2) {
+        const status = (["active", "suspended", "archived"] as const).find(
+          (st) => st === v.toLowerCase(),
+        );
+        if (!status) return void toast.error(`Status is Active, Suspended or Archived, not "${v}"`);
+        if (status !== p.status) patch = { status };
+      } else if (colIndex === 6) {
+        // "Mega888: login, Pussy888: login" — a blank cell clears them all.
+        const accounts: { game_name: string; game_username: string }[] = [];
+        for (const part of v.split(",").map((x) => x.trim()).filter(Boolean)) {
+          const i = part.indexOf(":");
+          const game = (i < 0 ? "" : part.slice(0, i)).trim();
+          const login = (i < 0 ? "" : part.slice(i + 1)).trim();
+          if (!game || !login) {
+            return void toast.error(`Write each account as "Game: login", not "${part}"`);
+          }
+          accounts.push({ game_name: game, game_username: login });
+        }
+        patch = { game_accounts: accounts };
+      }
+      if (!patch) return;
+
+      const res = await fetch(`/api/players/${p.player_id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      const data = (await res.json().catch(() => null)) as
+        | { error?: string; player?: Player }
+        | null;
+      if (!res.ok || !data?.player) {
+        toast.error(data?.error ?? "Could not update the member");
+        return;
+      }
+      const saved = data.player;
+      setPageRows((rows) =>
+        rows.map((r) => (r.player_id === saved.player_id ? { ...r, ...saved } : r)),
+      );
+      // Archiving or restoring moves the member between the two lists.
+      if ("status" in patch) setSavedAt(Date.now());
+    },
+    [pageRows],
+  );
+
   // Players has entry rows; Leads is read-only — leads arrive by import.
   const playersReadOnly = !canEnterPlayers;
   const canImportLeads = isLeaderOrAdmin;
@@ -1435,7 +1527,14 @@ export default function PlayersPage() {
         onDraftsChange={onDraftsChange}
         draftStatus={draftStatus}
         onCommit={handleCommit}
-        readOnly={tab !== "players" || playersReadOnly}
+        // Saved members edit wherever the roster is showing; new ones need a
+        // single company to land in, so only the dock depends on that.
+        readOnly={isViewer || !isRoster}
+        noEntry={tab !== "players" || playersReadOnly}
+        committedEditable={memberEditable}
+        committedEditValue={memberEditValue}
+        committedSuggestions={memberSuggestions}
+        onCommittedEdit={(r, c, v) => void onMemberEdit(r, c, v)}
         onSelectedRowsChange={setSelectedIds}
         draftSuggestions={draftSuggestions}
         // A new member needs a name and a series; status, deposits,

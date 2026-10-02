@@ -113,7 +113,14 @@ export async function POST(
         game_name: row.game_name,
         reference_id: row.withdrawal_id,
         user_id: user.user_id,
-        details: { requested: row.requested_amount, balance_before: balance },
+        details: {
+          requested: row.requested_amount,
+          balance_before: balance,
+          // What left the wallet — all of `pulled`, since it is capped at the
+          // balance. A correction or delete reads this to know what to give
+          // back (see walletDebitedByPull).
+          wallet_debited: pulled,
+        },
       });
 
       return updated;

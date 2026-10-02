@@ -29,7 +29,20 @@ type DepositRow = typeof deposits.$inferSelect;
  */
 export async function completeManualDeposit(
   txn: Txn,
-  input: { row: DepositRow; userId: number; nowIso?: string },
+  input: {
+    row: DepositRow;
+    userId: number;
+    nowIso?: string;
+    /**
+     * From when an agent balance sync counts as having already included this
+     * top-up. Defaults to the row's own approved/updated/created time, which
+     * is right when the row arrives here untouched. A caller that has just
+     * written the row (stamping updated_at to now) must pass the time from
+     * before its own write, or the guard looks only at the future and never
+     * fires — see syncCutoffForCompletion.
+     */
+    syncCutoffIso?: string;
+  },
 ): Promise<DepositRow> {
   const { row, userId } = input;
   const nowIso = input.nowIso ?? new Date().toISOString();
@@ -81,7 +94,7 @@ export async function completeManualDeposit(
     playerId: row.player_id,
     gameName,
     gameUsername,
-    sinceIso: row.approved_at ?? row.updated_at ?? row.created_at,
+    sinceIso: input.syncCutoffIso ?? row.approved_at ?? row.updated_at ?? row.created_at,
   });
 
   if (!alreadySynced) {
@@ -342,7 +355,11 @@ export async function reverseCompletedDeposit(
   // No userId: the caller writes the ledger row for the delete, because it
   // knows what else went with it (a cancelled recommend bonus, say).
   input: { row: DepositRow; nowIso?: string },
-): Promise<{ negativeWallets: Array<{ game: string; login: string; balance: number }> }> {
+): Promise<{
+  negativeWallets: Array<{ game: string; login: string; balance: number }>;
+  /** False when the completion never wrote the wallet credit, so none was taken back. */
+  walletReversed: boolean;
+}> {
   const { row } = input;
   const nowIso = input.nowIso ?? new Date().toISOString();
 
@@ -398,6 +415,7 @@ export async function reverseCompletedDeposit(
     });
     if (balance < 0) negativeWallets.push({ game: gameName, login, balance });
   }
+  const walletReversed = walletWasCredited && !!row.player_id && !!gameName;
 
   if (row.player_id) {
     await txn
@@ -406,5 +424,66 @@ export async function reverseCompletedDeposit(
       .where(eq(players.player_id, row.player_id));
   }
 
-  return { negativeWallets };
+  return { negativeWallets, walletReversed };
+}
+
+/**
+ * The sync cutoff for completing a manual deposit that is being corrected in
+ * the same request — read before the correction is written.
+ *
+ * completeManualDeposit skips the wallet credit when the agent has synced the
+ * provider balance since the row's cutoff, because that sync already counted
+ * the top-up. Its default cutoff is the row's approved/updated time, which a
+ * PATCH has just overwritten with "now"; nothing has synced since now, so the
+ * guard would never fire and a synced wallet would be credited twice. Hence
+ * this, worked out from the row as it was and its own booking history:
+ *
+ *   - Never booked: the row's own times from before the edit, exactly what a
+ *     Complete press on the untouched row would have used.
+ *   - Booked, then failed by reversed_on_fail, and that reversal took the
+ *     credit back out: the cache stopped counting the top-up at the reversal,
+ *     so only a sync after it means the provider balance includes it again.
+ *   - Booked without a credit (an agent sync had already counted it) and so
+ *     reversed without one: the cache still holds that sync's figure, top-up
+ *     included. The cutoff goes back to that sync, so the guard finds it again
+ *     and the credit stays skipped — a later cutoff would credit it a second
+ *     time.
+ */
+export async function syncCutoffForCompletion(
+  txn: Txn,
+  row: DepositRow,
+): Promise<string> {
+  const fallback = row.approved_at ?? row.updated_at ?? row.created_at;
+  const [last] = await txn
+    .select({ created_at: transactions.created_at, details: transactions.details })
+    .from(transactions)
+    .where(
+      and(
+        eq(transactions.reference_id, row.deposit_id),
+        eq(transactions.type, "game_topup"),
+        sql`${transactions.details}->>'action' in ('manual_complete', 'reversed_on_fail')`,
+      ),
+    )
+    .orderBy(desc(transactions.transaction_id))
+    .limit(1);
+  const lastDetails = last?.details as
+    | { action?: string; wallet_reversed?: boolean }
+    | undefined;
+  if (!last || lastDetails?.action !== "reversed_on_fail") return fallback;
+  if (lastDetails.wallet_reversed !== false) return last.created_at;
+
+  const [completion] = await txn
+    .select({ created_at: transactions.created_at, details: transactions.details })
+    .from(transactions)
+    .where(
+      and(
+        eq(transactions.reference_id, row.deposit_id),
+        eq(transactions.type, "game_topup"),
+        sql`${transactions.details}->>'action' = 'manual_complete'`,
+      ),
+    )
+    .orderBy(desc(transactions.transaction_id))
+    .limit(1);
+  const syncedAt = (completion?.details as { synced_at?: string } | undefined)?.synced_at;
+  return syncedAt ?? completion?.created_at ?? fallback;
 }

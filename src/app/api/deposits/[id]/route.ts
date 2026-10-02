@@ -8,14 +8,24 @@ import { jsonError } from "@/lib/api-helpers";
 import { canOverrideEligibility, resolveBonusForDeposit } from "@/lib/bonus";
 import { InsufficientBankBalanceError } from "@/lib/bank-balance";
 import { bonusOn } from "@/lib/bonus-math";
-import { rebookCompletedDeposit, reverseCompletedDeposit } from "@/lib/deposit-complete";
+import {
+  completeManualDeposit,
+  rebookCompletedDeposit,
+  reverseCompletedDeposit,
+  syncCutoffForCompletion,
+} from "@/lib/deposit-complete";
 import { InsufficientKioskCreditError } from "@/lib/kiosk-credit";
+import { syncReferralBonus } from "@/lib/referral";
+import { canonicalise } from "@/lib/game-name";
+import { holdsGameLogin } from "@/lib/game-credits";
 import {
   appendEditNote,
   describeChanges,
   diffFields,
   logActivity,
 } from "@/lib/activity-log";
+
+type DepositStatus = (typeof deposits.$inferSelect)["status"];
 
 const patchSchema = z.object({
   // The bonus to apply; null clears it back to no bonus.
@@ -25,31 +35,70 @@ const patchSchema = z.object({
   // Leaders/admins only: force a bonus the player isn't entitled to, on record.
   bonus_override_reason: z.string().max(200).optional(),
   selected_game: z.string().nullable().optional(),
-  player_id: z.number().int().positive().optional(), // assign an unmatched bot deposit
-  // The rest of a worksheet row. Editable for the same reason the bonus is:
-  // no money has moved yet. total_deposits, the player's game credit and the
-  // company BO pool are all booked at completion, and a completed deposit is
-  // refused below — so correcting a mistyped figure here costs nothing to undo.
+  player_id: z.number().int().positive().optional(), // the member; also assigns an unmatched bot deposit
+  // The rest of a worksheet row. On a row still in flight nothing has moved,
+  // so a correction costs nothing to undo; on a completed manual row the
+  // booking is unwound and laid down again below.
   deposit_amount: z.number().positive().optional(),
   bank_name: z.string().min(1).max(60).optional(),
   // Which of our accounts the money landed in — the one whose balance moves.
   received_into_account_id: z.number().int().positive().optional(),
   selected_game_username: z.string().max(120).nullable().optional(),
   deposit_date: z.string().datetime({ offset: true }).optional(),
+  // False when the sheet only knows the day. Defaults to true whenever a
+  // deposit_date is sent, as it always has.
+  deposit_time_known: z.boolean().optional(),
+  // Manual rows only — see MANUAL_STATUS_FROM.
+  status: z.enum(["completed", "failed"]).optional(),
 });
 
 /**
- * PATCH /api/deposits/:id — correct a row that has not settled yet.
+ * Which statuses a manual deposit may be moved to, and from where.
  *
- * Amount, bank, player, game, kiosk login, date and bonus are all fixable
- * while the deposit is in flight; a completed or failed one is refused,
- * because by then the money is booked and an edit would silently disagree with
- * the ledger.
+ * A manual row is the desk's own record of something done by hand at the bank
+ * and the kiosk, so the desk may say it happened (completed) or didn't
+ * (failed) — and change its mind, which is the case this exists for: a row
+ * failed by mistake, or completed against a transfer that bounced. Moving it
+ * back into the queue (pending, approved, processing) is not offered; those
+ * states mean "waiting on someone", and on a manual row nobody is waiting.
+ */
+const MANUAL_STATUS_FROM: Record<"completed" | "failed", readonly DepositStatus[]> = {
+  completed: ["pending", "matched", "processing", "failed"],
+  failed: ["pending", "matched", "processing", "completed"],
+};
+
+/**
+ * PATCH /api/deposits/:id — correct a deposit, re-booking whatever it already
+ * moved.
  *
- * Every change is recorded twice on purpose: a `transactions` row per field,
- * which is what the History page reads, and one activity_log entry carrying
- * the whole before/after diff, which is what answers "who changed this, and
- * what did it say before".
+ * A manual row is editable in every cell, at every stage, by anyone who can
+ * write — the claim is no longer checked. "Only the holder may correct it" was
+ * meant to stop two desks fixing one figure in opposite directions; what it did
+ * in practice was leave a wrong figure on the sheet until the holder came back.
+ * The row lock below is what actually keeps two corrections from interleaving:
+ * the later one waits, then applies on top, and both are in the log.
+ *
+ * What an edit does to the money depends on where the row is and where it is
+ * going:
+ *
+ *   - in flight → in flight: nothing has moved; the row is just corrected.
+ *   - completed → completed: the old booking is unwound and the new one laid
+ *     down, netted (rebookCompletedDeposit).
+ *   - completed → failed: the booking is unwound completely
+ *     (reverseCompletedDeposit), as a delete would — but the row stays.
+ *   - anything → completed: booked exactly as the Complete button books it
+ *     (completeManualDeposit), with the corrected values.
+ *
+ * A row the agent completed is not editable: its booking is the agent's own
+ * record of what it did at the provider, and rewriting it here would leave the
+ * CRM claiming something the kiosk never saw. Same for an agent row that
+ * failed, and for an agent row's status, which is the agent's to drive.
+ *
+ * Every change is recorded twice on purpose: a `transactions` row per kind of
+ * change, which is what the History page reads, and one activity_log entry
+ * carrying the whole before/after diff, which is what answers "who changed
+ * this, and what did it say before". The booking functions add their own
+ * ledger rows for the money.
  */
 export async function PATCH(
   request: Request,
@@ -59,293 +108,461 @@ export async function PATCH(
     const user = await requireWriteUser();
     const { id } = await params;
     const depositId = Number(id);
-
-    const [row] = await db
-      .select()
-      .from(deposits)
-      .where(eq(deposits.deposit_id, depositId));
-    if (!row) return jsonError("Deposit not found", 404);
-    if (
-      user.companyIds !== null &&
-      row.company_entity_id !== null &&
-      !user.companyIds.includes(row.company_entity_id)
-    ) {
-      throw new AuthError(403, "Deposit is outside your company scope");
-    }
-
-    /**
-     * A row is corrected by whoever holds it.
-     *
-     * The sheet only offers the cells to the holder, but that is the UI's
-     * courtesy, not a rule — two desks editing the same row is how a figure
-     * gets corrected twice in opposite directions. An unheld row stays open:
-     * the bot and the admin flows patch those, and nobody is racing for it.
-     * A company leader can correct any row in their scope, held or not.
-     */
-    if (
-      user.role !== "company_leader" &&
-      row.assigned_to_user_id !== null &&
-      row.assigned_to_user_id !== user.user_id
-    ) {
-      return jsonError(
-        "That row is assigned to someone else — they have to release it first",
-        409,
-      );
-    }
+    if (!Number.isInteger(depositId)) return jsonError("Bad deposit id");
 
     const parsed = patchSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return jsonError("Invalid payload");
     const body = parsed.data;
 
     /**
-     * A completed deposit is correctable, so long as a person did it.
-     *
-     * Manual rows complete the moment they are saved, so "fix the row you just
-     * typed" is the normal case, not an exception — and the money it moved is
-     * unwound and re-laid below rather than left to disagree with the row.
-     *
-     * A row the agent completed is not editable: its booking is the agent's
-     * own record of what it did at the provider, and rewriting it here would
-     * leave the CRM claiming something the kiosk never saw. Same for a failed
-     * row, which never booked anything to correct.
+     * The read, the checks, the correction and its re-booking all happen
+     * under one lock and commit together. Half of this — a row that says
+     * RM 50 over credit of RM 550 — is worse than either outcome, and two
+     * corrections reading the same "before" would each unwind the same
+     * booking.
      */
-    const settled = row.status === "completed";
-    const rebooking = settled && !!row.skip_bot;
-    if (settled && !row.skip_bot) {
-      return jsonError(
-        "That deposit was completed by the agent — only manual rows can be corrected here",
-        409,
-      );
-    }
-    if (row.status === "failed") {
-      return jsonError("Deposit is already failed", 409);
-    }
-    /**
-     * An auto row's amount and bank are what the bank statement said.
-     *
-     * The agent matched the row off a real credit into a real account; typing
-     * a different figure or account over it would leave the CRM disagreeing
-     * with the statement it was read from. Player, game and bonus stay open —
-     * those are CS's to decide.
-     */
-    if (
-      !row.skip_bot &&
-      (body.deposit_amount !== undefined ||
-        body.bank_name !== undefined ||
-        body.received_into_account_id !== undefined)
-    ) {
-      return jsonError(
-        "That's an auto deposit — its amount and bank come from the bank statement and can't be edited",
-        409,
-      );
-    }
-
-    let playerPatch = {};
-    let playerId = row.player_id;
-    let companyEntityId = row.company_entity_id;
-    if (body.player_id !== undefined) {
-      const [player] = await db
+    const result = await db.transaction(async (txn) => {
+      const [row] = await txn
         .select()
-        .from(players)
-        .where(eq(players.player_id, body.player_id));
-      if (!player) return jsonError("Player not found", 404);
+        .from(deposits)
+        .where(eq(deposits.deposit_id, depositId))
+        .for("update");
+      if (!row) throw new AuthError(404, "Deposit not found");
       if (
         user.companyIds !== null &&
-        !user.companyIds.includes(player.company_entity_id)
+        row.company_entity_id !== null &&
+        !user.companyIds.includes(row.company_entity_id)
       ) {
-        throw new AuthError(403, "Player is outside your company scope");
-      }
-      playerPatch = {
-        player_id: player.player_id,
-        player_username: player.username,
-        company_entity_id: player.company_entity_id,
-      };
-      playerId = player.player_id;
-      companyEntityId = player.company_entity_id;
-    }
-
-    // A bare percentage means "no plan" — it's the ad-hoc path, so naming one
-    // clears whatever plan the row was carrying.
-    const touchesBonus =
-      body.bonus_plan_id !== undefined || body.bonus_percentage !== undefined;
-    // Re-assigning the player invalidates a plan that was checked against the
-    // previous one: the new player may already have had the welcome bonus.
-    const playerChanged =
-      body.player_id !== undefined && body.player_id !== row.player_id;
-    const recheckBonus = touchesBonus || (playerChanged && !!row.bonus_plan_id);
-
-    let bonusPatch: Record<string, unknown> = {};
-    let bonusNote: Record<string, unknown> | null = null;
-
-    if (recheckBonus) {
-      const wantedPlanId = touchesBonus
-        ? (body.bonus_plan_id ?? null)
-        : row.bonus_plan_id;
-
-      if (wantedPlanId !== null && playerId === null) {
-        return jsonError("Assign a player before picking a bonus", 422);
+        throw new AuthError(403, "Deposit is outside your company scope");
       }
 
-      const resolved =
-        playerId === null
-          ? null
-          : await resolveBonusForDeposit({
-              planId: wantedPlanId,
-              // Clearing the bonus means clearing it: only carry the row's old
-              // percentage forward when this request isn't the one removing it.
-              fallbackPercentage:
-                body.bonus_percentage ??
-                (body.bonus_plan_id === null ? 0 : row.bonus_percentage),
-              ctx: {
-                playerId,
-                companyEntityId,
-                depositAmount: row.deposit_amount,
-                // The row being edited is not its own competition.
-                excludeDepositId: depositId,
-              },
-              override: {
-                allowed:
-                  canOverrideEligibility(user.role) &&
-                  !!body.bonus_override_reason,
-                reason: body.bonus_override_reason,
-              },
-            });
+      const manual = !!row.skip_bot;
+      if (!manual) {
+        if (row.status === "completed") {
+          throw new AuthError(
+            409,
+            "That deposit was completed by the agent — only manual rows can be corrected here",
+          );
+        }
+        if (row.status === "failed") throw new AuthError(409, "Deposit is already failed");
+        if (body.status !== undefined) {
+          throw new AuthError(409, "That's an auto deposit — its status is the agent's to set");
+        }
+        /**
+         * An auto row's amount and bank are what the bank statement said.
+         *
+         * The agent matched the row off a real credit into a real account;
+         * typing a different figure or account over it would leave the CRM
+         * disagreeing with the statement it was read from. Player, game and
+         * bonus stay open — those are CS's to decide.
+         */
+        if (
+          body.deposit_amount !== undefined ||
+          body.bank_name !== undefined ||
+          body.received_into_account_id !== undefined
+        ) {
+          throw new AuthError(
+            409,
+            "That's an auto deposit — its amount and bank come from the bank statement and can't be edited",
+          );
+        }
+      }
 
-      if (resolved && !resolved.ok) {
-        // A bonus CS deliberately picked is worth an error. A bonus that only
-        // stopped applying because the deposit changed hands is not: assigning
-        // the player is the point of the request, so the stale bonus is dropped
-        // and recorded rather than blocking the assignment.
-        if (touchesBonus) return jsonError(resolved.reason, resolved.status);
-        bonusPatch = {
-          bonus_plan_id: null,
-          bonus_percentage: 0,
-          bonus_amount: 0,
-          bonus_basis_amount: null,
-          bonus_override_reason: null,
-          total_amount: row.deposit_amount,
+      const nextStatus: DepositStatus = body.status ?? row.status;
+      const statusChanged = nextStatus !== row.status;
+      if (statusChanged) {
+        const from = MANUAL_STATUS_FROM[nextStatus as keyof typeof MANUAL_STATUS_FROM];
+        if (!from.includes(row.status)) {
+          throw new AuthError(409, `A ${row.status} deposit can't be marked ${nextStatus} here`);
+        }
+      }
+      const wasBooked = row.status === "completed";
+      const willBook = nextStatus === "completed";
+
+      let playerPatch = {};
+      let playerId = row.player_id;
+      let companyEntityId = row.company_entity_id;
+      if (body.player_id !== undefined) {
+        const [player] = await txn
+          .select()
+          .from(players)
+          .where(eq(players.player_id, body.player_id));
+        if (!player) throw new AuthError(404, "Player not found");
+        if (
+          user.companyIds !== null &&
+          !user.companyIds.includes(player.company_entity_id)
+        ) {
+          throw new AuthError(403, "Player is outside your company scope");
+        }
+        playerPatch = {
+          player_id: player.player_id,
+          player_username: player.username,
+          company_entity_id: player.company_entity_id,
         };
-        bonusNote = { action: "bonus_cleared", reason: resolved.reason };
-      } else if (resolved?.ok) {
-        bonusPatch = resolved.fields;
-        bonusNote = {
-          action: "bonus_changed",
-          from: row.bonus_percentage,
-          to: resolved.fields.bonus_percentage,
-          bonus: resolved.plan?.name ?? null,
-          bonus_plan_id: resolved.fields.bonus_plan_id,
-          bonus_amount: resolved.fields.bonus_amount,
-          ...(resolved.fields.bonus_override_reason
-            ? { bonus_override_reason: resolved.fields.bonus_override_reason }
+        playerId = player.player_id;
+        companyEntityId = player.company_entity_id;
+      }
+
+      // A bare percentage means "no plan" — it's the ad-hoc path, so naming one
+      // clears whatever plan the row was carrying.
+      const touchesBonus =
+        body.bonus_plan_id !== undefined || body.bonus_percentage !== undefined;
+      // Re-assigning the player invalidates a plan that was checked against the
+      // previous one: the new player may already have had the welcome bonus.
+      const playerChanged =
+        body.player_id !== undefined && body.player_id !== row.player_id;
+      /**
+       * A new amount re-checks a plan too, not just its arithmetic: plans
+       * carry minimums, caps and rebate bases, and a bonus that was fine on
+       * RM 500 may not exist on RM 50. An ad-hoc percentage has nothing to
+       * check and is simply rebased below.
+       */
+      const nextAmount = body.deposit_amount ?? row.deposit_amount;
+      const amountChanged = nextAmount !== row.deposit_amount;
+      const recheckBonus =
+        touchesBonus || ((playerChanged || amountChanged) && !!row.bonus_plan_id);
+
+      let bonusPatch: Record<string, unknown> = {};
+      let bonusNote: Record<string, unknown> | null = null;
+
+      if (recheckBonus) {
+        const wantedPlanId = touchesBonus
+          ? (body.bonus_plan_id ?? null)
+          : row.bonus_plan_id;
+
+        if (wantedPlanId !== null && playerId === null) {
+          throw new AuthError(422, "Assign a player before picking a bonus");
+        }
+
+        const resolved =
+          playerId === null
+            ? null
+            : await resolveBonusForDeposit({
+                planId: wantedPlanId,
+                // Clearing the bonus means clearing it: only carry the row's old
+                // percentage forward when this request isn't the one removing it.
+                fallbackPercentage:
+                  body.bonus_percentage ??
+                  (body.bonus_plan_id === null ? 0 : row.bonus_percentage),
+                ctx: {
+                  playerId,
+                  companyEntityId,
+                  depositAmount: nextAmount,
+                  // The row being edited is not its own competition.
+                  excludeDepositId: depositId,
+                },
+                override: {
+                  allowed:
+                    canOverrideEligibility(user.role) &&
+                    !!body.bonus_override_reason,
+                  reason: body.bonus_override_reason,
+                },
+              });
+
+        if (resolved && !resolved.ok) {
+          // A bonus CS deliberately picked is worth an error. A bonus that only
+          // stopped applying because the deposit changed hands, or its amount
+          // was corrected, is not: the correction is the point of the request,
+          // so the stale bonus is dropped and recorded rather than blocking it.
+          if (touchesBonus) throw new AuthError(resolved.status, resolved.reason);
+          bonusPatch = {
+            bonus_plan_id: null,
+            bonus_percentage: 0,
+            bonus_amount: 0,
+            bonus_basis_amount: null,
+            bonus_override_reason: null,
+            total_amount: nextAmount,
+          };
+          bonusNote = { action: "bonus_cleared", reason: resolved.reason };
+        } else if (resolved?.ok) {
+          bonusPatch = resolved.fields;
+          bonusNote = {
+            action: "bonus_changed",
+            from: row.bonus_percentage,
+            to: resolved.fields.bonus_percentage,
+            bonus: resolved.plan?.name ?? null,
+            bonus_plan_id: resolved.fields.bonus_plan_id,
+            bonus_amount: resolved.fields.bonus_amount,
+            ...(resolved.fields.bonus_override_reason
+              ? { bonus_override_reason: resolved.fields.bonus_override_reason }
+              : {}),
+          };
+        }
+      }
+
+      /**
+       * A new bank account moves the money with it.
+       *
+       * The account id is what a completion credits; the name alone was only a
+       * label, so changing it used to leave the money in the old account.
+       */
+      let bankPatch: Record<string, unknown> = {};
+      // For the edit note: "AMBANK 2 → CIMB 1" reads; two account ids don't.
+      let accountMove: { from: string | null; to: string } | null = null;
+      if (
+        body.received_into_account_id !== undefined &&
+        body.received_into_account_id !== row.received_into_account_id
+      ) {
+        const [account] = await txn
+          .select()
+          .from(bankAccounts)
+          .where(eq(bankAccounts.account_id, body.received_into_account_id));
+        if (!account) throw new AuthError(404, "Bank account not found");
+        if (companyEntityId !== null && account.entity_id !== companyEntityId) {
+          throw new AuthError(403, "That account belongs to another company");
+        }
+        bankPatch = { received_into_account_id: account.account_id, bank_name: account.bank_name };
+        const labelOf = (a: typeof account) => a.label?.trim() || `${a.bank_name} ${a.account_number}`;
+        const [old] =
+          row.received_into_account_id === null
+            ? []
+            : await txn
+                .select()
+                .from(bankAccounts)
+                .where(eq(bankAccounts.account_id, row.received_into_account_id));
+        accountMove = { from: old ? labelOf(old) : null, to: labelOf(account) };
+      } else if (body.bank_name !== undefined) {
+        bankPatch = { bank_name: body.bank_name };
+      }
+
+      /**
+       * Moving the deposit to a member of another company moves it out of the
+       * company whose bank took the money. The account it landed in has to
+       * come along — named again in this request, from the new company — or
+       * the re-booking would credit one company's bank for another's deposit.
+       */
+      if (
+        companyEntityId !== row.company_entity_id &&
+        companyEntityId !== null &&
+        !("received_into_account_id" in bankPatch) &&
+        row.received_into_account_id !== null
+      ) {
+        const [current] = await txn
+          .select({ entity_id: bankAccounts.entity_id })
+          .from(bankAccounts)
+          .where(eq(bankAccounts.account_id, row.received_into_account_id));
+        if (!current || current.entity_id !== companyEntityId) {
+          throw new AuthError(
+            422,
+            "That member is in another company — pick the bank account the money landed in for that company",
+          );
+        }
+      }
+
+      /**
+       * A new amount re-bases the bonus.
+       *
+       * The percentage is what CS chose; the cash figure follows from it. Left
+       * alone, correcting 500 to 50 would keep a bonus struck on the larger
+       * number and the deposit would credit more than it took in.
+       */
+      let amountPatch = {};
+      if (amountChanged && "total_amount" in bonusPatch) {
+        // The bonus was just resolved on the new amount; its figures stand.
+        amountPatch = { deposit_amount: nextAmount };
+      } else if (body.deposit_amount !== undefined && amountChanged) {
+        const pct =
+          (bonusPatch as { bonus_percentage?: number }).bonus_percentage ??
+          row.bonus_percentage;
+        const bonus = bonusOn(body.deposit_amount, pct);
+        amountPatch = {
+          deposit_amount: body.deposit_amount,
+          bonus_amount: bonus,
+          total_amount: +(body.deposit_amount + bonus).toFixed(2),
+        };
+      }
+
+      const nextGame =
+        body.selected_game !== undefined ? body.selected_game : row.selected_game;
+
+      /**
+       * A named login has to be one the member actually has.
+       *
+       * The re-booking takes the credit back off the old login and puts it on
+       * the new one; a mistyped login would put real credit in a wallet that
+       * doesn't exist (and, on the way back, take it from nowhere). Asked when
+       * the game, login or member moves. Empty means "the member's first
+       * account for the game", which always resolves.
+       */
+      const nextLogin =
+        body.selected_game_username !== undefined
+          ? body.selected_game_username
+          : row.selected_game_username;
+      if (
+        nextLogin &&
+        nextGame &&
+        playerId !== null &&
+        (playerChanged ||
+          (body.selected_game !== undefined && body.selected_game !== row.selected_game) ||
+          (body.selected_game_username !== undefined &&
+            body.selected_game_username !== row.selected_game_username))
+      ) {
+        const [holder] = await txn
+          .select({ username: players.username, game_accounts: players.game_accounts })
+          .from(players)
+          .where(eq(players.player_id, playerId));
+        const game = await canonicalise(nextGame, txn);
+        if (!holder || !holdsGameLogin(holder.game_accounts ?? null, game, nextLogin)) {
+          throw new AuthError(
+            422,
+            `${nextLogin} isn't one of ${holder?.username ?? "the member"}'s ${game} logins`,
+          );
+        }
+      }
+      if (willBook && (!playerId || !nextGame)) {
+        throw new AuthError(422, "A player and game are required to complete");
+      }
+
+      /**
+       * A recommend bonus that has already been paid is somebody else's money
+       * now. Failing the deposit it was earned on, or moving that deposit to
+       * another member, would leave the upline paid for a deposit that no
+       * longer counts — and clawing it back silently is worse than refusing.
+       * Same rule as deleting the row.
+       */
+      if (wasBooked && (!willBook || playerChanged)) {
+        const bonuses = await txn
+          .select({ status: referralBonuses.status })
+          .from(referralBonuses)
+          .where(eq(referralBonuses.deposit_id, depositId));
+        if (bonuses.some((b) => b.status === "assigned")) {
+          throw new AuthError(
+            409,
+            "A recommend bonus on this deposit has already been paid — cancel that payout first",
+          );
+        }
+      }
+
+      const nowIso = new Date().toISOString();
+      const patch = {
+        ...playerPatch,
+        ...bonusPatch,
+        ...amountPatch,
+        ...bankPatch,
+        ...(body.selected_game_username !== undefined
+          ? { selected_game_username: body.selected_game_username }
+          : {}),
+        ...(body.deposit_date !== undefined
+          ? {
+              deposit_date: body.deposit_date,
+              deposit_time_known: body.deposit_time_known ?? true,
+            }
+          : body.deposit_time_known !== undefined
+            ? { deposit_time_known: body.deposit_time_known }
             : {}),
-        };
-      }
-    }
-
-    /**
-     * A new amount re-bases the bonus.
-     *
-     * The percentage is what CS chose; the cash figure follows from it. Left
-     * alone, correcting 500 to 50 would keep a bonus struck on the larger
-     * number and the deposit would credit more than it took in.
-     */
-    /**
-     * A new bank account moves the money with it.
-     *
-     * The account id is what a completion credits; the name alone was only a
-     * label, so changing it used to leave the money in the old account.
-     */
-    let bankPatch: Record<string, unknown> = {};
-    // For the edit note: "AMBANK 2 → CIMB 1" reads; two account ids don't.
-    let accountMove: { from: string | null; to: string } | null = null;
-    if (
-      body.received_into_account_id !== undefined &&
-      body.received_into_account_id !== row.received_into_account_id
-    ) {
-      const [account] = await db
-        .select()
-        .from(bankAccounts)
-        .where(eq(bankAccounts.account_id, body.received_into_account_id));
-      if (!account) return jsonError("Bank account not found", 404);
-      if (companyEntityId !== null && account.entity_id !== companyEntityId) {
-        throw new AuthError(403, "That account belongs to another company");
-      }
-      bankPatch = { received_into_account_id: account.account_id, bank_name: account.bank_name };
-      const labelOf = (a: typeof account) => a.label?.trim() || `${a.bank_name} ${a.account_number}`;
-      const [old] =
-        row.received_into_account_id === null
-          ? []
-          : await db
-              .select()
-              .from(bankAccounts)
-              .where(eq(bankAccounts.account_id, row.received_into_account_id));
-      accountMove = { from: old ? labelOf(old) : null, to: labelOf(account) };
-    } else if (body.bank_name !== undefined) {
-      bankPatch = { bank_name: body.bank_name };
-    }
-
-    let amountPatch = {};
-    if (body.deposit_amount !== undefined && body.deposit_amount !== row.deposit_amount) {
-      const pct =
-        (bonusPatch as { bonus_percentage?: number }).bonus_percentage ??
-        row.bonus_percentage;
-      const bonus = bonusOn(body.deposit_amount, pct);
-      amountPatch = {
-        deposit_amount: body.deposit_amount,
-        bonus_amount: bonus,
-        total_amount: +(body.deposit_amount + bonus).toFixed(2),
+        selected_game: nextGame,
+        // Failing is stamped here; completing is stamped by the booking.
+        ...(statusChanged && !willBook
+          ? { status: nextStatus, handled_by_user_id: user.user_id }
+          : {}),
+        updated_at: nowIso,
       };
-    }
 
-    const nowIso = new Date().toISOString();
-    const patch = {
-      ...playerPatch,
-      ...bonusPatch,
-      ...amountPatch,
-      ...bankPatch,
-      ...(body.selected_game_username !== undefined
-        ? { selected_game_username: body.selected_game_username }
-        : {}),
-      ...(body.deposit_date !== undefined
-        ? { deposit_date: body.deposit_date, deposit_time_known: true }
-        : {}),
-      selected_game:
-        body.selected_game !== undefined ? body.selected_game : row.selected_game,
-      updated_at: nowIso,
-    };
+      let negativeWallets: Array<{ game: string; login: string; balance: number }> = [];
 
-    /**
-     * The correction and its re-booking commit together. Half of this — a row
-     * that says RM 50 over credit of RM 550 — is worse than either outcome.
-     */
-    const { updated, negativeWallets } = await db.transaction(async (txn) => {
-      const [saved] = await txn
+      // Read before the row is written: the write stamps updated_at, which is
+      // the completion's default sync cutoff (see syncCutoffForCompletion).
+      const syncCutoffIso =
+        willBook && !wasBooked ? await syncCutoffForCompletion(txn, row) : undefined;
+
+      // completed → failed: give back everything the completion booked, off the
+      // row as it stood — that is what was booked, whatever the edit says now.
+      if (wasBooked && !willBook) {
+        const reversed = await reverseCompletedDeposit(txn, { row, nowIso });
+        negativeWallets = reversed.negativeWallets;
+        await txn.insert(transactions).values({
+          player_id: row.player_id,
+          entity_id: row.company_entity_id,
+          type: "game_topup",
+          amount: -row.total_amount,
+          game_name: row.selected_game,
+          reference_id: row.deposit_id,
+          user_id: user.user_id,
+          details: {
+            source: "manual",
+            action: "reversed_on_fail",
+            amount: row.deposit_amount,
+            bonus: row.bonus_amount,
+            received_into_account_id: row.received_into_account_id,
+            // Whether the wallet credit came back out. False when the
+            // completion never wrote one (an agent sync had already counted
+            // the top-up); re-completing reads this to keep skipping it.
+            wallet_reversed: reversed.walletReversed,
+            ...(negativeWallets.length ? { wallets_below_zero: negativeWallets } : {}),
+          },
+        });
+      }
+
+      const [patched] = await txn
         .update(deposits)
         .set(patch)
         .where(eq(deposits.deposit_id, depositId))
         .returning();
+      let saved = patched;
 
-      if (!rebooking) return { updated: saved, negativeWallets: [] };
-      const moved =
-        saved.total_amount !== row.total_amount ||
-        saved.deposit_amount !== row.deposit_amount ||
-        saved.received_into_account_id !== row.received_into_account_id ||
-        saved.selected_game !== row.selected_game ||
-        saved.selected_game_username !== row.selected_game_username ||
-        saved.player_id !== row.player_id;
-      if (!moved) return { updated: saved, negativeWallets: [] };
+      if (wasBooked && willBook) {
+        // completed → completed: re-book only if the edit touched the money.
+        const moved =
+          saved.total_amount !== row.total_amount ||
+          saved.deposit_amount !== row.deposit_amount ||
+          saved.received_into_account_id !== row.received_into_account_id ||
+          saved.selected_game !== row.selected_game ||
+          saved.selected_game_username !== row.selected_game_username ||
+          saved.player_id !== row.player_id;
+        if (moved) {
+          ({ negativeWallets } = await rebookCompletedDeposit(txn, {
+            before: row,
+            after: saved,
+            userId: user.user_id,
+            nowIso,
+          }));
+        }
+      } else if (willBook) {
+        // → completed: the same booking the Complete button does, on the
+        // corrected row.
+        saved = await completeManualDeposit(txn, {
+          row: saved,
+          userId: user.user_id,
+          nowIso,
+          syncCutoffIso,
+        });
+      } else if (statusChanged) {
+        // In flight → failed: nothing was booked, so this is the reject button
+        // by another route, and the ledger says so the same way.
+        await txn.insert(transactions).values({
+          player_id: row.player_id,
+          entity_id: row.company_entity_id,
+          type: "deposit",
+          amount: row.deposit_amount,
+          game_name: row.selected_game,
+          reference_id: row.deposit_id,
+          user_id: user.user_id,
+          details: { source: "manual", action: "rejected", from: row.status },
+        });
+      }
 
-      const { negativeWallets } = await rebookCompletedDeposit(txn, {
-        before: row,
-        after: saved,
-        userId: user.user_id,
-        nowIso,
-      });
-      return { updated: saved, negativeWallets };
+      /**
+       * The recommend bonus follows the booking. It is earned on a member's
+       * first qualifying completed deposit, so a deposit that stops counting —
+       * failed, moved to someone else, or re-bonused onto the welcome plan —
+       * may re-point or cancel a pending one, and one that starts counting may
+       * create it. syncReferralBonus never touches a paid bonus, and no-ops
+       * when nothing should change.
+       */
+      if (wasBooked || willBook) {
+        for (const pid of new Set([row.player_id, saved.player_id])) {
+          if (pid !== null) await syncReferralBonus(txn, pid);
+        }
+      }
+
+      return { row, updated: saved, negativeWallets, bonusPatch, bonusNote, accountMove };
     });
 
-    // Audit each draft edit that actually changed a value. amount = 0 because
-    // no money moves on a draft edit (that happens at approval).
+    const { row, updated, negativeWallets, bonusPatch, bonusNote, accountMove } = result;
+
+    // A `transactions` row for each kind of edit that actually changed a
+    // value. amount = 0: these note the edit; any money it moved is on the
+    // booking rows written inside the transaction.
     const audits: (typeof transactions.$inferInsert)[] = [];
     const base = {
       player_id: updated.player_id,
@@ -405,6 +622,7 @@ export async function PATCH(
         bonus_percentage: row.bonus_percentage,
         bonus_amount: row.bonus_amount,
         player_username: row.player_username,
+        status: row.status,
       },
       {
         deposit_amount: updated.deposit_amount,
@@ -416,6 +634,7 @@ export async function PATCH(
         bonus_percentage: updated.bonus_percentage,
         bonus_amount: updated.bonus_amount,
         player_username: updated.player_username,
+        status: updated.status,
       },
     );
     let edited = updated;

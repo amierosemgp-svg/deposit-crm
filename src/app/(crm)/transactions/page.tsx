@@ -2613,7 +2613,7 @@ export default function TransactionsPage() {
   );
 
   const parseLeaderWithdrawalDraft = useCallback(
-    (d: string[]): Parsed => {
+    (d: string[], editing = false): Parsed => {
       const c = COL.leaderwithdrawal;
       if (parseAssign(d[c.assign] ?? "") === null)
         return { ok: false, error: `Assign to me must be yes or no, not "${d[c.assign]?.trim()}"` };
@@ -2624,7 +2624,9 @@ export default function TransactionsPage() {
         return { ok: false, error: `${account.bank_name} ${account.account_number} is outside your scope` };
       const amt = parseAmount(d[c.amount] ?? "");
       if (amt === null || amt <= 0) return { ok: false, error: `Bad amount "${d[c.amount]}"` };
-      if (amt > account.current_balance)
+      // On an edit the balance already has this row taken out of it; the server
+      // re-books and refuses a shortfall itself.
+      if (!editing && amt > account.current_balance)
         return { ok: false, error: `Exceeds the account balance (${fmtAmount(account.current_balance)})` };
       const takenCell = (d[c.takenby] ?? "").trim();
       if (!takenCell) return { ok: false, error: "Say who took the cash" };
@@ -2752,17 +2754,197 @@ export default function TransactionsPage() {
     [],
   );
 
-  const parseByTab: Record<TabKey, (d: string[]) => Parsed> = {
-    deposit: parseDepositDraft,
-    withdrawal: parseWithdrawalDraft,
-    freecredit: parseFreeCreditDraft,
-    transfer: parseTransferDraft,
-    leaderwithdrawal: parseLeaderWithdrawalDraft,
-    rebate: parseRebateDraft,
-    leadertransfer: parseLeaderTransferDraft,
-    expense: parseExpenseDraft,
-    claim: parseClaimDraft,
-  };
+  const parseByTab = useMemo<Record<TabKey, (d: string[]) => Parsed>>(
+    () => ({
+      deposit: parseDepositDraft,
+      withdrawal: parseWithdrawalDraft,
+      freecredit: parseFreeCreditDraft,
+      transfer: parseTransferDraft,
+      leaderwithdrawal: parseLeaderWithdrawalDraft,
+      rebate: parseRebateDraft,
+      leadertransfer: parseLeaderTransferDraft,
+      expense: parseExpenseDraft,
+      claim: parseClaimDraft,
+    }),
+    [
+      parseDepositDraft, parseWithdrawalDraft, parseFreeCreditDraft, parseTransferDraft,
+      parseLeaderWithdrawalDraft, parseRebateDraft, parseLeaderTransferDraft,
+      parseExpenseDraft, parseClaimDraft,
+    ],
+  );
+
+  /**
+   * Saved rows that edit by re-reading the whole row.
+   *
+   * These sheets had no in-place editing at all. Rather than a hand-written
+   * branch per column, an edit swaps the one cell into the row as it reads now
+   * and runs it through the same parser a new entry goes through — so a saved
+   * row is held to exactly the rules a new one is. The two readings are then
+   * diffed and only what changed is sent; a field that drops out (a cleared
+   * note) goes as null. The server re-books whatever money the change moves.
+   *
+   * Status is not an entry column, so each sheet says how its words map onto
+   * the server's; Date/Time on a leader settlement map onto its created_at.
+   */
+  const REPARSE_EDIT = useMemo<
+    Partial<
+      Record<
+        TabKey,
+        {
+          url: (id: number) => string;
+          manual: (id: number) => boolean;
+          status?: (v: string) => Record<string, unknown> | string;
+          /** Columns that stay read-only even on a manual row. */
+          locked?: string[];
+          /** Date and Time are two halves of one timestamp, sent as this field. */
+          stampField?: string;
+        }
+      >
+    >
+  >(
+    () => ({
+      expense: { url: (id) => `/api/expenses/${id}`, manual: () => true },
+      leaderwithdrawal: {
+        url: (id) => `/api/bank-accounts/cash-outs/${id}`,
+        manual: () => true,
+        status: (v) =>
+          /^debited|active$/i.test(v)
+            ? { status: "active" }
+            : /^reversed?$/i.test(v)
+              ? { status: "reversed" }
+              : `Status is Debited or Reversed, not "${v}"`,
+      },
+      leadertransfer: {
+        url: (id) => `/api/leader-transfers/${id}`,
+        manual: () => true,
+        stampField: "created_at",
+      },
+      // Manual means typed by a person and never handed to the agent; a rebate
+      // payout's member and amount are the rebate's, which the server enforces.
+      freecredit: {
+        url: (id) => `/api/free-credits/${id}`,
+        manual: (id) => {
+          const f = freeCredits.find((x) => x.transaction_id === id);
+          return !!f && f.source === "manual" && f.game_transfer_id == null;
+        },
+        // A manual free credit is credited by construction — undoing one is Delete.
+        locked: ["mode", "status"],
+        stampField: "created_at",
+      },
+      transfer: {
+        url: (id) => `/api/game-transfers/${id}`,
+        manual: (id) => {
+          const t = gameTransfers.find((x) => x.transfer_id === id);
+          return !!t && t.skip_bot === true && (t.status === "completed" || t.status === "failed");
+        },
+        locked: ["mode"],
+        stampField: "created_at",
+        status: (v) => {
+          const st = v.toLowerCase();
+          return st === "completed" || st === "failed"
+            ? { status: st }
+            : `Status is Completed or Failed, not "${v}"`;
+        },
+      },
+      claim: {
+        url: (id) => `/api/claims/${id}`,
+        manual: () => true,
+        status: (v) => {
+          const st = v.toLowerCase();
+          return ["outstanding", "settled", "cancelled"].includes(st)
+            ? { status: st }
+            : `Status is outstanding, settled or cancelled, not "${v}"`;
+        },
+      },
+    }),
+    [freeCredits, gameTransfers],
+  );
+
+  const editByReparse = useCallback(
+    async (rowIndex: number, colIndex: number, value: string) => {
+      const cfg = REPARSE_EDIT[tab];
+      const row = rows[rowIndex];
+      const id = Number(row?.id);
+      if (!cfg || !row || !Number.isFinite(id)) return;
+      const cols = COL[tab] as Record<string, number | undefined>;
+      const v = value.trim();
+      if (v === (row.cells[colIndex] ?? "").trim()) return;
+
+      let patch: Record<string, unknown>;
+      if (colIndex === cols.status) {
+        const st = cfg.status?.(v);
+        if (st === undefined) return;
+        if (typeof st === "string") return void toast.error(st);
+        patch = st;
+      } else if (cfg.stampField && (colIndex === cols.date || colIndex === cols.time)) {
+        // A settlement has one timestamp; the two cells are halves of it.
+        const dateCell = colIndex === cols.date ? v : row.cells[cols.date!];
+        const timeCell = colIndex === cols.time ? v : row.cells[cols.time!];
+        const ymd = parseSheetDate(dateCell ?? "");
+        const hm = parseSheetTime(timeCell ?? "");
+        if (!ymd) return void toast.error(`Bad date "${dateCell}" (use 31/8/2026)`);
+        if (!hm) return void toast.error(`Bad time "${timeCell}" (use 14:30)`);
+        const [y, m, d] = ymd.split("-").map(Number);
+        patch = { [cfg.stampField]: new Date(y, m - 1, d, hm[0], hm[1]).toISOString() };
+      } else {
+        // The claim cell shows a name, which no parser reads as yes/no.
+        const before = row.cells.map((c, i) => (i === cols.assign ? "" : c));
+        const after = before.map((c, i) => (i === colIndex ? value : c));
+        const parse = tab === "leaderwithdrawal"
+          ? (d: string[]) => parseLeaderWithdrawalDraft(d, true)
+          : parseByTab[tab];
+        const next = parse(after);
+        if (!next.ok) return void toast.error(next.error);
+        const prev = parse(before);
+        patch = {};
+        if (prev.ok) {
+          for (const [k, val] of Object.entries(next.payload)) {
+            if (JSON.stringify(val) !== JSON.stringify(prev.payload[k])) patch[k] = val;
+          }
+          for (const k of Object.keys(prev.payload)) if (!(k in next.payload)) patch[k] = null;
+        } else {
+          // The row as saved no longer passes on its own (an account since
+          // deactivated, say) — send the whole corrected reading.
+          patch = next.payload;
+        }
+        // A leader settlement's two ends are each one choice: send both halves —
+        // and only for the end whose cell was edited. Labels repeat across
+        // casinos, so re-reading an untouched account cell under a different
+        // leader could quietly land on another casino's account.
+        if (tab === "leadertransfer") {
+          for (const end of ["from", "to"] as const) {
+            if (colIndex !== cols[`${end}account`]) {
+              delete patch[`${end}_account_id`];
+              delete patch[`${end}_cash`];
+            } else if (`${end}_account_id` in patch || `${end}_cash` in patch) {
+              patch[`${end}_account_id`] = next.payload[`${end}_account_id`] ?? null;
+              patch[`${end}_cash`] = next.payload[`${end}_cash`] ?? false;
+            }
+          }
+        }
+        // An expense's source is one choice in two fields, same as above.
+        if (tab === "expense" && ("paid_from_account_id" in patch || "paid_from_cash_entity_id" in patch)) {
+          patch.paid_from_account_id = next.payload.paid_from_account_id ?? null;
+          patch.paid_from_cash_entity_id = next.payload.paid_from_cash_entity_id ?? null;
+        }
+        if (!Object.keys(patch).length) return;
+      }
+
+      const res = await fetch(cfg.url(id), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      const data = (await res.json().catch(() => null)) as { error?: string } | null;
+      if (!res.ok) {
+        toast.error(data?.error ?? "Could not save the change");
+        return;
+      }
+      void loadRangeRows(tab);
+      void refresh();
+    },
+    [tab, rows, REPARSE_EDIT, parseByTab, parseLeaderWithdrawalDraft, loadRangeRows, refresh],
+  );
   const parseDraft = parseByTab[tab];
 
   const draftKey = useCallback((d: string[]) => `${tab}:${d.join(" ")}`, [tab]);
@@ -2868,31 +3050,42 @@ export default function TransactionsPage() {
       if (isViewer) return false;
 
       /**
-       * A held row is edited by whoever holds it.
+       * Any manual row's cells edit in place, whoever holds it.
        *
-       * Two people working the same deposit is how a top-up gets done twice,
-       * so a claim is the lock: a colleague's row is read-only until they
-       * release it. An unheld row is open to anyone, as the server allows. The
-       * claim cell itself is the way in and the way out — it opens on an
-       * unheld row (to take it) and on your own (to release it), and never on
-       * a colleague's, which the server refuses anyway.
-       * A company leader edits the cells of any row, and may take or release
-       * a colleague's claim from the claim cell too.
+       * The claim used to lock a colleague's row read-only. The desk asked for
+       * corrections to be open to anyone instead — the claim still decides who
+       * approves, pulls, rejects and deletes, and every edit is logged with
+       * who made it. The claim cell itself stays the way in and out: it opens
+       * on an unheld row (to take it) and on your own (to release it); a
+       * company leader may also take or release a colleague's.
        */
       const owner = ownerOf(rowIndex);
-      if (owner !== undefined) {
+      if (colIndex === assignColOf(tab)) {
+        if (owner === undefined) return true;
         const mine = owner !== null && owner === me?.user_id;
-        if (colIndex === assignColOf(tab)) {
-          return owner === null || mine || me?.role === "company_leader";
-        }
-        if (owner !== null && !mine && me?.role !== "company_leader") return false;
-      } else if (colIndex === assignColOf(tab)) {
-        return true;
+        return owner === null || mine || me?.role === "company_leader";
+      }
+      const reparse = REPARSE_EDIT[tab];
+      if (reparse) {
+        const cols = COL[tab] as Record<string, number | undefined>;
+        if (colIndex === cols.assign) return false;
+        if (reparse.locked?.some((k) => cols[k] === colIndex)) return false;
+        return reparse.manual(Number(rows[rowIndex]?.id));
       }
       if (tab === "deposit") {
-        if (!DEPOSIT_EDITABLE_COLS.has(colIndex)) return false;
         const dep = depositById.get(Number(rows[rowIndex]?.id));
         if (!dep) return false;
+        // A manual row is the desk's own record: every typed cell and its
+        // status correct in place, at any status — the server re-books.
+        if (dep.skip_bot) {
+          return (
+            DEPOSIT_EDITABLE_COLS.has(colIndex) ||
+            colIndex === COL.deposit.status ||
+            colIndex === COL.deposit.date ||
+            colIndex === COL.deposit.time
+          );
+        }
+        if (!DEPOSIT_EDITABLE_COLS.has(colIndex)) return false;
         // An auto row's amount and bank are the bank statement's, not ours.
         if (!dep.skip_bot && (colIndex === COL.deposit.amount || colIndex === COL.deposit.bank)) {
           return false;
@@ -2907,10 +3100,14 @@ export default function TransactionsPage() {
       if (tab === "withdrawal") {
         const w = withdrawalById.get(Number(rows[rowIndex]?.id));
         if (!w) return false;
-        // A manual row left at Credits pulled with no Paid From: naming the
-        // account is what finishes it (see onCommittedEdit).
-        if (colIndex === COL.withdrawal.paidfrom) {
-          return w.status === "credits_pulled" && !!w.skip_bot && w.paid_from_account_id == null;
+        // A manual row: every typed cell, Paid From and status, at any status
+        // — the server undoes and re-lays the pull and the payout.
+        if (w.skip_bot) {
+          const c = COL.withdrawal;
+          return (
+            WITHDRAWAL_EDITABLE_COLS.has(colIndex) ||
+            [c.member, c.paidfrom, c.status, c.date, c.time].includes(colIndex)
+          );
         }
         if (!WITHDRAWAL_EDITABLE_COLS.has(colIndex)) return false;
         if (w.status === "requested") return true;
@@ -2923,6 +3120,7 @@ export default function TransactionsPage() {
     },
     [
       tab,
+      REPARSE_EDIT,
       isViewer,
       me,
       ownerOf,
@@ -2935,6 +3133,23 @@ export default function TransactionsPage() {
       assignColOf,
     ],
   );
+
+  /** A row's Date and Time cells are two halves of one timestamp; given the edited half, the instant. */
+  const stampFrom = (
+    cells: string[],
+    cols: { date: number; time: number },
+    colIndex: number,
+    value: string,
+  ): { ok: true; iso: string } | { ok: false; error: string } => {
+    const dateCell = colIndex === cols.date ? value : cells[cols.date] ?? "";
+    const timeCell = colIndex === cols.time ? value : cells[cols.time] ?? "";
+    const ymd = parseSheetDate(dateCell);
+    if (!ymd) return { ok: false, error: `Bad date "${dateCell}" (use 31/8/2026)` };
+    const hm = parseSheetTime(timeCell);
+    if (!hm) return { ok: false, error: `Bad time "${timeCell}" (use 14:30)` };
+    const [y, m, d] = ymd.split("-").map(Number);
+    return { ok: true, iso: new Date(y, m - 1, d, hm[0], hm[1]).toISOString() };
+  };
 
   const onCommittedEdit = useCallback(
     async (rowIndex: number, colIndex: number, value: string) => {
@@ -2959,6 +3174,10 @@ export default function TransactionsPage() {
         if (!res.ok) toast.error(res.error ?? (want ? "Could not claim the row" : "Could not release the row"));
         return;
       }
+      if (REPARSE_EDIT[tab]) {
+        await editByReparse(rowIndex, colIndex, value);
+        return;
+      }
       // ── withdrawals ─────────────────────────────────────────────────────
       if (tab === "withdrawal") {
         const w = withdrawalById.get(Number(rows[rowIndex]?.id));
@@ -2967,20 +3186,35 @@ export default function TransactionsPage() {
         const c = COL.withdrawal;
         let patch: Record<string, unknown> | null = null;
 
-        // Paid From on a pulled row pays it, from that account, in one step.
+        // Paid From: naming it on a pulled row pays it; changing it on a paid
+        // row moves the deduction; blanking it is refused server-side unless
+        // the status goes back to Credits pulled.
         if (colIndex === c.paidfrom) {
-          if (!v) return;
-          const account = accountByLabel.get(v.toLowerCase());
-          if (!account) {
-            toast.error(`"${v}" is not one of our accounts — pick one from the list`);
-            return;
+          if (!v) {
+            patch = { paid_from_account_id: null };
+          } else {
+            const account = accountByLabel.get(v.toLowerCase());
+            if (!account) {
+              toast.error(`"${v}" is not one of our accounts — pick one from the list`);
+              return;
+            }
+            patch = { paid_from_account_id: account.account_id };
           }
-          const res = await markWithdrawalPaid(w.withdrawal_id, {
-            paid_from_account_id: account.account_id,
-          });
-          if (!res.ok) toast.error(res.error ?? "Could not mark it paid");
-          else void loadRangeRows("withdrawal");
-          return;
+        } else if (colIndex === c.member) {
+          const pl = playerByCode.get(v.toLowerCase());
+          if (!pl) return void toast.error(`Unknown member code "${v}" — not changed`);
+          if (pl.status === "archived") return void toast.error(`"${v}" is archived — not changed`);
+          patch = { player_id: pl.player_id };
+        } else if (colIndex === c.status) {
+          const st = v.toLowerCase().replace(/[\s-]+/g, "_");
+          if (!["credits_pulled", "paid", "failed"].includes(st)) {
+            return void toast.error(`Status is Credits pulled, Paid or Failed, not "${v}"`);
+          }
+          patch = { status: st };
+        } else if (colIndex === c.date || colIndex === c.time) {
+          const stamp = stampFrom(rows[rowIndex]?.cells ?? [], c, colIndex, v);
+          if (!stamp.ok) return void toast.error(stamp.error);
+          patch = { created_at: stamp.iso };
         }
 
         if (colIndex === c.product) {
@@ -3067,6 +3301,36 @@ export default function TransactionsPage() {
         if (!res.ok) toast.error(res.error ?? fallback);
         else if (res.warning) toast.warning(res.warning, { duration: 10_000 });
       };
+      if (
+        colIndex === COL.deposit.status ||
+        colIndex === COL.deposit.date ||
+        colIndex === COL.deposit.time
+      ) {
+        let body: Record<string, unknown>;
+        if (colIndex === COL.deposit.status) {
+          const st = v.toLowerCase();
+          if (st !== "completed" && st !== "failed") {
+            return void toast.error(`Status is Completed or Failed, not "${v}"`);
+          }
+          body = { status: st };
+        } else {
+          const stamp = stampFrom(rows[rowIndex]?.cells ?? [], COL.deposit, colIndex, v);
+          if (!stamp.ok) return void toast.error(stamp.error);
+          body = { deposit_date: stamp.iso, deposit_time_known: true };
+        }
+        const res = await fetch(`/api/deposits/${dep.deposit_id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const data = (await res.json().catch(() => null)) as
+          | { error?: string; warning?: string }
+          | null;
+        if (!res.ok) toast.error(data?.error ?? "Could not change the deposit");
+        else if (data?.warning) toast.warning(data.warning, { duration: 10_000 });
+        void loadRangeRows("deposit");
+        return;
+      }
       if (colIndex === COL.deposit.member) {
         const pl = playerByCode.get(v.toLowerCase());
         if (!pl) {
@@ -3137,7 +3401,8 @@ export default function TransactionsPage() {
     },
     [
       tab,
-      markWithdrawalPaid,
+      REPARSE_EDIT,
+      editByReparse,
       assignColOf,
       setAssignment,
       depositById,
