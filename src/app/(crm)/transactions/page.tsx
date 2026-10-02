@@ -3240,10 +3240,19 @@ export default function TransactionsPage() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ bank_accounts: accounts }),
           });
-          const data = (await res.json().catch(() => null)) as { error?: string } | null;
-          if (!res.ok) return void toast.error(data?.error ?? "Could not save the holder");
-          void refresh();
-          void loadRangeRows("withdrawal");
+          const data = (await res.json().catch(() => null)) as
+            | { error?: string; player?: Player }
+            | null;
+          if (!res.ok || !data?.player) {
+            return void toast.error(data?.error ?? "Could not save the holder");
+          }
+          // The cell reads the holder off the store's copy of the member, which
+          // a state refresh doesn't reload — so put the saved member there.
+          const saved = data.player;
+          useStore.setState((st) => ({
+            players: st.players.map((x) => (x.player_id === saved.player_id ? { ...x, ...saved } : x)),
+          }));
+          toast.success(`Holder saved to ${saved.username}'s bank accounts`);
           return;
         }
 
@@ -3470,7 +3479,6 @@ export default function TransactionsPage() {
       REPARSE_EDIT,
       editByReparse,
       playerById,
-      refresh,
       assignColOf,
       setAssignment,
       depositById,
