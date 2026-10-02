@@ -3106,7 +3106,7 @@ export default function TransactionsPage() {
           const c = COL.withdrawal;
           return (
             WITHDRAWAL_EDITABLE_COLS.has(colIndex) ||
-            [c.member, c.paidfrom, c.status, c.date, c.time].includes(colIndex)
+            [c.member, c.holder, c.paidfrom, c.status, c.date, c.time].includes(colIndex)
           );
         }
         if (!WITHDRAWAL_EDITABLE_COLS.has(colIndex)) return false;
@@ -3185,6 +3185,42 @@ export default function TransactionsPage() {
         const v = value.trim();
         const c = COL.withdrawal;
         let patch: Record<string, unknown> | null = null;
+
+        /**
+         * The holder isn't the withdrawal's — it is the name on the member's
+         * saved account the money goes to, and the cell reads it from there.
+         * So the edit lands on the member: that account's holder is corrected,
+         * or, if the member has no such account saved yet, it is added.
+         */
+        if (colIndex === c.holder) {
+          const pl = playerById.get(w.player_id);
+          if (!pl) return void toast.error("That member isn't loaded — refresh and try again");
+          if (!v) return void toast.error("Type the account holder's name");
+          const accounts = [...(pl.bank_accounts ?? [])];
+          const current = payoutAccountOf(pl, w.bank_name, w.bank_account_number);
+          if (current) {
+            const i = accounts.indexOf(current);
+            accounts[i] = { ...current, account_holder: v };
+          } else if (w.bank_name && w.bank_account_number) {
+            accounts.push({
+              bank_name: w.bank_name,
+              account_number: w.bank_account_number,
+              account_holder: v,
+            });
+          } else {
+            return void toast.error("Fill Bank and Bank Account first — the holder is saved against them");
+          }
+          const res = await fetch(`/api/players/${pl.player_id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ bank_accounts: accounts }),
+          });
+          const data = (await res.json().catch(() => null)) as { error?: string } | null;
+          if (!res.ok) return void toast.error(data?.error ?? "Could not save the holder");
+          void refresh();
+          void loadRangeRows("withdrawal");
+          return;
+        }
 
         // Paid From: naming it on a pulled row pays it; changing it on a paid
         // row moves the deduction; blanking it is refused server-side unless
@@ -3403,6 +3439,9 @@ export default function TransactionsPage() {
       tab,
       REPARSE_EDIT,
       editByReparse,
+      payoutAccountOf,
+      playerById,
+      refresh,
       assignColOf,
       setAssignment,
       depositById,
