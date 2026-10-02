@@ -37,6 +37,8 @@ type LeaderTransfer = {
   to_account_id: number | null;
   from_cash: boolean;
   to_cash: boolean;
+  from_bank_transfer?: boolean;
+  to_bank_transfer?: boolean;
   note: string | null;
   created_by_user_id: number;
   created_at: string;
@@ -51,8 +53,9 @@ export default function LeaderTransfersPage() {
   const bankAccounts = useStore((s) => s.transferAccounts);
 
   const accountLabel = useCallback(
-    (id: number | null, cash: boolean) => {
+    (id: number | null, cash: boolean, bank?: boolean) => {
       if (cash) return "Cash";
+      if (bank) return "Bank Transfer";
       if (id == null) return "—";
       const a = bankAccounts.find((x) => x.account_id === id);
       return a ? (a.label ?? `${a.bank_name} ${a.account_number}`) : `#${id}`;
@@ -242,7 +245,7 @@ export default function LeaderTransfersPage() {
                     {userName(r.from_leader_user_id)}
                   </td>
                   <td className="whitespace-nowrap px-4 py-2 text-muted-foreground">
-                    {accountLabel(r.from_account_id, r.from_cash)}
+                    {accountLabel(r.from_account_id, r.from_cash, r.from_bank_transfer)}
                   </td>
                   <td className="whitespace-nowrap px-4 py-2">
                     <span className="inline-flex items-center gap-1.5">
@@ -251,7 +254,7 @@ export default function LeaderTransfersPage() {
                     </span>
                   </td>
                   <td className="whitespace-nowrap px-4 py-2 text-muted-foreground">
-                    {accountLabel(r.to_account_id, r.to_cash)}
+                    {accountLabel(r.to_account_id, r.to_cash, r.to_bank_transfer)}
                   </td>
                   <td className="whitespace-nowrap px-4 py-2 text-right font-medium tabular-nums">
                     {formatRM(r.amount)}
@@ -294,6 +297,8 @@ export default function LeaderTransfersPage() {
 
 /** The value an "out of" / "into" picker carries: "cash", "" or an account id. */
 const CASH_END = "cash";
+/** Paid by bank, but not from/into one of our accounts — moves no balance. */
+const BANK_END = "bank_transfer";
 
 function NewTransferDialog({
   leaders,
@@ -357,6 +362,7 @@ function NewTransferDialog({
   /** The end, as the API wants it. */
   const endFields = (value: string, side: "from" | "to") => {
     if (value === CASH_END) return { [`${side}_cash`]: true };
+    if (value === BANK_END) return { [`${side}_bank_transfer`]: true };
     if (value) return { [`${side}_account_id`]: Number(value) };
     return {};
   };
@@ -413,7 +419,7 @@ function NewTransferDialog({
                 onValueChange={(v) => {
                   setFrom(v ?? "");
                   // The chosen account belonged to the old leader.
-                  if (fromEnd !== CASH_END) setFromEnd("");
+                  if (fromEnd !== CASH_END && fromEnd !== BANK_END) setFromEnd("");
                 }}
               >
                 <SelectTrigger className="h-9 w-full cursor-pointer">
@@ -434,7 +440,7 @@ function NewTransferDialog({
                 value={to || null}
                 onValueChange={(v) => {
                   setTo(v ?? "");
-                  if (toEnd !== CASH_END) setToEnd("");
+                  if (toEnd !== CASH_END && toEnd !== BANK_END) setToEnd("");
                 }}
               >
                 <SelectTrigger className="h-9 w-full cursor-pointer">
@@ -459,10 +465,11 @@ function NewTransferDialog({
                 onValueChange={(v) => setFromEnd(v ?? "")}
               >
                 <SelectTrigger className="h-9 w-full cursor-pointer">
-                  <SelectValue placeholder="Bank account / Cash" />
+                  <SelectValue placeholder="Account / Cash / Bank Transfer" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value={CASH_END}>Cash</SelectItem>
+                  <SelectItem value={BANK_END}>Bank Transfer</SelectItem>
                   {accountsFor(from).map((a) => (
                     <SelectItem key={a.account_id} value={String(a.account_id)}>
                       {a.label ?? `${a.bank_name} ${a.account_number}`}
@@ -475,10 +482,11 @@ function NewTransferDialog({
               <Label>Into</Label>
               <Select value={toEnd || null} onValueChange={(v) => setToEnd(v ?? "")}>
                 <SelectTrigger className="h-9 w-full cursor-pointer">
-                  <SelectValue placeholder="Bank account / Cash" />
+                  <SelectValue placeholder="Account / Cash / Bank Transfer" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value={CASH_END}>Cash</SelectItem>
+                  <SelectItem value={BANK_END}>Bank Transfer</SelectItem>
                   {accountsFor(to).map((a) => (
                     <SelectItem key={a.account_id} value={String(a.account_id)}>
                       {a.label ?? `${a.bank_name} ${a.account_number}`}

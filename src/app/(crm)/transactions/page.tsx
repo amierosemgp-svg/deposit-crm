@@ -209,6 +209,8 @@ type LeaderTransferRow = {
   to_account_id: number | null;
   from_cash: boolean;
   to_cash: boolean;
+  from_bank_transfer?: boolean;
+  to_bank_transfer?: boolean;
   note: string | null;
   created_by_user_id: number;
   created_at: string;
@@ -542,6 +544,8 @@ function Kbd({ k, light }: { k: string; light?: boolean }) {
 
 /** Either end of a leader settlement when no bank account was involved. */
 const CASH = "Cash";
+/** A leader-settlement end paid by bank, but not from/into one of our accounts. */
+const BANK_TRANSFER = "Bank Transfer";
 
 /** How a leader's own cash is written in the Expense sheet: "Leader One cash". */
 const CASH_SUFFIX = "cash";
@@ -1017,6 +1021,7 @@ export default function TransactionsPage() {
   const END_SUGGESTIONS = useMemo<SheetSuggestion[]>(
     () => [
       { value: CASH, hint: "changed hands as cash — no account involved" },
+      { value: BANK_TRANSFER, hint: "paid by bank, not from/into one of our accounts" },
       ...transferAccounts
         .filter((a) => a.status === "active")
         .map((a) => ({
@@ -1265,9 +1270,9 @@ export default function TransactionsPage() {
         date,
         time,
         from: { label: "From Leader", width: 160, entry: true, required: true, options: SETTLEMENT_LEADER_SUGGESTIONS, placeholder: "from leader" },
-        fromaccount: { label: "From Account", width: 190, entry: true, options: END_SUGGESTIONS, placeholder: "bank account / Cash" },
+        fromaccount: { label: "From Account", width: 190, entry: true, options: END_SUGGESTIONS, placeholder: "account / Cash / Bank Transfer" },
         to: { label: "To Leader", width: 160, entry: true, required: true, options: SETTLEMENT_LEADER_SUGGESTIONS, placeholder: "to leader" },
-        toaccount: { label: "To Account", width: 190, entry: true, options: END_SUGGESTIONS, placeholder: "bank account / Cash" },
+        toaccount: { label: "To Account", width: 190, entry: true, options: END_SUGGESTIONS, placeholder: "account / Cash / Bank Transfer" },
         amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "1000" },
         note: { label: "Note", width: 260, entry: true, placeholder: "what it settles (optional)" },
       }),
@@ -1813,8 +1818,9 @@ export default function TransactionsPage() {
 
   /** How an end reads back: the account's label, "Cash", or an em dash. */
   const transferEndLabel = useCallback(
-    (accountId: number | null | undefined, cash: boolean | undefined) => {
+    (accountId: number | null | undefined, cash: boolean | undefined, bank?: boolean) => {
       if (cash) return CASH;
+      if (bank) return BANK_TRANSFER;
       if (accountId == null) return "—";
       const a = transferAccounts.find((x) => x.account_id === accountId);
       return a ? (a.label ?? `${a.bank_name} ${a.account_number}`) : `#${accountId}`;
@@ -1967,9 +1973,9 @@ export default function TransactionsPage() {
           date: sheetDate(t.created_at),
           time: formatClock(t.created_at),
           from: userName(t.from_leader_user_id),
-          fromaccount: transferEndLabel(t.from_account_id, t.from_cash),
+          fromaccount: transferEndLabel(t.from_account_id, t.from_cash, t.from_bank_transfer),
           to: userName(t.to_leader_user_id),
-          toaccount: transferEndLabel(t.to_account_id, t.to_cash),
+          toaccount: transferEndLabel(t.to_account_id, t.to_cash, t.to_bank_transfer),
           amount: fmtAmount(t.amount),
           note: t.note ?? "",
         }),
@@ -2140,6 +2146,7 @@ export default function TransactionsPage() {
         );
         return [
           { value: CASH, hint: "changed hands as cash — no account involved" },
+          { value: BANK_TRANSFER, hint: "paid by bank, not from/into one of our accounts" },
           ...allowed.map((a) => ({
             value: a.label ?? `${a.bank_name} ${a.account_number}`,
             hint: `${a.entity_name ?? entityName(a.entity_id)} · ${fmtAmount(a.current_balance)}`,
@@ -2698,10 +2705,11 @@ export default function TransactionsPage() {
     (
       raw: string,
       leaderId: number,
-    ): { ok: true; account_id?: number; cash?: boolean } | { ok: false } => {
+    ): { ok: true; account_id?: number; cash?: boolean; bank?: boolean } | { ok: false } => {
       const v = raw.trim();
       if (!v) return { ok: true };
       if (v.toLowerCase() === CASH.toLowerCase()) return { ok: true, cash: true };
+      if (v.toLowerCase() === BANK_TRANSFER.toLowerCase()) return { ok: true, bank: true };
       const named = transferAccounts.filter(
         (a) =>
           (a.label ?? "").trim().toLowerCase() === v.toLowerCase() ||
@@ -2733,10 +2741,10 @@ export default function TransactionsPage() {
       const toEndCell = (d[c.toaccount] ?? "").trim();
       const fromEnd = resolveTransferEnd(fromEndCell, fromId);
       if (!fromEnd.ok)
-        return { ok: false, error: `Unknown account "${fromEndCell}" — pick one from the list, or Cash` };
+        return { ok: false, error: `Unknown account "${fromEndCell}" — pick one from the list, Cash or Bank Transfer` };
       const toEnd = resolveTransferEnd(toEndCell, toId);
       if (!toEnd.ok)
-        return { ok: false, error: `Unknown account "${toEndCell}" — pick one from the list, or Cash` };
+        return { ok: false, error: `Unknown account "${toEndCell}" — pick one from the list, Cash or Bank Transfer` };
       // One leader moving money to themselves is fine — bank to cash, cash to
       // bank, one account to another — as long as the two ends differ. Same
       // leader, same end moves nothing.
@@ -2744,6 +2752,7 @@ export default function TransactionsPage() {
         fromId === toId &&
         ((fromEnd.account_id != null && fromEnd.account_id === toEnd.account_id) ||
           (fromEnd.cash && toEnd.cash) ||
+          (fromEnd.bank && toEnd.bank) ||
           (!fromEndCell && !toEndCell))
       ) {
         return {
@@ -2759,8 +2768,10 @@ export default function TransactionsPage() {
           amount: amt,
           ...(fromEnd.account_id ? { from_account_id: fromEnd.account_id } : {}),
           ...(fromEnd.cash ? { from_cash: true } : {}),
+          ...(fromEnd.bank ? { from_bank_transfer: true } : {}),
           ...(toEnd.account_id ? { to_account_id: toEnd.account_id } : {}),
           ...(toEnd.cash ? { to_cash: true } : {}),
+          ...(toEnd.bank ? { to_bank_transfer: true } : {}),
           ...(note ? { note } : {}),
         },
       };
@@ -2933,12 +2944,13 @@ export default function TransactionsPage() {
         // leader could quietly land on another casino's account.
         if (tab === "leadertransfer") {
           for (const end of ["from", "to"] as const) {
+            const keys = [`${end}_account_id`, `${end}_cash`, `${end}_bank_transfer`];
             if (colIndex !== cols[`${end}account`]) {
-              delete patch[`${end}_account_id`];
-              delete patch[`${end}_cash`];
-            } else if (`${end}_account_id` in patch || `${end}_cash` in patch) {
+              for (const k of keys) delete patch[k];
+            } else if (keys.some((k) => k in patch)) {
               patch[`${end}_account_id`] = next.payload[`${end}_account_id`] ?? null;
               patch[`${end}_cash`] = next.payload[`${end}_cash`] ?? false;
+              patch[`${end}_bank_transfer`] = next.payload[`${end}_bank_transfer`] ?? false;
             }
           }
         }
@@ -4605,7 +4617,7 @@ export default function TransactionsPage() {
         items: list.map((t) => ({
           key: t.transfer_id,
           label: `${userName(t.from_leader_user_id)} → ${userName(t.to_leader_user_id)}`,
-          meta: `${transferEndLabel(t.from_account_id, t.from_cash)} → ${transferEndLabel(t.to_account_id, t.to_cash)}`,
+          meta: `${transferEndLabel(t.from_account_id, t.from_cash, t.from_bank_transfer)} → ${transferEndLabel(t.to_account_id, t.to_cash, t.to_bank_transfer)}`,
           value: fmtAmount(t.amount),
         })),
         run: async () => {

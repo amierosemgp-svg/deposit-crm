@@ -35,8 +35,18 @@ const patchSchema = z
     to_account_id: z.number().int().positive().nullable().optional(),
     from_cash: z.boolean().optional(),
     to_cash: z.boolean().optional(),
+    from_bank_transfer: z.boolean().optional(),
+    to_bank_transfer: z.boolean().optional(),
     /** The Date and Time cells — the row's only timestamp is when it was keyed. */
     created_at: z.string().datetime({ offset: true }).optional(),
+  })
+  .refine((v) => [v.from_cash, v.from_bank_transfer, v.from_account_id].filter(Boolean).length <= 1, {
+    message: "The sending end is one of: a bank account, cash, or a bank transfer",
+    path: ["from_account_id"],
+  })
+  .refine((v) => [v.to_cash, v.to_bank_transfer, v.to_account_id].filter(Boolean).length <= 1, {
+    message: "The receiving end is one of: a bank account, cash, or a bank transfer",
+    path: ["to_account_id"],
   })
   .refine((v) => !(v.from_cash && v.from_account_id), {
     message: "The sending end is a bank account or cash, not both",
@@ -97,8 +107,14 @@ export async function PATCH(
       if (!row) throw new AuthError(404, "Leader transfer not found");
 
       // The row as it will be. An end named in the body replaces the end whole.
-      const fromEndTouched = body.from_account_id !== undefined || body.from_cash !== undefined;
-      const toEndTouched = body.to_account_id !== undefined || body.to_cash !== undefined;
+      const fromEndTouched =
+        body.from_account_id !== undefined ||
+        body.from_cash !== undefined ||
+        body.from_bank_transfer !== undefined;
+      const toEndTouched =
+        body.to_account_id !== undefined ||
+        body.to_cash !== undefined ||
+        body.to_bank_transfer !== undefined;
       const note = body.note === undefined ? row.note : body.note?.trim() || null;
       const next = {
         from_leader_user_id: body.from_leader_user_id ?? row.from_leader_user_id,
@@ -106,8 +122,12 @@ export async function PATCH(
         amount: body.amount ?? row.amount,
         from_account_id: fromEndTouched ? (body.from_account_id ?? null) : row.from_account_id,
         from_cash: fromEndTouched ? (body.from_cash ?? false) : row.from_cash,
+        from_bank_transfer: fromEndTouched
+          ? (body.from_bank_transfer ?? false)
+          : row.from_bank_transfer,
         to_account_id: toEndTouched ? (body.to_account_id ?? null) : row.to_account_id,
         to_cash: toEndTouched ? (body.to_cash ?? false) : row.to_cash,
+        to_bank_transfer: toEndTouched ? (body.to_bank_transfer ?? false) : row.to_bank_transfer,
         note,
         created_at: body.created_at ?? row.created_at,
       };
@@ -121,19 +141,24 @@ export async function PATCH(
         fromSideChanged ||
         toSideChanged ||
         next.from_cash !== row.from_cash ||
-        next.to_cash !== row.to_cash;
+        next.to_cash !== row.to_cash ||
+        next.from_bank_transfer !== row.from_bank_transfer ||
+        next.to_bank_transfer !== row.to_bank_transfer;
 
       // Same leader, same end: the rule POST refuses a new row on.
       if (endsChanged && next.from_leader_user_id === next.to_leader_user_id) {
         const sameAccount =
           next.from_account_id != null && next.from_account_id === next.to_account_id;
         const bothCash = next.from_cash && next.to_cash;
+        const bothBank = next.from_bank_transfer && next.to_bank_transfer;
         const neither =
           next.from_account_id == null &&
           next.to_account_id == null &&
           !next.from_cash &&
-          !next.to_cash;
-        if (sameAccount || bothCash || neither) {
+          !next.to_cash &&
+          !next.from_bank_transfer &&
+          !next.to_bank_transfer;
+        if (sameAccount || bothCash || bothBank || neither) {
           throw new AuthError(
             400,
             "A leader moving money to themselves needs two different ends — " +
@@ -271,17 +296,21 @@ export async function PATCH(
         amount: r.amount,
         from_account_id: r.from_account_id,
         from_cash: r.from_cash,
+        from_bank_transfer: r.from_bank_transfer,
         to_account_id: r.to_account_id,
         to_cash: r.to_cash,
+        to_bank_transfer: r.to_bank_transfer,
         note: r.note,
         created_at: r.created_at,
       });
       const changes = diffFields(shape(row), shape(saved));
       const nameOf = (id: number) => personById.get(id)?.full_name ?? `#${id}`;
-      const endOf = (accountId: number | null, cash: boolean) =>
+      const endOf = (accountId: number | null, cash: boolean, bank = false) =>
         cash
           ? "cash"
-          : accountId == null
+          : bank
+            ? "bank transfer"
+            : accountId == null
             ? null
             : (accountById.get(accountId)?.label ?? `#${accountId}`);
 
@@ -297,8 +326,8 @@ export async function PATCH(
             action: "leader_transfer_edited",
             from_leader: nameOf(saved.from_leader_user_id),
             to_leader: nameOf(saved.to_leader_user_id),
-            from: endOf(saved.from_account_id, saved.from_cash),
-            to: endOf(saved.to_account_id, saved.to_cash),
+            from: endOf(saved.from_account_id, saved.from_cash, saved.from_bank_transfer),
+            to: endOf(saved.to_account_id, saved.to_cash, saved.to_bank_transfer),
             amount: saved.amount,
             note: saved.note,
             changes,
@@ -417,8 +446,16 @@ export async function DELETE(
           action: "leader_transfer_deleted",
           from_leader: from?.full_name ?? null,
           to_leader: to?.full_name ?? null,
-          from: row.from_cash ? "cash" : labelOf(row.from_account_id),
-          to: row.to_cash ? "cash" : labelOf(row.to_account_id),
+          from: row.from_cash
+            ? "cash"
+            : row.from_bank_transfer
+              ? "bank transfer"
+              : labelOf(row.from_account_id),
+          to: row.to_cash
+            ? "cash"
+            : row.to_bank_transfer
+              ? "bank transfer"
+              : labelOf(row.to_account_id),
           amount: row.amount,
           note: row.note,
           ...balances,

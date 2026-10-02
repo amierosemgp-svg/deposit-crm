@@ -1483,6 +1483,9 @@ export const leaderTransfers = pgTable("leader_transfers", {
   to_account_id: integer("to_account_id").references(() => bankAccounts.account_id),
   from_cash: boolean("from_cash").notNull().default(false),
   to_cash: boolean("to_cash").notNull().default(false),
+  // Paid by bank, but not from/into one of our accounts — moves no balance.
+  from_bank_transfer: boolean("from_bank_transfer").notNull().default(false),
+  to_bank_transfer: boolean("to_bank_transfer").notNull().default(false),
   // What the settlement is for — free text, shown in the list and report.
   note: text("note"),
   created_by_user_id: integer("created_by_user_id")

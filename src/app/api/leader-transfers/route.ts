@@ -27,6 +27,17 @@ const createSchema = z
     to_account_id: z.number().int().positive().nullable().optional(),
     from_cash: z.boolean().optional(),
     to_cash: z.boolean().optional(),
+    // Paid by bank from/into an account we don't keep — like cash, no balance.
+    from_bank_transfer: z.boolean().optional(),
+    to_bank_transfer: z.boolean().optional(),
+  })
+  .refine((v) => [v.from_cash, v.from_bank_transfer, v.from_account_id].filter(Boolean).length <= 1, {
+    message: "The sending end is one of: a bank account, cash, or a bank transfer",
+    path: ["from_account_id"],
+  })
+  .refine((v) => [v.to_cash, v.to_bank_transfer, v.to_account_id].filter(Boolean).length <= 1, {
+    message: "The receiving end is one of: a bank account, cash, or a bank transfer",
+    path: ["to_account_id"],
   })
   .refine((v) => !(v.from_cash && v.from_account_id), {
     message: "The sending end is a bank account or cash, not both",
@@ -106,12 +117,15 @@ export async function POST(request: Request) {
       const sameAccount =
         body.from_account_id != null && body.from_account_id === body.to_account_id;
       const bothCash = !!body.from_cash && !!body.to_cash;
+      const bothBank = !!body.from_bank_transfer && !!body.to_bank_transfer;
       const neither =
         body.from_account_id == null &&
         body.to_account_id == null &&
         !body.from_cash &&
-        !body.to_cash;
-      if (sameAccount || bothCash || neither) {
+        !body.to_cash &&
+        !body.from_bank_transfer &&
+        !body.to_bank_transfer;
+      if (sameAccount || bothCash || bothBank || neither) {
         return jsonError(
           "A leader moving money to themselves needs two different ends — " +
             "one account to another, or between an account and cash",
@@ -241,6 +255,8 @@ export async function POST(request: Request) {
           to_account_id: body.to_account_id ?? null,
           from_cash: body.from_cash ?? false,
           to_cash: body.to_cash ?? false,
+          from_bank_transfer: body.from_bank_transfer ?? false,
+          to_bank_transfer: body.to_bank_transfer ?? false,
           note: body.note ?? null,
           created_by_user_id: user.user_id,
         })
@@ -275,10 +291,14 @@ export async function POST(request: Request) {
           to_leader: to.full_name,
           from: body.from_cash
             ? "cash"
-            : (accountById.get(body.from_account_id ?? -1)?.label ?? null),
+            : body.from_bank_transfer
+              ? "bank transfer"
+              : (accountById.get(body.from_account_id ?? -1)?.label ?? null),
           to: body.to_cash
             ? "cash"
-            : (accountById.get(body.to_account_id ?? -1)?.label ?? null),
+            : body.to_bank_transfer
+              ? "bank transfer"
+              : (accountById.get(body.to_account_id ?? -1)?.label ?? null),
           note: body.note ?? null,
           ...balances,
         },
