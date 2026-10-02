@@ -65,6 +65,38 @@ export async function visibleEntityIds(user: AuthedUser): Promise<number[] | nul
   return user.companyIds; // cs_agent: just their company
 }
 
+/**
+ * Entities whose bank accounts a user may move money between — bank transfers
+ * and leader settlements.
+ *
+ * Wider than visibleEntityIds for a CS agent only. Their desk backs up one
+ * casino from another (a CTC top-up) and records the leaders settling up, and
+ * both name accounts across the whole company that owns their casino: the
+ * company itself and every casino under it. That is the same family
+ * transferAllowed lets money move within. Everyone else is unchanged.
+ */
+export async function transferEntityIds(user: AuthedUser): Promise<number[] | null> {
+  const visible = await visibleEntityIds(user);
+  if (user.role !== "cs_agent" || visible === null) return visible;
+  const all = await db
+    .select({
+      id: entities.entity_id,
+      parent: entities.parent_entity_id,
+      type: entities.entity_type,
+    })
+    .from(entities);
+  const parents = new Set(
+    all
+      .filter((e) => visible.includes(e.id) && e.parent !== null)
+      .map((e) => e.parent!)
+      .filter((id) => all.some((e) => e.id === id && e.type === "leader")),
+  );
+  const family = all.filter(
+    (e) => parents.has(e.id) || (e.parent !== null && parents.has(e.parent) && e.type === "company"),
+  );
+  return [...new Set([...visible, ...family.map((e) => e.id)])];
+}
+
 /** Full entity subtree visible to the user (for hierarchy page). */
 export async function visibleEntityTree(user: AuthedUser) {
   const all = await db.select().from(entities);

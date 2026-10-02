@@ -11,6 +11,7 @@ import {
   companyLeaders,
   leaderMemberships,
   deposits,
+  entities,
   claims,
   expenses,
   gameCredits,
@@ -28,6 +29,7 @@ import {
   autoConfirmExpiredTransfers,
   depositScopeFilter,
   retryStuckGameTransfers,
+  transferEntityIds,
   visibleEntityIds,
   visibleEntityTree,
 } from "@/lib/api-helpers";
@@ -185,6 +187,32 @@ export async function GET() {
       );
     const accountIds = scopedAccounts.map((a) => a.account_id);
 
+    /**
+     * Accounts the transfer pickers offer — bank transfers and leader
+     * settlements. The same list as bankAccounts except for a CS desk, which
+     * moves money across its whole company, not just its casino (see
+     * transferEntityIds). Kept apart so the deposit, payout and expense
+     * pickers stay on the desk's own casino. Each carries its owner's name and
+     * parent: a sister casino is not in the desk's entity tree to look them up.
+     */
+    const transferIds = user.role === "cs_agent" ? await transferEntityIds(user) : null;
+    const transferAccounts = (
+      transferIds
+        ? await db
+            .select({
+              ...getTableColumns(bankAccounts),
+              entity_name: entities.name,
+              entity_parent_id: entities.parent_entity_id,
+            })
+            .from(bankAccounts)
+            .innerJoin(entities, eq(entities.entity_id, bankAccounts.entity_id))
+            .where(inArray(bankAccounts.entity_id, transferIds.length ? transferIds : [-1]))
+        : scopedAccounts
+    ) as (typeof scopedAccounts[number] & {
+      entity_name?: string;
+      entity_parent_id?: number | null;
+    })[];
+
     const [
       scopedDeposits,
       scopedWithdrawals,
@@ -255,7 +283,12 @@ export async function GET() {
               and(
                 user.companyIds === null
                   ? undefined
-                  : inArray(bankTransfers.from_account_id, accountIds),
+                  : or(
+                      inArray(bankTransfers.from_account_id, accountIds),
+                      // A CS desk can send between two sister casinos; what
+                      // it sent stays in its own list.
+                      eq(bankTransfers.initiated_by_user_id, user.user_id),
+                    ),
                 csCutoffIso ? gte(bankTransfers.created_at, csCutoffIso) : undefined,
               ),
             )
@@ -485,6 +518,7 @@ export async function GET() {
       gameCredits: scopedCredits,
       gameTransfers: scopedGameTransfers,
       bankAccounts: scopedAccounts,
+      transferAccounts,
       bankTransfers: [...transferMap.values()].sort((a, b) =>
         b.created_at.localeCompare(a.created_at),
       ),

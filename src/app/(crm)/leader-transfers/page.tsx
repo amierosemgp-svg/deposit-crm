@@ -48,7 +48,7 @@ export default function LeaderTransfersPage() {
   const users = useStore((s) => s.users);
   const entityName = useStore((s) => s.entityName);
   const userName = useStore((s) => s.userName);
-  const bankAccounts = useStore((s) => s.bankAccounts);
+  const bankAccounts = useStore((s) => s.transferAccounts);
 
   const accountLabel = useCallback(
     (id: number | null, cash: boolean) => {
@@ -295,8 +295,10 @@ function NewTransferDialog({
   onClose: () => void;
   onDone: () => void;
 }) {
-  const bankAccounts = useStore((s) => s.bankAccounts);
+  const bankAccounts = useStore((s) => s.transferAccounts);
   const entities = useStore((s) => s.entities);
+  const users = useStore((s) => s.users);
+  const leaderMemberships = useStore((s) => s.leaderMemberships);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   // "" = not recorded, "cash" = physical cash, otherwise a bank account id.
@@ -312,14 +314,28 @@ function NewTransferDialog({
    * refuse.
    */
   const accountsFor = useCallback(
-    (leaderId: string) => {
-      const id = Number(leaderId);
-      if (!id) return [];
-      const owned = new Set<number>([id]);
-      for (const e of entities) if (e.parent_entity_id === id) owned.add(e.entity_id);
-      return bankAccounts.filter((a) => a.status === "active" && owned.has(a.entity_id));
+    (leaderUserId: string) => {
+      // The pick is a person; the accounts hang off the companies they hold —
+      // the one they sit on plus any granted since.
+      const leader = users.find((u) => u.user_id === Number(leaderUserId));
+      if (!leader) return [];
+      const held = new Set<number>([
+        leader.entity_id,
+        ...leaderMemberships
+          .filter((m) => m.user_id === leader.user_id)
+          .map((m) => m.leader_entity_id),
+      ]);
+      const parentOf = (a: (typeof bankAccounts)[number]) =>
+        a.entity_parent_id ??
+        entities.find((e) => e.entity_id === a.entity_id)?.parent_entity_id ??
+        null;
+      return bankAccounts.filter((a) => {
+        if (a.status !== "active") return false;
+        const parent = parentOf(a);
+        return held.has(a.entity_id) || (parent !== null && held.has(parent));
+      });
     },
-    [bankAccounts, entities],
+    [bankAccounts, entities, users, leaderMemberships],
   );
 
   /** The end, as the API wants it. */

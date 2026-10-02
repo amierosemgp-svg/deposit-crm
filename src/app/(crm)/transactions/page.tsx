@@ -593,6 +593,9 @@ export default function TransactionsPage() {
   const companiesFn = useStore((s) => s.companies);
   const userName = useStore((s) => s.userName);
   const bankAccounts = useStore((s) => s.bankAccounts);
+  // The leader-transfer ends offer these: for a CS desk, every account in its
+  // company, not just its casino (see /api/state).
+  const transferAccounts = useStore((s) => s.transferAccounts);
   const entities = useStore((s) => s.entities);
   const users = useStore((s) => s.users);
   const entityName = useStore((s) => s.entityName);
@@ -1014,14 +1017,14 @@ export default function TransactionsPage() {
   const END_SUGGESTIONS = useMemo<SheetSuggestion[]>(
     () => [
       { value: CASH, hint: "changed hands as cash — no account involved" },
-      ...bankAccounts
+      ...transferAccounts
         .filter((a) => a.status === "active")
         .map((a) => ({
           value: a.label ?? `${a.bank_name} ${a.account_number}`,
-          hint: `${entityName(a.entity_id)} · ${fmtAmount(a.current_balance)}`,
+          hint: `${a.entity_name ?? entityName(a.entity_id)} · ${fmtAmount(a.current_balance)}`,
         })),
     ],
-    [bankAccounts, entityName],
+    [transferAccounts, entityName],
   );
   /**
    * Our own bank accounts, for the cells that name one: which account took a
@@ -1075,6 +1078,19 @@ export default function TransactionsPage() {
     }
     return m;
   }, [users, leaderMemberships]);
+
+  /** Does this account hang off a company the leader holds, or a casino under one? */
+  const heldByLeader = useCallback(
+    (leaderId: number, a: (typeof transferAccounts)[number]) => {
+      const held = companiesOfLeader.get(leaderId) ?? [];
+      const parent =
+        a.entity_parent_id ??
+        entities.find((e) => e.entity_id === a.entity_id)?.parent_entity_id ??
+        null;
+      return held.includes(a.entity_id) || (parent !== null && held.includes(parent));
+    },
+    [companiesOfLeader, entities],
+  );
 
   /** A typed leader name → their user id. */
   const leaderByName = useMemo(() => {
@@ -1780,10 +1796,10 @@ export default function TransactionsPage() {
     (accountId: number | null | undefined, cash: boolean | undefined) => {
       if (cash) return CASH;
       if (accountId == null) return "—";
-      const a = bankAccounts.find((x) => x.account_id === accountId);
+      const a = transferAccounts.find((x) => x.account_id === accountId);
       return a ? (a.label ?? `${a.bank_name} ${a.account_number}`) : `#${accountId}`;
     },
-    [bankAccounts],
+    [transferAccounts],
   );
 
   const expenseRows = useMemo<SheetRow[]>(() => {
@@ -2099,20 +2115,14 @@ export default function TransactionsPage() {
         const leaderId = leaderCell ? leaderByName.get(leaderCell) : undefined;
         // No leader named yet — the full list, rather than an empty dead end.
         if (!leaderId) return undefined;
-        const held = companiesOfLeader.get(leaderId) ?? [];
-        const allowed = bankAccounts.filter(
-          (a) =>
-            a.status === "active" &&
-            (held.includes(a.entity_id) ||
-              held.includes(
-                entities.find((e) => e.entity_id === a.entity_id)?.parent_entity_id ?? -1,
-              )),
+        const allowed = transferAccounts.filter(
+          (a) => a.status === "active" && heldByLeader(leaderId, a),
         );
         return [
           { value: CASH, hint: "changed hands as cash — no account involved" },
           ...allowed.map((a) => ({
             value: a.label ?? `${a.bank_name} ${a.account_number}`,
-            hint: `${entityName(a.entity_id)} · ${fmtAmount(a.current_balance)}`,
+            hint: `${a.entity_name ?? entityName(a.entity_id)} · ${fmtAmount(a.current_balance)}`,
           })),
         ];
       }
@@ -2213,7 +2223,7 @@ export default function TransactionsPage() {
       );
     },
     [tab, drafts, playerByCode, bonusOptionsCache, buildBonusSuggestions, houseRates,
-     bankAccounts, companiesOfLeader, entities, entityName, leaderByName],
+     transferAccounts, heldByLeader, entityName, leaderByName],
   );
 
   // ---- validation ----
@@ -2657,18 +2667,24 @@ export default function TransactionsPage() {
    * either spelling from the dropdown resolves.
    */
   const resolveTransferEnd = useCallback(
-    (raw: string): { ok: true; account_id?: number; cash?: boolean } | { ok: false } => {
+    (
+      raw: string,
+      leaderId: number,
+    ): { ok: true; account_id?: number; cash?: boolean } | { ok: false } => {
       const v = raw.trim();
       if (!v) return { ok: true };
       if (v.toLowerCase() === CASH.toLowerCase()) return { ok: true, cash: true };
-      const hit = bankAccounts.find(
+      const named = transferAccounts.filter(
         (a) =>
           (a.label ?? "").trim().toLowerCase() === v.toLowerCase() ||
           `${a.bank_name} ${a.account_number}`.toLowerCase() === v.toLowerCase(),
       );
+      // Labels repeat across casinos ("BSN 2"), so the leader on this side of
+      // the row picks which one was meant.
+      const hit = named.find((a) => heldByLeader(leaderId, a)) ?? named[0];
       return hit ? { ok: true, account_id: hit.account_id } : { ok: false };
     },
-    [bankAccounts],
+    [transferAccounts, heldByLeader],
   );
 
   const parseLeaderTransferDraft = useCallback(
@@ -2687,10 +2703,10 @@ export default function TransactionsPage() {
       const note = (d[c.note] ?? "").trim();
       const fromEndCell = (d[c.fromaccount] ?? "").trim();
       const toEndCell = (d[c.toaccount] ?? "").trim();
-      const fromEnd = resolveTransferEnd(fromEndCell);
+      const fromEnd = resolveTransferEnd(fromEndCell, fromId);
       if (!fromEnd.ok)
         return { ok: false, error: `Unknown account "${fromEndCell}" — pick one from the list, or Cash` };
-      const toEnd = resolveTransferEnd(toEndCell);
+      const toEnd = resolveTransferEnd(toEndCell, toId);
       if (!toEnd.ok)
         return { ok: false, error: `Unknown account "${toEndCell}" — pick one from the list, or Cash` };
       // One leader moving money to themselves is fine — bank to cash, cash to

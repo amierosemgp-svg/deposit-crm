@@ -125,6 +125,14 @@ type StateResponse = {
   gameCredits: GameCredit[];
   gameTransfers: GameTransfer[];
   bankAccounts: BankAccount[];
+  /**
+   * What the bank-transfer and leader-transfer pickers offer. bankAccounts,
+   * widened for a CS desk to every account in its company — see /api/state.
+   */
+  transferAccounts: (BankAccount & {
+    entity_name?: string;
+    entity_parent_id?: number | null;
+  })[];
   bankTransfers: BankTransfer[];
   boAccounts: ProviderBoAccount[];
   boAdjustments: ProviderBoAdjustment[];
@@ -165,6 +173,14 @@ type Store = {
   gameCredits: GameCredit[];
   gameTransfers: GameTransfer[];
   bankAccounts: BankAccount[];
+  /**
+   * What the bank-transfer and leader-transfer pickers offer. bankAccounts,
+   * widened for a CS desk to every account in its company — see /api/state.
+   */
+  transferAccounts: (BankAccount & {
+    entity_name?: string;
+    entity_parent_id?: number | null;
+  })[];
   bankTransfers: BankTransfer[];
   boAccounts: ProviderBoAccount[];
   boAdjustments: ProviderBoAdjustment[];
@@ -651,6 +667,7 @@ export const useStore = create<Store>((set, get) => {
     gameCredits: [],
     gameTransfers: [],
     bankAccounts: [],
+    transferAccounts: [],
     bankTransfers: [],
     boAccounts: [],
     boAdjustments: [],

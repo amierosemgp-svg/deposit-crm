@@ -10,7 +10,7 @@ import {
   users,
 } from "@/db/schema";
 import { AuthError, authErrorResponse, requireUser, requireWriteUser } from "@/lib/auth";
-import { jsonError, visibleEntityIds } from "@/lib/api-helpers";
+import { jsonError, transferEntityIds } from "@/lib/api-helpers";
 import { InsufficientBankBalanceError, moveBankBalance } from "@/lib/bank-balance";
 import { logActivity } from "@/lib/activity-log";
 
@@ -48,7 +48,7 @@ const createSchema = z
 export async function GET() {
   try {
     const user = await requireUser();
-    const visible = await visibleEntityIds(user);
+    const visible = await transferEntityIds(user);
     /**
      * Visible when either person belongs to something the reader can see.
      *
@@ -166,7 +166,7 @@ export async function POST(request: Request) {
      * One end has to be theirs. Recording a settlement between two organisations
      * neither of which you belong to is not a mistake anyone makes by accident.
      */
-    const visible = await visibleEntityIds(user);
+    const visible = await transferEntityIds(user);
     if (
       visible !== null &&
       ![...companiesOf(from), ...companiesOf(to)].some((id) => visible.includes(id))

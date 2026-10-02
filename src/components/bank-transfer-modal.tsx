@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { toast } from "sonner";
 import {
@@ -38,9 +38,15 @@ export function BankTransferModal({
   onOpenChange,
   defaultFromAccountId,
 }: Props) {
-  const accounts = useStore((s) => s.bankAccounts);
+  const accounts = useStore((s) => s.transferAccounts);
   const me = useStore((s) => s.me);
-  const entityName = useStore((s) => s.entityName);
+  const storeEntityName = useStore((s) => s.entityName);
+  // A sister casino isn't in a CS desk's entity tree, so its account brings
+  // its own name along.
+  const entityName = useCallback(
+    (id: number) => accounts.find((a) => a.entity_id === id)?.entity_name ?? storeEntityName(id),
+    [accounts, storeEntityName],
+  );
   const createTransfer = useStore((s) => s.createBankTransfer);
 
   const activeAccounts = useMemo(
@@ -48,13 +54,16 @@ export function BankTransferModal({
     [accounts],
   );
 
-  // From: only accounts belonging to entities the user manages
+  // From: only accounts belonging to entities the user manages — for a CS
+  // desk, every account in its company (the list is already narrowed to that).
   const fromAccounts = useMemo(
     () =>
       activeAccounts.filter(
         (a) =>
           !!me &&
-          (me.ownedEntityIds === null || me.ownedEntityIds.includes(a.entity_id)),
+          (me.role === "cs_agent" ||
+            me.ownedEntityIds === null ||
+            me.ownedEntityIds.includes(a.entity_id)),
       ),
     [activeAccounts, me],
   );

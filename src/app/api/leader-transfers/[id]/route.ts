@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { bankAccounts, leaderTransfers, transactions, users } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
-import { jsonError, visibleEntityIds } from "@/lib/api-helpers";
+import { jsonError, transferEntityIds } from "@/lib/api-helpers";
 import { logActivity } from "@/lib/activity-log";
 import { InsufficientBankBalanceError, moveBankBalance } from "@/lib/bank-balance";
 
@@ -45,7 +45,7 @@ export async function DELETE(
         .select({ full_name: users.full_name, entity_id: users.entity_id })
         .from(users)
         .where(eq(users.user_id, row.to_leader_user_id));
-      const visible = await visibleEntityIds(user);
+      const visible = await transferEntityIds(user);
       if (
         visible !== null &&
         ![from?.entity_id, to?.entity_id].some((id) => id != null && visible.includes(id))

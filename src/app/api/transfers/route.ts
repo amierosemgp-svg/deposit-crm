@@ -7,6 +7,7 @@ import {
   getSettingNumber,
   jsonError,
   transferAllowed,
+  transferEntityIds,
 } from "@/lib/api-helpers";
 
 const createSchema = z.object({
@@ -36,6 +37,11 @@ export async function POST(request: Request) {
       return jsonError("Cannot transfer to the same account");
     }
 
+    // A CS desk may send from any account in its company's family, not only
+    // its own casino's — see transferEntityIds.
+    const senders =
+      user.role === "cs_agent" ? await transferEntityIds(user) : user.ownedEntityIds;
+
     const result = await db.transaction(async (txn) => {
       const accounts = await txn
         .select()
@@ -52,10 +58,7 @@ export async function POST(request: Request) {
       if (!from || !to) throw new AuthError(404, "Account not found");
 
       // Sender must be within the user's managed entities
-      if (
-        user.ownedEntityIds !== null &&
-        !user.ownedEntityIds.includes(from.entity_id)
-      ) {
+      if (senders !== null && !senders.includes(from.entity_id)) {
         throw new AuthError(403, "Source account is outside your scope");
       }
       if (from.status !== "active" || to.status !== "active") {
