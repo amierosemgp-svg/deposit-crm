@@ -133,6 +133,18 @@ type StateResponse = {
     entity_name?: string;
     entity_parent_id?: number | null;
   })[];
+  /**
+   * Leaders a CS desk may name on a settlement, across the whole house — names
+   * and the companies each holds. Empty for other roles: their users list
+   * already has them.
+   */
+  transferLeaders: {
+    user_id: number;
+    full_name: string;
+    entity_id: number;
+    status: string;
+    held_entity_ids: number[];
+  }[];
   bankTransfers: BankTransfer[];
   boAccounts: ProviderBoAccount[];
   boAdjustments: ProviderBoAdjustment[];
@@ -181,6 +193,18 @@ type Store = {
     entity_name?: string;
     entity_parent_id?: number | null;
   })[];
+  /**
+   * Leaders a CS desk may name on a settlement, across the whole house — names
+   * and the companies each holds. Empty for other roles: their users list
+   * already has them.
+   */
+  transferLeaders: {
+    user_id: number;
+    full_name: string;
+    entity_id: number;
+    status: string;
+    held_entity_ids: number[];
+  }[];
   bankTransfers: BankTransfer[];
   boAccounts: ProviderBoAccount[];
   boAdjustments: ProviderBoAdjustment[];
@@ -668,6 +692,7 @@ export const useStore = create<Store>((set, get) => {
     gameTransfers: [],
     bankAccounts: [],
     transferAccounts: [],
+    transferLeaders: [],
     bankTransfers: [],
     boAccounts: [],
     boAdjustments: [],
@@ -793,7 +818,9 @@ export const useStore = create<Store>((set, get) => {
         .reduce((sum, c) => sum + c.current_balance, 0),
 
     userName: (userId) =>
-      get().users.find((u) => u.user_id === userId)?.full_name ?? "—",
+      get().users.find((u) => u.user_id === userId)?.full_name ??
+      get().transferLeaders.find((u) => u.user_id === userId)?.full_name ??
+      "—",
 
     playerById: (playerId) =>
       get().players.find((p) => p.player_id === playerId),

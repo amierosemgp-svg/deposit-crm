@@ -1053,6 +1053,8 @@ export default function TransactionsPage() {
    * apart.
    */
   const leaderMemberships = useStore((s) => s.leaderMemberships);
+  // For a CS desk: every leader in the house, beyond its own company's.
+  const transferLeaders = useStore((s) => s.transferLeaders);
 
   const LEADER_SUGGESTIONS = useMemo<SheetSuggestion[]>(
     () =>
@@ -1061,6 +1063,16 @@ export default function TransactionsPage() {
         .map((u) => ({ value: u.full_name, hint: entityName(u.entity_id) })),
     [users, entityName],
   );
+  /** A settlement can name any leader in the house — see transferLeaders. */
+  const SETTLEMENT_LEADER_SUGGESTIONS = useMemo<SheetSuggestion[]>(() => {
+    const own = new Set(LEADER_SUGGESTIONS.map((s) => s.value));
+    return [
+      ...LEADER_SUGGESTIONS,
+      ...transferLeaders
+        .filter((l) => l.status === "active" && !own.has(l.full_name))
+        .map((l) => ({ value: l.full_name, hint: "another company — Cash or blank for their end" })),
+    ];
+  }, [LEADER_SUGGESTIONS, transferLeaders]);
   /**
    * The companies a leader holds — the one they sit on, plus any granted.
    * Used to offer only the accounts a settlement could legitimately come from.
@@ -1076,8 +1088,11 @@ export default function TransactionsPage() {
           .map((x) => x.leader_entity_id),
       ]);
     }
+    for (const l of transferLeaders) {
+      if (!m.has(l.user_id)) m.set(l.user_id, l.held_entity_ids);
+    }
     return m;
-  }, [users, leaderMemberships]);
+  }, [users, leaderMemberships, transferLeaders]);
 
   /** Does this account hang off a company the leader holds, or a casino under one? */
   const heldByLeader = useCallback(
@@ -1098,8 +1113,12 @@ export default function TransactionsPage() {
     for (const u of users) {
       if (u.role === "company_leader") m.set(u.full_name.trim().toLowerCase(), u.user_id);
     }
+    for (const l of transferLeaders) {
+      const key = l.full_name.trim().toLowerCase();
+      if (!m.has(key)) m.set(key, l.user_id);
+    }
     return m;
-  }, [users]);
+  }, [users, transferLeaders]);
   const accountByLabel = useMemo(() => {
     const m = new Map<string, (typeof bankAccounts)[number]>();
     for (const a of bankAccounts) {
@@ -1245,9 +1264,9 @@ export default function TransactionsPage() {
         assign,
         date,
         time,
-        from: { label: "From Leader", width: 160, entry: true, required: true, options: LEADER_SUGGESTIONS, placeholder: "from leader" },
+        from: { label: "From Leader", width: 160, entry: true, required: true, options: SETTLEMENT_LEADER_SUGGESTIONS, placeholder: "from leader" },
         fromaccount: { label: "From Account", width: 190, entry: true, options: END_SUGGESTIONS, placeholder: "bank account / Cash" },
-        to: { label: "To Leader", width: 160, entry: true, required: true, options: LEADER_SUGGESTIONS, placeholder: "to leader" },
+        to: { label: "To Leader", width: 160, entry: true, required: true, options: SETTLEMENT_LEADER_SUGGESTIONS, placeholder: "to leader" },
         toaccount: { label: "To Account", width: 190, entry: true, options: END_SUGGESTIONS, placeholder: "bank account / Cash" },
         amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "1000" },
         note: { label: "Note", width: 260, entry: true, placeholder: "what it settles (optional)" },
@@ -1278,7 +1297,7 @@ export default function TransactionsPage() {
         notes: { label: "Notes", width: 240, entry: true, placeholder: "optional" },
       }),
     };
-  }, [games, banks, companies, isAdmin, OUR_ACCOUNTS, memberSuggestions, MODE_SUGGESTIONS, ASSIGN_SUGGESTIONS, ACCOUNT_SUGGESTIONS, LEADER_SUGGESTIONS, END_SUGGESTIONS, PAID_FROM_SUGGESTIONS]);
+  }, [games, banks, companies, isAdmin, OUR_ACCOUNTS, memberSuggestions, MODE_SUGGESTIONS, ASSIGN_SUGGESTIONS, ACCOUNT_SUGGESTIONS, LEADER_SUGGESTIONS, SETTLEMENT_LEADER_SUGGESTIONS, END_SUGGESTIONS, PAID_FROM_SUGGESTIONS]);
 
   const columns = columnsByTab[tab];
 

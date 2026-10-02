@@ -10,7 +10,7 @@ import {
   users,
 } from "@/db/schema";
 import { AuthError, authErrorResponse, requireUser, requireWriteUser } from "@/lib/auth";
-import { jsonError, transferEntityIds } from "@/lib/api-helpers";
+import { jsonError, leaderTransferEntityIds, transferEntityIds } from "@/lib/api-helpers";
 import { InsufficientBankBalanceError, moveBankBalance } from "@/lib/bank-balance";
 import { logActivity } from "@/lib/activity-log";
 
@@ -48,7 +48,7 @@ const createSchema = z
 export async function GET() {
   try {
     const user = await requireUser();
-    const visible = await transferEntityIds(user);
+    const visible = await leaderTransferEntityIds(user);
     /**
      * Visible when either person belongs to something the reader can see.
      *
@@ -166,7 +166,7 @@ export async function POST(request: Request) {
      * One end has to be theirs. Recording a settlement between two organisations
      * neither of which you belong to is not a mistake anyone makes by accident.
      */
-    const visible = await transferEntityIds(user);
+    const visible = await leaderTransferEntityIds(user);
     if (
       visible !== null &&
       ![...companiesOf(from), ...companiesOf(to)].some((id) => visible.includes(id))
@@ -196,6 +196,9 @@ export async function POST(request: Request) {
       : [];
     const accountById = new Map(accounts.map((a) => [a.id, a]));
 
+    // A CS desk may name any leader in the house, but only its own company's
+    // accounts — the ones it can see and answer for.
+    const accountScope = user.role === "cs_agent" ? await transferEntityIds(user) : null;
     for (const [side, accountId, person] of [
       ["Sending", body.from_account_id, from],
       ["Receiving", body.to_account_id, to],
@@ -203,6 +206,9 @@ export async function POST(request: Request) {
       if (typeof accountId !== "number") continue;
       const account = accountById.get(accountId);
       if (!account) return jsonError(`${side} bank account not found`, 404);
+      if (accountScope !== null && !accountScope.includes(account.entity_id)) {
+        return jsonError(`${side} bank account is outside your company — record that end as Cash`, 403);
+      }
       if (!ownedBy(companiesOf(person), account.entity_id)) {
         return jsonError(
           `${side} bank account does not belong to a company ${person.full_name} holds`,

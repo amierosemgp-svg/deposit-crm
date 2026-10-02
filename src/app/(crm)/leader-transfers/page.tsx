@@ -65,10 +65,19 @@ export default function LeaderTransfersPage() {
    *
    * A settlement is Tiong paying KC; the company is only where the money sits.
    */
-  const leaders = useMemo(
-    () => users.filter((u) => u.role === "company_leader" && u.status === "active"),
-    [users],
-  );
+  // A CS desk's users list stops at its own company; transferLeaders carries
+  // the rest of the house, names only.
+  const transferLeaders = useStore((s) => s.transferLeaders);
+  const leaders = useMemo(() => {
+    const own = users.filter((u) => u.role === "company_leader" && u.status === "active");
+    const seen = new Set(own.map((u) => u.user_id));
+    return [
+      ...own.map((u) => ({ user_id: u.user_id, full_name: u.full_name })),
+      ...transferLeaders
+        .filter((l) => l.status === "active" && !seen.has(l.user_id))
+        .map((l) => ({ user_id: l.user_id, full_name: l.full_name })),
+    ];
+  }, [users, transferLeaders]);
 
   const [rows, setRows] = useState<LeaderTransfer[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -299,6 +308,7 @@ function NewTransferDialog({
   const entities = useStore((s) => s.entities);
   const users = useStore((s) => s.users);
   const leaderMemberships = useStore((s) => s.leaderMemberships);
+  const transferLeaders = useStore((s) => s.transferLeaders);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   // "" = not recorded, "cash" = physical cash, otherwise a bank account id.
@@ -317,14 +327,20 @@ function NewTransferDialog({
     (leaderUserId: string) => {
       // The pick is a person; the accounts hang off the companies they hold —
       // the one they sit on plus any granted since.
-      const leader = users.find((u) => u.user_id === Number(leaderUserId));
-      if (!leader) return [];
-      const held = new Set<number>([
-        leader.entity_id,
-        ...leaderMemberships
-          .filter((m) => m.user_id === leader.user_id)
-          .map((m) => m.leader_entity_id),
-      ]);
+      const id = Number(leaderUserId);
+      const leader = users.find((u) => u.user_id === id);
+      const far = transferLeaders.find((l) => l.user_id === id);
+      if (!leader && !far) return [];
+      const held = new Set<number>(
+        leader
+          ? [
+              leader.entity_id,
+              ...leaderMemberships
+                .filter((m) => m.user_id === leader.user_id)
+                .map((m) => m.leader_entity_id),
+            ]
+          : far!.held_entity_ids,
+      );
       const parentOf = (a: (typeof bankAccounts)[number]) =>
         a.entity_parent_id ??
         entities.find((e) => e.entity_id === a.entity_id)?.parent_entity_id ??
@@ -335,7 +351,7 @@ function NewTransferDialog({
         return held.has(a.entity_id) || (parent !== null && held.has(parent));
       });
     },
-    [bankAccounts, entities, users, leaderMemberships],
+    [bankAccounts, entities, users, leaderMemberships, transferLeaders],
   );
 
   /** The end, as the API wants it. */

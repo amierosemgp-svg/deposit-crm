@@ -97,6 +97,38 @@ export async function transferEntityIds(user: AuthedUser): Promise<number[] | nu
   return [...new Set([...visible, ...family.map((e) => e.id)])];
 }
 
+/**
+ * Entities whose leaders a user may name on a leader settlement.
+ *
+ * A CS desk records the leaders settling up across the whole house — any two
+ * leaders under its main company, not just the one that owns its casino. So
+ * for a CS agent this is the main company's entire tree; everyone else keeps
+ * transferEntityIds. Which bank accounts a CS desk may name stays narrower:
+ * transferEntityIds still decides that.
+ */
+export async function leaderTransferEntityIds(user: AuthedUser): Promise<number[] | null> {
+  if (user.role !== "cs_agent") return transferEntityIds(user);
+  const all = await db
+    .select({ id: entities.entity_id, parent: entities.parent_entity_id })
+    .from(entities);
+  const byId = new Map(all.map((e) => [e.id, e]));
+  // Up to the root of this desk's own tree; the bound stops a parent cycle.
+  let root = byId.get(user.entity_id);
+  for (let hops = 0; root?.parent && hops < 20; hops++) root = byId.get(root.parent) ?? root;
+  if (!root) return [];
+  const tree = new Set<number>([root.id]);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const e of all) {
+      if (e.parent !== null && tree.has(e.parent) && !tree.has(e.id)) {
+        tree.add(e.id);
+        grew = true;
+      }
+    }
+  }
+  return [...tree];
+}
+
 /** Full entity subtree visible to the user (for hierarchy page). */
 export async function visibleEntityTree(user: AuthedUser) {
   const all = await db.select().from(entities);

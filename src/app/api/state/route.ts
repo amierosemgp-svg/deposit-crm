@@ -28,6 +28,7 @@ import { authErrorResponse, requireUser } from "@/lib/auth";
 import {
   autoConfirmExpiredTransfers,
   depositScopeFilter,
+  leaderTransferEntityIds,
   retryStuckGameTransfers,
   transferEntityIds,
   visibleEntityIds,
@@ -196,6 +197,40 @@ export async function GET() {
      * parent: a sister casino is not in the desk's entity tree to look them up.
      */
     const transferIds = user.role === "cs_agent" ? await transferEntityIds(user) : null;
+
+    /**
+     * Every leader a CS desk may name on a settlement — the whole house, not
+     * just the one owning its casino. Names and the companies they hold only:
+     * the staff list proper (logins, IP allowlists) stays scoped to the desk's
+     * own tree. Empty for other roles, whose users list already covers this.
+     */
+    const leaderScope = user.role === "cs_agent" ? await leaderTransferEntityIds(user) : null;
+    const transferLeaders = leaderScope?.length
+      ? await (async () => {
+          const people = await db
+            .select({
+              user_id: users.user_id,
+              full_name: users.full_name,
+              entity_id: users.entity_id,
+              status: users.status,
+            })
+            .from(users)
+            .where(and(eq(users.role, "company_leader"), inArray(users.entity_id, leaderScope)));
+          const held = people.length
+            ? await db
+                .select({ user_id: leaderMemberships.user_id, id: leaderMemberships.leader_entity_id })
+                .from(leaderMemberships)
+                .where(inArray(leaderMemberships.user_id, people.map((p) => p.user_id)))
+            : [];
+          return people.map((p) => ({
+            ...p,
+            held_entity_ids: [
+              p.entity_id,
+              ...held.filter((h) => h.user_id === p.user_id).map((h) => h.id),
+            ],
+          }));
+        })()
+      : [];
     const transferAccounts = (
       transferIds
         ? await db
@@ -519,6 +554,7 @@ export async function GET() {
       gameTransfers: scopedGameTransfers,
       bankAccounts: scopedAccounts,
       transferAccounts,
+      transferLeaders,
       bankTransfers: [...transferMap.values()].sort((a, b) =>
         b.created_at.localeCompare(a.created_at),
       ),

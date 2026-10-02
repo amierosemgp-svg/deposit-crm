@@ -10,7 +10,7 @@ import {
   users,
 } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
-import { jsonError, transferEntityIds } from "@/lib/api-helpers";
+import { jsonError, leaderTransferEntityIds, transferEntityIds } from "@/lib/api-helpers";
 import { describeChanges, diffFields, logActivity } from "@/lib/activity-log";
 import { InsufficientBankBalanceError, moveBankBalance } from "@/lib/bank-balance";
 
@@ -186,7 +186,7 @@ export async function PATCH(
       };
 
       // One end yours — before the edit, and after it.
-      const visible = await transferEntityIds(user);
+      const visible = await leaderTransferEntityIds(user);
       const inScope = (a: number, b: number) =>
         visible === null || [...companiesOf(a), ...companiesOf(b)].some((id) => visible.includes(id));
       if (!inScope(row.from_leader_user_id, row.to_leader_user_id)) {
@@ -211,6 +211,9 @@ export async function PATCH(
         })
         .from(bankAccounts);
       const accountById = new Map(labels.map((a) => [a.id, a]));
+      // A CS desk may name any leader in the house, but only its own company's
+      // accounts — the ones it can see and answer for.
+      const accountScope = user.role === "cs_agent" ? await transferEntityIds(user) : null;
       for (const [side, changed, accountId, personId] of [
         ["Sending", fromSideChanged, next.from_account_id, next.from_leader_user_id],
         ["Receiving", toSideChanged, next.to_account_id, next.to_leader_user_id],
@@ -218,6 +221,9 @@ export async function PATCH(
         if (!changed || accountId == null) continue;
         const account = accountById.get(accountId);
         if (!account) throw new AuthError(404, `${side} bank account not found`);
+        if (accountScope !== null && !accountScope.includes(account.entity_id)) {
+          throw new AuthError(403, `${side} bank account is outside your company — record that end as Cash`);
+        }
         if (!ownedBy(companiesOf(personId), account.entity_id)) {
           throw new AuthError(
             400,
@@ -366,7 +372,7 @@ export async function DELETE(
         .select({ full_name: users.full_name, entity_id: users.entity_id })
         .from(users)
         .where(eq(users.user_id, row.to_leader_user_id));
-      const visible = await transferEntityIds(user);
+      const visible = await leaderTransferEntityIds(user);
       if (
         visible !== null &&
         ![from?.entity_id, to?.entity_id].some((id) => id != null && visible.includes(id))
