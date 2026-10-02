@@ -1646,6 +1646,7 @@ export default function TransactionsPage() {
             // row — who changed what. The correction goes first: it is the
             // thing being looked for when a figure is questioned.
             remark: [
+              d.remark,
               d.edit_note,
               p?.full_name ??
                 extractSenderName(d.bank_description) ??
@@ -1696,7 +1697,7 @@ export default function TransactionsPage() {
             status: WITHDRAWAL_STATUS_LABEL[w.status],
             date: sheetDate(w.created_at),
             time: formatClock(w.created_at),
-            remark2: [w.edit_note, p?.full_name ?? ""].filter(Boolean).join(" · "),
+            remark2: [w.remark, w.edit_note, p?.full_name ?? ""].filter(Boolean).join(" · "),
           }),
         };
       })
@@ -3082,7 +3083,8 @@ export default function TransactionsPage() {
             DEPOSIT_EDITABLE_COLS.has(colIndex) ||
             colIndex === COL.deposit.status ||
             colIndex === COL.deposit.date ||
-            colIndex === COL.deposit.time
+            colIndex === COL.deposit.time ||
+            colIndex === COL.deposit.remark
           );
         }
         if (!DEPOSIT_EDITABLE_COLS.has(colIndex)) return false;
@@ -3106,7 +3108,7 @@ export default function TransactionsPage() {
           const c = COL.withdrawal;
           return (
             WITHDRAWAL_EDITABLE_COLS.has(colIndex) ||
-            [c.member, c.holder, c.paidfrom, c.status, c.date, c.time].includes(colIndex)
+            [c.member, c.holder, c.paidfrom, c.status, c.date, c.time, c.remark2].includes(colIndex)
           );
         }
         if (!WITHDRAWAL_EDITABLE_COLS.has(colIndex)) return false;
@@ -3150,6 +3152,24 @@ export default function TransactionsPage() {
     const [y, m, d] = ymd.split("-").map(Number);
     return { ok: true, iso: new Date(y, m - 1, d, hm[0], hm[1]).toISOString() };
   };
+
+  /**
+   * The Remark cell reads remark · correction trail · name, but only the remark
+   * is the desk's to type — so that is what the editor opens with.
+   */
+  const committedEditValue = useCallback(
+    (rowIndex: number, colIndex: number): string | undefined => {
+      const id = Number(rows[rowIndex]?.id);
+      if (tab === "deposit" && colIndex === COL.deposit.remark) {
+        return depositById.get(id)?.remark ?? "";
+      }
+      if (tab === "withdrawal" && colIndex === COL.withdrawal.remark2) {
+        return withdrawalById.get(id)?.remark ?? "";
+      }
+      return undefined;
+    },
+    [tab, rows, depositById, withdrawalById],
+  );
 
   const onCommittedEdit = useCallback(
     async (rowIndex: number, colIndex: number, value: string) => {
@@ -3236,6 +3256,8 @@ export default function TransactionsPage() {
             }
             patch = { paid_from_account_id: account.account_id };
           }
+        } else if (colIndex === c.remark2) {
+          patch = { remark: v || null };
         } else if (colIndex === c.member) {
           const pl = playerByCode.get(v.toLowerCase());
           if (!pl) return void toast.error(`Unknown member code "${v}" — not changed`);
@@ -3340,10 +3362,13 @@ export default function TransactionsPage() {
       if (
         colIndex === COL.deposit.status ||
         colIndex === COL.deposit.date ||
-        colIndex === COL.deposit.time
+        colIndex === COL.deposit.time ||
+        colIndex === COL.deposit.remark
       ) {
         let body: Record<string, unknown>;
-        if (colIndex === COL.deposit.status) {
+        if (colIndex === COL.deposit.remark) {
+          body = { remark: v || null };
+        } else if (colIndex === COL.deposit.status) {
           const st = v.toLowerCase();
           if (st !== "completed" && st !== "failed") {
             return void toast.error(`Status is Completed or Failed, not "${v}"`);
@@ -5050,6 +5075,7 @@ export default function TransactionsPage() {
         flushRef={flushEdit}
         readOnly={isViewer || tab === "rebate"}
         committedEditable={committedEditable}
+        committedEditValue={committedEditValue}
         onCommittedEdit={onCommittedEdit}
         onSelectedRowsChange={setSelectedIds}
         draftSuggestions={draftSuggestions}

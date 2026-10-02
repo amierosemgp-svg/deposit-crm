@@ -26,6 +26,8 @@ const patchSchema = z.object({
   // The member. Manual rows only — moving a pulled row re-books both wallets.
   player_id: z.number().int().positive().optional(),
   requested_amount: z.number().positive().optional(),
+  // The Remark cell. Moves no money; blank clears it.
+  remark: z.string().max(500).nullable().optional(),
   game_name: z.string().min(1).max(60).optional(),
   game_username: z.string().max(120).nullable().optional(),
   // The player's own account the money is paid into — a label, no money moves.
@@ -361,6 +363,7 @@ export async function PATCH(
           ...(gameName !== undefined ? { game_name: gameName } : {}),
           ...(body.game_username !== undefined ? { game_username: body.game_username } : {}),
           ...(body.bank_name !== undefined ? { bank_name: body.bank_name } : {}),
+          ...(body.remark !== undefined ? { remark: body.remark?.trim() || null } : {}),
           ...(body.bank_account_number !== undefined
             ? { bank_account_number: body.bank_account_number }
             : {}),
@@ -449,6 +452,7 @@ export async function PATCH(
         bank_account_number: row.bank_account_number,
         paid_from: labelOf(row.paid_from_account_id),
         status: row.status,
+        remark: row.remark,
         created_at: row.created_at,
       },
       {
@@ -461,9 +465,11 @@ export async function PATCH(
         bank_account_number: updated.bank_account_number,
         paid_from: labelOf(updated.paid_from_account_id),
         status: updated.status,
+        remark: updated.remark,
         created_at: updated.created_at,
       },
     );
+    const trailChanges = changes.filter((c) => c.field !== "remark");
 
     if (changes.length) {
       // amount = 0: this row only notes the edit. Whatever money it moved is
@@ -495,7 +501,13 @@ export async function PATCH(
       // …and on the row, which is where the sheet asks the question.
       const [withNote] = await db
         .update(withdrawals)
-        .set({ edit_note: appendEditNote(row.edit_note, user, changes) })
+        .set({
+          // The trail shares the Remark cell; a remark edit is the cell
+          // itself, so it is logged but not echoed into the trail.
+          edit_note: trailChanges.length
+            ? appendEditNote(row.edit_note, user, trailChanges)
+            : row.edit_note,
+        })
         .where(eq(withdrawals.withdrawal_id, withdrawalId))
         .returning();
       return Response.json({ withdrawal: withNote ?? updated });

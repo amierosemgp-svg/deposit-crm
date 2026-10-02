@@ -905,6 +905,8 @@ export const deposits = pgTable("deposits", {
   // first — what the worksheet shows in Remark. The full diff is in
   // activity_log; this is the part that fits in a cell.
   edit_note: text("edit_note"),
+  // What the desk typed in the Remark cell. Free text, unlike edit_note.
+  remark: text("remark"),
   created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
     .notNull()
     .defaultNow(),
@@ -962,6 +964,8 @@ export const withdrawals = pgTable("withdrawals", {
   proof_url: text("proof_url"),
   // See deposits.edit_note.
   edit_note: text("edit_note"),
+  // What the desk typed in the Remark cell. Free text, unlike edit_note.
+  remark: text("remark"),
   paid_at: timestamp("paid_at", { withTimezone: true, mode: "string" }),
   created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
     .notNull()

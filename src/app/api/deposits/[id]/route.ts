@@ -44,6 +44,8 @@ const patchSchema = z.object({
   // Which of our accounts the money landed in — the one whose balance moves.
   received_into_account_id: z.number().int().positive().optional(),
   selected_game_username: z.string().max(120).nullable().optional(),
+  // The Remark cell. Moves no money; blank clears it.
+  remark: z.string().max(500).nullable().optional(),
   deposit_date: z.string().datetime({ offset: true }).optional(),
   // False when the sheet only knows the day. Defaults to true whenever a
   // deposit_date is sent, as it always has.
@@ -442,6 +444,7 @@ export async function PATCH(
         ...(body.selected_game_username !== undefined
           ? { selected_game_username: body.selected_game_username }
           : {}),
+        ...(body.remark !== undefined ? { remark: body.remark?.trim() || null } : {}),
         ...(body.deposit_date !== undefined
           ? {
               deposit_date: body.deposit_date,
@@ -623,6 +626,7 @@ export async function PATCH(
         bonus_amount: row.bonus_amount,
         player_username: row.player_username,
         status: row.status,
+        remark: row.remark,
       },
       {
         deposit_amount: updated.deposit_amount,
@@ -635,8 +639,10 @@ export async function PATCH(
         bonus_amount: updated.bonus_amount,
         player_username: updated.player_username,
         status: updated.status,
+        remark: updated.remark,
       },
     );
+    const trailChanges = changes.filter((c) => c.field !== "remark");
     let edited = updated;
     if (changes.length) {
       await logActivity({
@@ -653,7 +659,13 @@ export async function PATCH(
       // The same sentence, on the row, because that is where it gets read.
       const [withNote] = await db
         .update(deposits)
-        .set({ edit_note: appendEditNote(row.edit_note, user, changes) })
+        .set({
+          // The trail shares the Remark cell; a remark edit is the cell
+          // itself, so it is logged but not echoed into the trail.
+          edit_note: trailChanges.length
+            ? appendEditNote(row.edit_note, user, trailChanges)
+            : row.edit_note,
+        })
         .where(eq(deposits.deposit_id, depositId))
         .returning();
       edited = withNote ?? updated;

@@ -305,6 +305,7 @@ export type Deposit = {
   status: DepositStatus;
   /** Corrections made after saving, newest first — shown in Remark. */
   edit_note?: string | null;
+  remark?: string | null;
   source?: TransactionSource;
   skip_bot?: boolean;
   matched_at?: string | null;
@@ -342,6 +343,7 @@ export type Withdrawal = {
   status: WithdrawalStatus;
   /** Corrections made after saving, newest first — shown in Remark. */
   edit_note?: string | null;
+  remark?: string | null;
   source?: TransactionSource;
   skip_bot?: boolean;
   handled_by_user_id?: number | null;
