@@ -1,7 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { authErrorResponse, requireUser } from "@/lib/auth";
-import { jsonError, visibleEntityIds } from "@/lib/api-helpers";
+import { jsonError, leaderTransferEntityIds, visibleEntityIds } from "@/lib/api-helpers";
 import {
   all,
   businessDay,
@@ -77,6 +77,8 @@ export async function GET(request: Request) {
      */
     const cutoff = csCutoff(user);
     const visible = await visibleEntityIds(user);
+    // Settlements reach further for a CS desk: any two leaders in the house.
+    const settlementScope = await leaderTransferEntityIds(user);
 
     /**
      * A worksheet shows every row, whatever state it is in.
@@ -200,13 +202,13 @@ export async function GET(request: Request) {
         from: sql`leader_transfers t`,
         // One end in the caller's tree. The sheet is open to the desk now, and
         // an unscoped ledger would show them every organisation's settlements.
-        scope: visible === null
+        scope: settlementScope === null
           ? sql`true`
-          : visible.length
+          : settlementScope.length
             // The ends are people; their scope is the company they sit on.
             ? sql`EXISTS (SELECT 1 FROM users u
                            WHERE u.user_id IN (t.from_leader_user_id, t.to_leader_user_id)
-                             AND u.entity_id IN (${sql.join(visible.map((id) => sql`${id}`), sql`, `)}))`
+                             AND u.entity_id IN (${sql.join(settlementScope.map((id) => sql`${id}`), sql`, `)}))`
             : sql`false`,
         date: sql`t.created_at`,
         numerics: ["amount"],

@@ -664,8 +664,8 @@ export default function TransactionsPage() {
     }
   }, []);
   const [leaderTransfers, setLeaderTransfers] = useState<LeaderTransferRow[]>([]);
+  // Open to every role now; the route scopes the ledger to the caller's house.
   const loadLeaderTransfers = useCallback(async () => {
-    if (!isAdmin) return; // the ledger is super-admin only
     try {
       const res = await fetch("/api/leader-transfers");
       if (!res.ok) return;
@@ -674,7 +674,7 @@ export default function TransactionsPage() {
     } catch {
       // transient
     }
-  }, [isAdmin]);
+  }, []);
   const loadLedgers = useCallback(
     () =>
       Promise.all([
@@ -4142,7 +4142,9 @@ export default function TransactionsPage() {
       "freecredit",
       "transfer",
       "leaderwithdrawal",
-      ...(isAdmin ? (["leadertransfer", "expense"] as TabKey[]) : []),
+      // Both tabs are open to the desk (see the tab list), so their keys are too.
+      "leadertransfer",
+      "expense",
     ];
     const onKey = (e: KeyboardEvent) => {
       const mod = IS_MAC ? e.metaKey : e.ctrlKey;
