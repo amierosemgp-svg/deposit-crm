@@ -3217,18 +3217,23 @@ export default function TransactionsPage() {
           if (!pl) return void toast.error("That member isn't loaded — refresh and try again");
           if (!v) return void toast.error("Type the account holder's name");
           const accounts = [...(pl.bank_accounts ?? [])];
-          const current = payoutAccountOf(pl, w.bank_name, w.bank_account_number);
+          // Imported rows often carry the account number with no bank name, so
+          // the number is what is required; the bank comes along if there is one.
+          const cells = rows[rowIndex]?.cells ?? [];
+          const number = (w.bank_account_number ?? cells[c.account] ?? "").trim();
+          const bankName = (w.bank_name ?? cells[c.bank] ?? "").trim();
+          // By number only: falling back to the bank name would rename the
+          // holder on a different account the member has at the same bank.
+          const current = number
+            ? accounts.find((acc) => acc.account_number.trim() === number)
+            : undefined;
           if (current) {
             const i = accounts.indexOf(current);
             accounts[i] = { ...current, account_holder: v };
-          } else if (w.bank_name && w.bank_account_number) {
-            accounts.push({
-              bank_name: w.bank_name,
-              account_number: w.bank_account_number,
-              account_holder: v,
-            });
+          } else if (number) {
+            accounts.push({ bank_name: bankName, account_number: number, account_holder: v });
           } else {
-            return void toast.error("Fill Bank and Bank Account first — the holder is saved against them");
+            return void toast.error("Fill Bank Account first — the holder is saved against it");
           }
           const res = await fetch(`/api/players/${pl.player_id}`, {
             method: "PATCH",
@@ -3464,7 +3469,6 @@ export default function TransactionsPage() {
       tab,
       REPARSE_EDIT,
       editByReparse,
-      payoutAccountOf,
       playerById,
       refresh,
       assignColOf,
