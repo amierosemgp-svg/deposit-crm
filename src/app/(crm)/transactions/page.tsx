@@ -261,6 +261,8 @@ type FreeCredit = {
 
 /** Sentinel for the member list's "New player" command row. */
 const NEW_PLAYER = "__new_player__";
+/** Sentinel for the login list's "Add game account" command row. */
+const ADD_GAME_ACCOUNT = "__add_game_account__";
 /** The sheets that name a member, and so can create one. */
 const MEMBER_TABS = new Set<TabKey>(["deposit", "withdrawal", "freecredit", "transfer"]);
 
@@ -1594,20 +1596,6 @@ export default function TransactionsPage() {
     [tab, playerByCode],
   );
 
-  const onSuggestionAction = useCallback(
-    ({ draftIndex, colIndex, value, typed }: {
-      draftIndex: number | null;
-      rowIndex: number;
-      colIndex: number;
-      value: string;
-      typed: string;
-    }) => {
-      if (value !== NEW_PLAYER) return;
-      openCreatePlayer(draftIndex === null ? null : { draftIndex, col: colIndex }, typed);
-    },
-    [openCreatePlayer],
-  );
-
   const onDraftsChange = useCallback(
     (next: string[][]) =>
       setDraftsByTab((prev) => {
@@ -2100,8 +2088,39 @@ export default function TransactionsPage() {
     [],
   );
 
+  /**
+   * A login cell's list: the member's logins under that game, then a way to
+   * link one they don't have on file yet.
+   */
+  const loginSuggestions = useCallback(
+    (pl: Player, gameLower: string): SheetSuggestion[] => [
+      ...(pl.game_accounts ?? [])
+        .filter((a) => a.game_name.toLowerCase() === gameLower)
+        .map((a) => ({ value: a.game_username, hint: a.game_name })),
+      ...(isViewer
+        ? []
+        : [
+            {
+              value: ADD_GAME_ACCOUNT,
+              title: "\u002B  Add game account",
+              detail: `Type the new login, then pick this to link it to ${pl.username}`,
+              action: true,
+            } satisfies SheetSuggestion,
+          ]),
+    ],
+    [isViewer],
+  );
+
   const committedSuggestions = useCallback(
     (rowIndex: number, colIndex: number) => {
+      const loginPair = LOGIN_PAIRS[tab].find((pair) => pair.userCol === colIndex);
+      const memberCol = (COL[tab] as Record<string, number | undefined>).member;
+      if (loginPair && memberCol !== undefined) {
+        const cells = rows[rowIndex]?.cells;
+        const pl = playerByCode.get(cells?.[memberCol]?.trim().toLowerCase() ?? "");
+        const game = cells?.[loginPair.gameCol]?.trim().toLowerCase() ?? "";
+        return pl && game ? loginSuggestions(pl, game) : undefined;
+      }
       if (tab !== "deposit" || colIndex !== COL.deposit.bonuspct) return undefined;
       const dep = depositById.get(Number(rows[rowIndex]?.id));
       if (!dep?.player_id) return undefined;
@@ -2111,7 +2130,7 @@ export default function TransactionsPage() {
         houseRates,
       );
     },
-    [tab, rows, depositById, bonusOptionsCache, buildBonusSuggestions, houseRates],
+    [tab, rows, depositById, bonusOptionsCache, buildBonusSuggestions, houseRates, playerByCode, loginSuggestions],
   );
 
   const draftSuggestions = useCallback(
@@ -2192,11 +2211,7 @@ export default function TransactionsPage() {
         const pl = memberOf(d);
         const gameCell = d?.[loginCfg.gameCol]?.trim().toLowerCase() ?? "";
         if (!pl || !gameCell) return undefined;
-        const logins = (pl.game_accounts ?? []).filter(
-          (a) => a.game_name.toLowerCase() === gameCell,
-        );
-        if (logins.length <= 1) return undefined; // one login: nothing to pick
-        return logins.map((a) => ({ value: a.game_username, hint: a.game_name }));
+        return loginSuggestions(pl, gameCell);
       }
       /**
        * Payout bank cells: the player's own saved accounts, holder and all —
@@ -3202,6 +3217,97 @@ export default function TransactionsPage() {
     [tab, rows, depositById, withdrawalById],
   );
 
+  /**
+   * "+ Add game account" on a login cell: link the login typed in the cell to
+   * the row's member under the row's game, then put it in the cell.
+   *
+   * The member is mid-transaction with a login the CRM hasn't seen — a fresh
+   * kiosk account, or one the import never carried. Until now that meant
+   * leaving the sheet for the member's page. The typed text is the login, so
+   * there's no extra form: type it, pick the row, done.
+   */
+  const commitEditRef = useRef<
+    ((rowIndex: number, colIndex: number, value: string) => Promise<void>) | null
+  >(null);
+  const addGameAccount = useCallback(
+    async ({ draftIndex, rowIndex, colIndex, typed }: {
+      draftIndex: number | null;
+      rowIndex: number;
+      colIndex: number;
+      typed: string;
+    }) => {
+      const pair = LOGIN_PAIRS[tab].find((x) => x.userCol === colIndex);
+      const memberCol = (COL[tab] as Record<string, number | undefined>).member;
+      if (!pair || memberCol === undefined) return;
+      const cells = draftIndex !== null ? drafts[draftIndex] : rows[rowIndex]?.cells;
+      const pl = playerByCode.get(cells?.[memberCol]?.trim().toLowerCase() ?? "");
+      const game = cells?.[pair.gameCol]?.trim() ?? "";
+      const login = typed.trim();
+      if (!pl) return void toast.error("Fill Member Code first — the login is linked to that member");
+      if (!game) return void toast.error("Fill the game first — the login is linked under it");
+      if (!login) {
+        return void toast.error("Type the new login in the cell, then pick + Add game account");
+      }
+      const accounts = pl.game_accounts ?? [];
+      const held = accounts.some(
+        (a) =>
+          a.game_name.toLowerCase() === game.toLowerCase() &&
+          a.game_username.toLowerCase() === login.toLowerCase(),
+      );
+      if (!held) {
+        const res = await fetch(`/api/players/${pl.player_id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            game_accounts: [...accounts, { game_name: game, game_username: login }],
+          }),
+        });
+        const data = (await res.json().catch(() => null)) as
+          | { error?: string; player?: Player }
+          | null;
+        if (!res.ok || !data?.player) {
+          return void toast.error(data?.error ?? "Could not add the game account");
+        }
+        const saved = data.player;
+        useStore.setState((st) => ({
+          players: st.players.map((x) => (x.player_id === saved.player_id ? { ...x, ...saved } : x)),
+        }));
+        toast.success(`${game} login ${login} linked to ${pl.username}`);
+      }
+      // Into the cell that asked: a draft takes it directly, a saved row edits.
+      if (draftIndex !== null) {
+        setDraftsByTab((prev) => {
+          const list = [...prev[tab]];
+          const row = [...(list[draftIndex] ?? [])];
+          row[colIndex] = login;
+          list[draftIndex] = row;
+          return { ...prev, [tab]: list };
+        });
+      } else {
+        await commitEditRef.current?.(rowIndex, colIndex, login);
+      }
+    },
+    [tab, drafts, rows, playerByCode],
+  );
+
+  const onSuggestionAction = useCallback(
+    ({ draftIndex, rowIndex, colIndex, value, typed }: {
+      draftIndex: number | null;
+      rowIndex: number;
+      colIndex: number;
+      value: string;
+      typed: string;
+    }) => {
+      if (value === ADD_GAME_ACCOUNT) {
+        void addGameAccount({ draftIndex, rowIndex, colIndex, typed });
+        return;
+      }
+      if (value !== NEW_PLAYER) return;
+      openCreatePlayer(draftIndex === null ? null : { draftIndex, col: colIndex }, typed);
+    },
+    [openCreatePlayer, addGameAccount],
+  );
+
   const onCommittedEdit = useCallback(
     async (rowIndex: number, colIndex: number, value: string) => {
       if (colIndex === assignColOf(tab)) {
@@ -3523,6 +3629,9 @@ export default function TransactionsPage() {
       loadRangeRows,
     ],
   );
+  useEffect(() => {
+    commitEditRef.current = onCommittedEdit;
+  }, [onCommittedEdit]);
 
   const selectedNumericIds = useMemo(
     () => selectedIds.map((id) => Number(id)).filter((n) => Number.isFinite(n)),
