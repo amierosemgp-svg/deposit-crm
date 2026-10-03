@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeftRight, Bell, LogOut, Menu } from "lucide-react";
 import {
@@ -53,6 +53,13 @@ const SCOPE_CONTENT_PROPS = {
 function ScopeDivider() {
   return <span aria-hidden className="h-5 w-px shrink-0 bg-border" />;
 }
+
+/**
+ * The CS login whose casino has already been picked for them this page load.
+ * Module-level rather than a ref so moving between pages, which may remount
+ * the header, doesn't undo a casino they switched to themselves.
+ */
+let csCasinoDefaultedFor: number | null = null;
 
 const ROLE_LABELS: Record<UserRole, string> = {
   super_admin: "Super Admin",
@@ -123,6 +130,21 @@ export function TopNav() {
     }
     return own;
   }, [entities, me, mainEntity]);
+
+  /**
+   * A CS desk starts on its own casino.
+   *
+   * It can reach every casino its company runs, but on "All Casinos" the
+   * deposit sheet's Bank list offered every one of those casinos' accounts —
+   * a Pokercity desk saw Abdullah Club's RHB beside its own. Starting on its
+   * own casino keeps the list to its own accounts until it switches.
+   */
+  useEffect(() => {
+    if (me?.role !== "cs_agent" || scopeEntity?.entity_type !== "company") return;
+    if (csCasinoDefaultedFor === me.user_id) return;
+    csCasinoDefaultedFor = me.user_id;
+    setSelectedCompanyId(scopeEntity.entity_id);
+  }, [me, scopeEntity, setSelectedCompanyId]);
 
   // "View as company" — only the main-company super admin sees this. It scopes
   // the whole CRM to a leader's companies and narrows the company dropdown.
