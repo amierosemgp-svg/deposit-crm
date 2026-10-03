@@ -353,6 +353,8 @@ export async function GET() {
           two_factor_enabled: users.two_factor_enabled,
           telegram_username: users.telegram_username,
           ip_allowlist: users.ip_allowlist,
+          opening_cash: users.opening_cash,
+          opening_cash_at: users.opening_cash_at,
         })
         .from(users)
         .where(

@@ -62,7 +62,7 @@ export async function visibleEntityIds(user: AuthedUser): Promise<number[] | nul
     // Every company they hold, not just the one they sit on.
     return [...leaderEntitiesOf(user), ...user.companyIds];
   }
-  return user.companyIds; // cs_agent: just their company
+  return user.companyIds; // cs_agent: every casino their company runs
 }
 
 /**

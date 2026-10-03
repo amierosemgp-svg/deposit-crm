@@ -13,6 +13,8 @@ const schema = z.object({
   username: z.string().min(2).regex(/^[a-z0-9_]+$/i, "Letters, numbers, underscores only"),
   email: z.string().email(),
   password: z.string().min(8),
+  // Cash on hand at onboarding, like a bank account's opening balance.
+  opening_cash: z.number().nonnegative(),
 });
 
 /**
@@ -63,6 +65,8 @@ export async function POST(request: Request) {
           password_hash: await bcrypt.hash(body.password, 10),
           role: "company_leader",
           entity_id: leaderEntity.entity_id,
+          opening_cash: body.opening_cash,
+          opening_cash_at: new Date().toISOString(),
         })
         .returning();
       return created;
@@ -82,6 +86,7 @@ export async function POST(request: Request) {
         role: "company_leader",
         email: result.email,
         company: body.company_name ?? null,
+        opening_cash: body.opening_cash,
       },
     });
 

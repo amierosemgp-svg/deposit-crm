@@ -23,6 +23,11 @@ const createSchema = z.object({
   password: z.string().min(8),
   role: z.enum(["company_leader", "cs_agent", "viewer"]),
   entity_id: z.number().int().positive(),
+  /**
+   * A leader's cash on hand at onboarding — required for a leader, like a bank
+   * account's opening balance, and ignored for anyone else.
+   */
+  opening_cash: z.number().nonnegative().optional(),
 });
 
 const ROLE_ENTITY: Record<string, string[]> = {
@@ -53,6 +58,9 @@ export async function POST(request: Request) {
     // an address is not required of anyone.
     if (entity.entity_type !== "main_company" && !body.full_name) {
       return jsonError("Full name is required outside the main company");
+    }
+    if (body.role === "company_leader" && body.opening_cash === undefined) {
+      return jsonError("Cash on hand is required for a leader");
     }
     if (!ROLE_ENTITY[body.role].includes(entity.entity_type)) {
       return jsonError(
@@ -95,6 +103,9 @@ export async function POST(request: Request) {
         password_hash: await bcrypt.hash(body.password, 10),
         role: body.role,
         entity_id: body.entity_id,
+        ...(body.role === "company_leader"
+          ? { opening_cash: body.opening_cash, opening_cash_at: new Date().toISOString() }
+          : {}),
       })
       .returning();
 
@@ -107,7 +118,12 @@ export async function POST(request: Request) {
       targetType: "user",
       targetId: created.user_id,
       targetLabel: created.username,
-      context: { role: created.role, entity: entity.name, email: created.email },
+      context: {
+        role: created.role,
+        entity: entity.name,
+        email: created.email,
+        ...(created.role === "company_leader" ? { opening_cash: created.opening_cash } : {}),
+      },
     });
 
     const { password_hash: _hash, ...safe } = created;

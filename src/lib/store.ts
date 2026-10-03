@@ -589,6 +589,8 @@ type Store = {
     password: string;
     role: "company_leader" | "cs_agent" | "viewer";
     entity_id: number;
+    /** Required for a leader: their cash on hand at onboarding. */
+    opening_cash?: number;
   }) => Promise<MutationResult>;
 
   // --- admin / settings ---
@@ -617,10 +619,11 @@ type Store = {
     username: string;
     email: string;
     password: string;
+    opening_cash: number;
   }) => Promise<MutationResult>;
   updateUser: (
     userId: number,
-    patch: { full_name?: string; status?: "active" | "inactive" },
+    patch: { full_name?: string; status?: "active" | "inactive"; opening_cash?: number },
   ) => Promise<MutationResult>;
   deleteUser: (userId: number) => Promise<MutationResult>;
   changePassword: (input: {

@@ -64,7 +64,7 @@ export async function getSession(): Promise<SessionPayload | null> {
  * Resolve the entity-visibility scope for a session user.
  * - super_admin / viewer → their own main company and everything under it
  * - company_leader → every company they currently run (company_leaders)
- * - cs_agent → the single company their cs entity belongs to
+ * - cs_agent → every casino run by the company that runs their desk's casino
  *
  * A super admin is the super admin *of one organisation*, not of the database.
  * This used to hand them `null` — unrestricted — which was indistinguishable
@@ -146,16 +146,50 @@ export async function resolveScope(session: SessionPayload): Promise<AuthedUser>
       leaderEntityIds,
     };
   }
-  // cs_agent — their entity is a cs node whose parent is the company
+  // cs_agent — their entity is a cs node whose parent is the casino
   const [self] = await db
     .select({ parent: entities.parent_entity_id })
     .from(entities)
     .where(eq(entities.entity_id, session.entity_id));
-  const companyId = self?.parent ?? null;
+  const homeId = self?.parent ?? null;
+  if (!homeId) {
+    return { ...session, companyIds: [], ownedEntityIds: [], leaderEntityIds: [] };
+  }
+
+  /**
+   * Every casino the desk's company runs, not only the desk's own: a CS desk
+   * works the whole company's casinos. Which company that is comes from
+   * companyLeaders, the same "who runs it now" a leader is scoped by, with the
+   * casino's parent in the tree as the fallback for one nobody linked there.
+   * The leader *people* don't enter into it — three leaders on one company
+   * still give that company's casinos and no one else's.
+   */
+  const [home] = await db
+    .select({ parent: entities.parent_entity_id })
+    .from(entities)
+    .where(eq(entities.entity_id, homeId));
+  const runners = await db
+    .select({ id: companyLeaders.leader_entity_id })
+    .from(companyLeaders)
+    .where(and(eq(companyLeaders.company_entity_id, homeId), isNull(companyLeaders.valid_to)));
+  const ownerIds = runners.length
+    ? runners.map((r) => r.id)
+    : home?.parent
+      ? [home.parent]
+      : [];
+  const siblings = ownerIds.length
+    ? await db
+        .select({ id: companyLeaders.company_entity_id })
+        .from(companyLeaders)
+        .where(
+          and(inArray(companyLeaders.leader_entity_id, ownerIds), isNull(companyLeaders.valid_to)),
+        )
+    : [];
+  const companyIds = [...new Set([homeId, ...siblings.map((s) => s.id)])];
   return {
     ...session,
-    companyIds: companyId ? [companyId] : [],
-    ownedEntityIds: companyId ? [companyId] : [],
+    companyIds,
+    ownedEntityIds: companyIds,
     leaderEntityIds: [],
   };
 }

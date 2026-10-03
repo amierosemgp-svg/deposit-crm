@@ -276,6 +276,12 @@ export const users = pgTable("users", {
    * is the default, so the column changes nothing until someone fills it.
    */
   ip_allowlist: jsonb("ip_allowlist").$type<string[]>().notNull().default([]),
+  /**
+   * Leaders only: the cash they held when they were onboarded, like a bank
+   * account's opening balance. Null = not entered yet, which is not RM 0.
+   */
+  opening_cash: numeric("opening_cash", { precision: 14, scale: 2, mode: "number" }),
+  opening_cash_at: timestamp("opening_cash_at", { withTimezone: true, mode: "string" }),
   created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
     .notNull()
     .defaultNow(),

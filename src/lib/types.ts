@@ -29,6 +29,9 @@ export type User = {
   telegram_username?: string | null;
   /** IPs / CIDR ranges this account may sign in from. Empty = anywhere. */
   ip_allowlist?: string[];
+  /** Leaders: cash on hand when onboarded. Null = not entered yet. */
+  opening_cash?: number | null;
+  opening_cash_at?: string | null;
 };
 
 export type Me = User & {

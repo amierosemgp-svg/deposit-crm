@@ -320,13 +320,14 @@ function AddMemberModal({ open, onOpenChange }: { open: boolean; onOpenChange: (
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [companyName, setCompanyName] = useState("");
+  const [openingCash, setOpeningCash] = useState("");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (open) {
       setKind("cs");
       setCompanyId(companies[0] ? String(companies[0].company_id) : "");
-      setFullName(""); setUsername(""); setEmail(""); setPassword(""); setCompanyName("");
+      setFullName(""); setUsername(""); setEmail(""); setPassword(""); setCompanyName(""); setOpeningCash("");
     }
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -335,7 +336,12 @@ function AddMemberModal({ open, onOpenChange }: { open: boolean; onOpenChange: (
     setBusy(true);
     let r;
     if (kind === "leader") {
-      r = await addLeader({ full_name: fullName, company_name: companyName || undefined, username, email, password });
+      const cash = Number(openingCash);
+      if (openingCash.trim() === "" || !Number.isFinite(cash) || cash < 0) {
+        setBusy(false);
+        return toast.error("Enter their cash on hand (0 if none)");
+      }
+      r = await addLeader({ full_name: fullName, company_name: companyName || undefined, username, email, password, opening_cash: cash });
     } else {
       if (!companyId) { setBusy(false); return toast.error("Pick a company"); }
       r = await addCsAgent({ company_entity_id: Number(companyId), full_name: fullName, username, email, password });
@@ -392,6 +398,25 @@ function AddMemberModal({ open, onOpenChange }: { open: boolean; onOpenChange: (
             <div className="space-y-1.5">
               <Label>First company name <span className="text-muted-foreground">(optional)</span></Label>
               <Input value={companyName} onChange={(e) => setCompanyName(e.target.value)} placeholder="e.g. Alpha Gaming" />
+            </div>
+          )}
+
+          {kind === "leader" && (
+            <div className="space-y-1.5">
+              <Label>Cash on hand (RM)</Label>
+              <Input
+                type="number"
+                inputMode="decimal"
+                min="0"
+                step="0.01"
+                value={openingCash}
+                onChange={(e) => setOpeningCash(e.target.value)}
+                placeholder="0.00"
+                required
+              />
+              <p className="text-xs text-muted-foreground">
+                The cash they hold today, like a bank account&apos;s opening balance. Enter 0 if none.
+              </p>
             </div>
           )}
 

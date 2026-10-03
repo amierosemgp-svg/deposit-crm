@@ -63,9 +63,11 @@ const patchSchema = z.object({
     .refine((list) => !list || list.every((e) => isValidIpEntry(e)), {
       message: "Each entry must be an IP address or a CIDR range (e.g. 203.0.113.0/24)",
     }),
+  /** A leader's cash on hand at onboarding — set late or corrected, logged. */
+  opening_cash: z.number().nonnegative().optional(),
 });
 
-/** PATCH /api/users/:id — rename, deactivate, or set an IP allowlist. */
+/** PATCH /api/users/:id — rename, deactivate, set an IP allowlist or a leader's cash on hand. */
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -83,6 +85,14 @@ export async function PATCH(
     if (parsed.data.ip_allowlist !== undefined && requester.role !== "super_admin") {
       throw new AuthError(403, "Only the super admin sets an IP allowlist");
     }
+    if (parsed.data.opening_cash !== undefined) {
+      if (requester.role !== "super_admin") {
+        throw new AuthError(403, "Only the super admin sets a leader's cash on hand");
+      }
+      if (target.role !== "company_leader") {
+        throw new AuthError(422, "Only a leader has cash on hand");
+      }
+    }
 
     const [updated] = await db
       .update(users)
@@ -90,6 +100,9 @@ export async function PATCH(
         ...parsed.data,
         ...(parsed.data.ip_allowlist
           ? { ip_allowlist: parsed.data.ip_allowlist.map((e) => e.trim()) }
+          : {}),
+        ...(parsed.data.opening_cash !== undefined
+          ? { opening_cash_at: new Date().toISOString() }
           : {}),
         updated_at: new Date().toISOString(),
       })
@@ -102,6 +115,8 @@ export async function PATCH(
         entity_id: users.entity_id,
         status: users.status,
         ip_allowlist: users.ip_allowlist,
+        opening_cash: users.opening_cash,
+        opening_cash_at: users.opening_cash_at,
       });
 
     const changes = diffFields(target, parsed.data);
