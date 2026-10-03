@@ -27,6 +27,7 @@ import {
 import { useStore } from "@/lib/store";
 import { formatRM, formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { LeaderCashDialog, useLeaderCash } from "@/components/leader-cash";
 
 type LeaderTransfer = {
   transfer_id: number;
@@ -86,6 +87,9 @@ export default function LeaderTransfersPage() {
   const [loaded, setLoaded] = useState(false);
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState(false);
+  const { cash, reload: reloadCash } = useLeaderCash();
+  /** The leader whose cash breakdown is open. */
+  const [cashFor, setCashFor] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -192,6 +196,21 @@ export default function LeaderTransfersPage() {
                 <span>Received {formatRM(s.received)}</span>
                 <span>Sent {formatRM(s.sent)}</span>
               </div>
+              {/* Cash in hand now, from the opening and the cash transfers since. */}
+              <button
+                type="button"
+                onClick={() => setCashFor(s.id)}
+                className="flex cursor-pointer justify-between border-t border-border/60 pt-1.5 text-[11px] tabular-nums hover:underline"
+              >
+                <span className="text-muted-foreground">Cash now</span>
+                {cash.get(s.id)?.cash_now != null ? (
+                  <span className="font-medium">{formatRM(cash.get(s.id)!.cash_now!)}</span>
+                ) : (
+                  <span className="font-medium text-amber-700 dark:text-amber-400">
+                    Opening not set
+                  </span>
+                )}
+              </button>
             </Card>
           ))}
           {summary.length === 0 && (
@@ -288,7 +307,23 @@ export default function LeaderTransfersPage() {
           onDone={() => {
             setOpen(false);
             void load();
+            void reloadCash();
           }}
+        />
+      )}
+
+      {cashFor !== null && (
+        <LeaderCashDialog
+          leader={{
+            user_id: cashFor,
+            full_name: userName(cashFor),
+            username: users.find((u) => u.user_id === cashFor)?.username ?? "",
+            opening_cash: users.find((u) => u.user_id === cashFor)?.opening_cash ?? null,
+          }}
+          cash={cash.get(cashFor)}
+          canEdit={me?.role === "super_admin"}
+          onClose={() => setCashFor(null)}
+          onSaved={() => void reloadCash()}
         />
       )}
     </div>

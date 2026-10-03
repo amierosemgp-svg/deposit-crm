@@ -101,7 +101,10 @@ export async function PATCH(
         ...(parsed.data.ip_allowlist
           ? { ip_allowlist: parsed.data.ip_allowlist.map((e) => e.trim()) }
           : {}),
-        ...(parsed.data.opening_cash !== undefined
+        // Struck once, when the amount is first entered. A later correction
+        // fixes the figure, not the day: moving the date would drop every cash
+        // transfer in between from the running balance.
+        ...(parsed.data.opening_cash !== undefined && !target.opening_cash_at
           ? { opening_cash_at: new Date().toISOString() }
           : {}),
         updated_at: new Date().toISOString(),

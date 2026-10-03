@@ -1070,6 +1070,17 @@ export default function TransactionsPage() {
         .map((u) => ({ value: u.full_name, hint: entityName(u.entity_id) })),
     [users, entityName],
   );
+  /**
+   * Clear Bank's Taken By: a leader person — which moves their cash on hand —
+   * or a casino, for cash kept at a casino rather than in anyone's pocket.
+   */
+  const TAKEN_BY_SUGGESTIONS = useMemo<SheetSuggestion[]>(
+    () => [
+      ...LEADER_SUGGESTIONS.map((s) => ({ ...s, hint: `leader · ${s.hint}` })),
+      ...companies.map((c) => ({ value: c.company_name, hint: "casino" })),
+    ],
+    [LEADER_SUGGESTIONS, companies],
+  );
   /** A settlement can name any leader in the house — see transferLeaders. */
   const SETTLEMENT_LEADER_SUGGESTIONS = useMemo<SheetSuggestion[]>(() => {
     const own = new Set(LEADER_SUGGESTIONS.map((s) => s.value));
@@ -1247,7 +1258,7 @@ export default function TransactionsPage() {
         time: { label: "Time", width: 64, align: "center", entry: true, placeholder: "14:30" },
         account: { label: "Bank Account", width: 220, entry: true, required: true, options: ACCOUNT_SUGGESTIONS, placeholder: "bank account" },
         amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "500" },
-        takenby: { label: "Taken By", width: 160, entry: true, required: true, options: LEADER_SUGGESTIONS, placeholder: "company" },
+        takenby: { label: "Taken By", width: 160, entry: true, required: true, options: TAKEN_BY_SUGGESTIONS, placeholder: "leader or casino" },
         notes: { label: "Notes", width: 240, entry: true, placeholder: "receipt no. (optional)" },
         status: { label: "Status", width: 100 },
       }),
@@ -1304,7 +1315,7 @@ export default function TransactionsPage() {
         notes: { label: "Notes", width: 240, entry: true, placeholder: "optional" },
       }),
     };
-  }, [games, banks, companies, isAdmin, OUR_ACCOUNTS, memberSuggestions, MODE_SUGGESTIONS, ASSIGN_SUGGESTIONS, ACCOUNT_SUGGESTIONS, LEADER_SUGGESTIONS, SETTLEMENT_LEADER_SUGGESTIONS, END_SUGGESTIONS, PAID_FROM_SUGGESTIONS]);
+  }, [games, banks, companies, isAdmin, OUR_ACCOUNTS, memberSuggestions, MODE_SUGGESTIONS, ASSIGN_SUGGESTIONS, ACCOUNT_SUGGESTIONS, LEADER_SUGGESTIONS, TAKEN_BY_SUGGESTIONS, SETTLEMENT_LEADER_SUGGESTIONS, END_SUGGESTIONS, PAID_FROM_SUGGESTIONS]);
 
   const columns = columnsByTab[tab];
 
@@ -2682,6 +2693,10 @@ export default function TransactionsPage() {
        * a runner who has no login can still be named.
        */
       if (!takenCell) return { ok: false, error: "Say who took the cash" };
+      // A casino picked from the list goes as its entity, so it can never be
+      // read as a leader's name; a leader or anyone else stays a name.
+      const takenKey = takenCell.toLowerCase();
+      const takenCasinoId = leaderByName.has(takenKey) ? null : companyByName.get(takenKey) ?? null;
       const dateCell = (d[c.date] ?? "").trim();
       const ymd = dateCell ? parseSheetDate(dateCell) : new Date().toISOString().slice(0, 10);
       if (!ymd) return { ok: false, error: `Bad date "${dateCell}" (use 31/8/2026)` };
@@ -2703,12 +2718,13 @@ export default function TransactionsPage() {
           account_id: account.account_id,
           amount: amt,
           taken_by: takenCell,
+          taken_by_entity_id: takenCasinoId,
           occurred_at: occurred.toISOString(),
           ...(notes ? { notes } : {}),
         },
       };
     },
-    [accountByLabel, companyInScope],
+    [accountByLabel, companyInScope, leaderByName, companyByName],
   );
 
   /**

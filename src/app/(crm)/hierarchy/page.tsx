@@ -12,7 +12,13 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatRM, initialsOf } from "@/lib/format";
+import { initialsOf } from "@/lib/format";
+import {
+  cashLabel,
+  LeaderCashDialog,
+  useLeaderCash,
+  type LeaderCash,
+} from "@/components/leader-cash";
 import {
   Building2,
   Crown,
@@ -64,7 +70,8 @@ function EntityUserChips({
   entityId,
   onRemove,
   onEditCompanies,
-  onEditCash,
+  cashOf,
+  onOpenCash,
 }: {
   users: User[];
   /**
@@ -78,8 +85,10 @@ function EntityUserChips({
   onRemove?: (u: User, fromEntityId: number) => void;
   /** Offered on leaders: which companies they hold. */
   onEditCompanies?: (u: User) => void;
-  /** Offered on leaders: set or correct their cash on hand. */
-  onEditCash?: (u: User) => void;
+  /** A leader's cash on hand, when it has loaded. */
+  cashOf?: (userId: number) => LeaderCash | undefined;
+  /** Offered on leaders: their cash breakdown (and, for an admin, the opening). */
+  onOpenCash?: (u: User) => void;
 }) {
   if (users.length === 0) return null;
   return (
@@ -102,9 +111,9 @@ function EntityUserChips({
             {u.role === "company_leader" && (
               <button
                 type="button"
-                disabled={!onEditCash}
-                onClick={() => onEditCash?.(u)}
-                title={onEditCash ? `Set cash on hand for ${u.username}` : undefined}
+                disabled={!onOpenCash}
+                onClick={() => onOpenCash?.(u)}
+                title={onOpenCash ? `Cash on hand for ${u.username}` : undefined}
                 className={
                   "truncate text-[10px] enabled:cursor-pointer enabled:hover:underline " +
                   (u.opening_cash == null
@@ -112,9 +121,7 @@ function EntityUserChips({
                     : "text-muted-foreground")
                 }
               >
-                {u.opening_cash == null
-                  ? "Cash on hand: not set"
-                  : `Cash on hand: ${formatRM(u.opening_cash)}`}
+                {cashLabel(cashOf?.(u.user_id), u.opening_cash)}
               </button>
             )}
           </div>
@@ -600,8 +607,9 @@ export default function HierarchyPage() {
   );
   /** The leader whose list of companies is being edited. */
   const [leaderCompanies, setLeaderCompanies] = useState<User | null>(null);
-  /** The leader whose cash on hand is being set or corrected. */
+  /** The leader whose cash on hand is open. */
   const [leaderCash, setLeaderCash] = useState<User | null>(null);
+  const { cash: leaderCashById, reload: reloadLeaderCash } = useLeaderCash();
 
   const mains = entities
     .filter((e) => e.entity_type === "main_company")
@@ -801,7 +809,8 @@ export default function HierarchyPage() {
                     isSuper ? (u, fromEntityId) => setRemoving({ user: u, fromEntityId }) : undefined
                   }
                   onEditCompanies={isSuper ? setLeaderCompanies : undefined}
-                  onEditCash={isSuper ? setLeaderCash : undefined}
+                  cashOf={(id) => leaderCashById.get(id)}
+                  onOpenCash={setLeaderCash}
                 />
               </CardContent>
             )}
@@ -903,7 +912,8 @@ export default function HierarchyPage() {
                               isSuper ? (u, fromEntityId) => setRemoving({ user: u, fromEntityId }) : undefined
                             }
                   onEditCompanies={isSuper ? setLeaderCompanies : undefined}
-                  onEditCash={isSuper ? setLeaderCash : undefined}
+                  cashOf={(id) => leaderCashById.get(id)}
+                  onOpenCash={setLeaderCash}
                           />
                         )}
 
@@ -1003,7 +1013,8 @@ export default function HierarchyPage() {
                               isSuper ? (u, fromEntityId) => setRemoving({ user: u, fromEntityId }) : undefined
                             }
                   onEditCompanies={isSuper ? setLeaderCompanies : undefined}
-                  onEditCash={isSuper ? setLeaderCash : undefined}
+                  cashOf={(id) => leaderCashById.get(id)}
+                  onOpenCash={setLeaderCash}
                                         />
                                         )}
                                         {csDesks.map((cs) => {
@@ -1054,7 +1065,8 @@ export default function HierarchyPage() {
                                 : undefined
                             }
                   onEditCompanies={isSuper ? setLeaderCompanies : undefined}
-                  onEditCash={isSuper ? setLeaderCash : undefined}
+                  cashOf={(id) => leaderCashById.get(id)}
+                  onOpenCash={setLeaderCash}
                                                 />
                                                 </div>
                                               )}
@@ -1093,7 +1105,13 @@ export default function HierarchyPage() {
         />
       )}
       {leaderCash && (
-        <LeaderCashDialog leader={leaderCash} onClose={() => setLeaderCash(null)} />
+        <LeaderCashDialog
+          leader={leaderCash}
+          cash={leaderCashById.get(leaderCash.user_id)}
+          canEdit={isSuper}
+          onClose={() => setLeaderCash(null)}
+          onSaved={() => void reloadLeaderCash()}
+        />
       )}
       {leaderCompanies && (
         <LeaderCompaniesDialog
@@ -1490,76 +1508,6 @@ function CompanyLeadersDialog({
  * The company they were created under is always theirs and cannot be taken away
  * here; moving that is a different operation with different consequences.
  */
-/**
- * A leader's cash on hand at onboarding — the leader's counterpart of a bank
- * account's opening balance. Required when a leader is created; this is for
- * the leaders who predate it, and for correcting a typo. Every change is in
- * the activity log.
- */
-function LeaderCashDialog({ leader, onClose }: { leader: User; onClose: () => void }) {
-  const updateUser = useStore((s) => s.updateUser);
-  const [raw, setRaw] = useState(
-    leader.opening_cash == null ? "" : String(leader.opening_cash),
-  );
-  const [busy, setBusy] = useState(false);
-  const amount = parseCash(raw);
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (amount === null || busy) return;
-    setBusy(true);
-    const res = await updateUser(leader.user_id, { opening_cash: amount });
-    setBusy(false);
-    if (!res.ok) {
-      toast.error(res.error ?? "Failed to save cash on hand");
-      return;
-    }
-    toast.success(`Cash on hand for ${leader.full_name} set to ${formatRM(amount)}`);
-    onClose();
-  }
-
-  return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="sm:max-w-sm">
-        <DialogTitle>Cash on hand</DialogTitle>
-        <p className="-mt-2 text-xs text-muted-foreground">
-          {leader.full_name} (@{leader.username}) — the cash they held when they
-          joined, like a bank account&apos;s opening balance.
-        </p>
-        <form onSubmit={handleSubmit} className="space-y-3">
-          <div className="space-y-1.5">
-            <Label htmlFor="leader-opening-cash">Cash on hand (RM)</Label>
-            <Input
-              id="leader-opening-cash"
-              type="number"
-              inputMode="decimal"
-              min="0"
-              step="0.01"
-              value={raw}
-              onChange={(e) => setRaw(e.target.value)}
-              placeholder="0.00"
-              autoFocus
-            />
-            {leader.opening_cash != null && (
-              <p className="text-[11px] text-muted-foreground">
-                Currently {formatRM(leader.opening_cash)}. A change is logged.
-              </p>
-            )}
-          </div>
-          <div className="flex items-center justify-end gap-2 pt-1">
-            <Button type="button" variant="ghost" className="cursor-pointer" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={amount === null || busy} className="cursor-pointer">
-              {busy ? "Saving…" : "Save"}
-            </Button>
-          </div>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 function LeaderCompaniesDialog({
   leader,
   onClose,

@@ -281,6 +281,7 @@ export const users = pgTable("users", {
    * account's opening balance. Null = not entered yet, which is not RM 0.
    */
   opening_cash: numeric("opening_cash", { precision: 14, scale: 2, mode: "number" }),
+  // When it was first entered; cash transfers from then on move it (lib/leader-cash).
   opening_cash_at: timestamp("opening_cash_at", { withTimezone: true, mode: "string" }),
   created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
     .notNull()

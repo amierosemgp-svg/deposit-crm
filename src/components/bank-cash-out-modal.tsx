@@ -47,33 +47,63 @@ export function BankCashOutModal({ open, onOpenChange, account, onRecorded }: Pr
   const entityName = useStore((s) => s.entityName);
   const record = useStore((s) => s.recordBankCashOut);
 
-  // Leaders to pick from; the account's own company's leader comes first.
+  const users = useStore((s) => s.users);
+  const leaderMemberships = useStore((s) => s.leaderMemberships);
+
+  /**
+   * Who took the cash: a leader person, a casino, or someone typed in.
+   *
+   * A person, not a company — a company has several leaders, and the cash went
+   * into one pair of hands; naming them is what moves their cash on hand
+   * (lib/leader-cash). A casino is for cash kept at a casino rather than in a
+   * leader's pocket. The leaders of the company that runs this account's
+   * casino come first, then this casino.
+   */
+  const ownCompanyId = useMemo(() => {
+    const casino = account ? entities.find((e) => e.entity_id === account.entity_id) : undefined;
+    return casino?.parent_entity_id ?? null;
+  }, [entities, account]);
   const leaders = useMemo(() => {
-    const company = account ? entities.find((e) => e.entity_id === account.entity_id) : undefined;
-    const own = company?.parent_entity_id ?? null;
-    return entities
-      .filter((e) => e.entity_type === "leader" && e.status === "active")
-      .sort((a, b) =>
-        a.entity_id === own ? -1 : b.entity_id === own ? 1 : a.name.localeCompare(b.name),
-      );
-  }, [entities, account]);
-  const ownLeaderId = useMemo(() => {
-    const company = account ? entities.find((e) => e.entity_id === account.entity_id) : undefined;
-    return company?.parent_entity_id ?? null;
-  }, [entities, account]);
+    const holds = (u: (typeof users)[number]) =>
+      ownCompanyId !== null &&
+      (u.entity_id === ownCompanyId ||
+        leaderMemberships.some((m) => m.user_id === u.user_id && m.leader_entity_id === ownCompanyId));
+    return users
+      .filter((u) => u.role === "company_leader" && u.status === "active")
+      .map((u) => ({ ...u, own: holds(u) }))
+      .sort((a, b) => Number(b.own) - Number(a.own) || a.full_name.localeCompare(b.full_name));
+  }, [users, leaderMemberships, ownCompanyId]);
+  const casinos = useMemo(
+    () =>
+      entities
+        .filter((e) => e.entity_type === "company" && e.status === "active")
+        .sort((a, b) =>
+          a.entity_id === account?.entity_id
+            ? -1
+            : b.entity_id === account?.entity_id
+              ? 1
+              : a.name.localeCompare(b.name),
+        ),
+    [entities, account],
+  );
 
   // Base UI's Select renders the raw value in the trigger unless it's told
-  // what each value is called — hence the items map.
+  // what each value is called — hence the items map. "u:" a leader, "e:" a casino.
   const takenByItems = useMemo(
     () => [
-      ...leaders.map((l) => ({
-        value: String(l.entity_id),
-        label: l.entity_id === ownLeaderId ? `${l.name} · your own company` : l.name,
+      ...leaders.map((u) => ({
+        value: `u:${u.user_id}`,
+        label: `${u.full_name} · leader${u.own ? "" : ` (${entityName(u.entity_id)})`}`,
+      })),
+      ...casinos.map((c) => ({
+        value: `e:${c.entity_id}`,
+        label: `${c.name} · casino${c.entity_id === account?.entity_id ? " (this account)" : ""}`,
       })),
       { value: OTHER, label: "Someone else…" },
     ],
-    [leaders, ownLeaderId],
+    [leaders, casinos, entityName, account],
   );
+  const defaultTakenBy = leaders[0]?.own ? `u:${leaders[0].user_id}` : OTHER;
 
   const [amount, setAmount] = useState("");
   const [takenBy, setTakenBy] = useState<string>("");
@@ -88,12 +118,12 @@ export function BankCashOutModal({ open, onOpenChange, account, onRecorded }: Pr
     // transfer modal; the dialog is the external system being synced to.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setAmount("");
-    setTakenBy(ownLeaderId ? String(ownLeaderId) : leaders[0] ? String(leaders[0].entity_id) : OTHER);
+    setTakenBy(defaultTakenBy);
     setOtherName("");
     setWhen(localInputValue(new Date()));
     setNotes("");
     setBusy(false);
-  }, [open, ownLeaderId, leaders]);
+  }, [open, defaultTakenBy]);
 
   const amt = Number(amount) || 0;
   const validation = (() => {
@@ -111,8 +141,14 @@ export function BankCashOutModal({ open, onOpenChange, account, onRecorded }: Pr
     const res = await record({
       accountId: account.account_id,
       amount: amt,
-      takenByEntityId: takenBy === OTHER ? null : Number(takenBy),
-      takenBy: takenBy === OTHER ? otherName.trim() : undefined,
+      // A casino goes as its entity; a leader as their name, which is what
+      // ties the row to their cash on hand; anyone else as typed.
+      takenByEntityId: takenBy.startsWith("e:") ? Number(takenBy.slice(2)) : null,
+      takenBy: takenBy.startsWith("u:")
+        ? leaders.find((u) => `u:${u.user_id}` === takenBy)?.full_name
+        : takenBy === OTHER
+          ? otherName.trim()
+          : undefined,
       occurredAt: new Date(when).toISOString(),
       notes: notes.trim() || undefined,
     });
