@@ -14,7 +14,7 @@ export async function GET(request: Request) {
     const planId = Number(url.searchParams.get("plan_id"));
     if (!Number.isInteger(planId) || planId <= 0) return jsonError("Provide plan_id");
     const plan = await loadRebatePlanForUser(user, planId);
-    const cutoffs = await loadRebateCutoffs();
+    const cutoffs = await loadRebateCutoffs(plan.company_entity_id);
     const data = await rebatePlanData(
       plan,
       cutoffs,

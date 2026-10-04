@@ -27,7 +27,7 @@ export async function POST(request: Request) {
     const parsed = schema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return jsonError("Provide plan_id");
     const plan = await loadRebatePlanForUser(user, parsed.data.plan_id);
-    const cutoffs = await loadRebateCutoffs();
+    const cutoffs = await loadRebateCutoffs(plan.company_entity_id);
 
     let windowEnd: Date | undefined;
     if (parsed.data.window_end !== undefined) {

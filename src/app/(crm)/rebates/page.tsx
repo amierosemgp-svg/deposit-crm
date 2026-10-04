@@ -141,8 +141,6 @@ export default function RebatesPage() {
   const entityName = useStore((s) => s.entityName);
   const userName = useStore((s) => s.userName);
   const playerById = useStore((s) => s.playerById);
-  const settings = useStore((s) => s.settings);
-  const updateSetting = useStore((s) => s.updateSetting);
 
   const isViewer = me?.role === "viewer";
   const isAdmin = me?.role === "super_admin";
@@ -168,6 +166,19 @@ export default function RebatesPage() {
   const [planId, setPlanId] = useState<number | null>(null);
   const activePlan: BonusPlan | undefined = plans.find((p) => p.plan_id === planId) ?? plans[0];
   const activePlanId = activePlan?.plan_id ?? null;
+  /**
+   * Cutoffs belong to a casino, so the dialog edits the casino of the plan on
+   * screen — its own leader as well as the super admin. A plan for every
+   * casino edits the shared fallback, which stays the super admin's.
+   */
+  const cutoffCasinoId = activePlan?.company_entity_id ?? null;
+  const cutoffCasinoName = cutoffCasinoId === null ? "all casinos" : entityName(cutoffCasinoId);
+  const canEditCutoffs =
+    !!activePlan &&
+    (isAdmin ||
+      (cutoffCasinoId !== null &&
+        me?.role === "company_leader" &&
+        (me.companyIds ?? []).includes(cutoffCasinoId)));
 
   const [data, setData] = useState<RebatePlanData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -379,7 +390,8 @@ export default function RebatesPage() {
   const [savingCutoffs, setSavingCutoffs] = useState(false);
 
   function openCutoffs() {
-    const c = data?.cutoffs ?? settings.rebate_cutoffs ?? DEFAULT_CUTOFFS;
+    // data.cutoffs is the plan's casino's own (GET /api/rebates).
+    const c = data?.cutoffs ?? DEFAULT_CUTOFFS;
     setCutoffForm({ daily: { ...c.daily }, weekly: { ...c.weekly }, monthly: { ...c.monthly } });
     setEditingCutoffs(true);
   }
@@ -400,12 +412,18 @@ export default function RebatesPage() {
       return;
     }
     setSavingCutoffs(true);
-    const res = await updateSetting({ rebate_cutoffs: cutoffForm });
+    const res = await fetch("/api/rebates/cutoffs", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ company_entity_id: cutoffCasinoId, cutoffs: cutoffForm }),
+    }).catch(() => null);
     setSavingCutoffs(false);
-    if (!res.ok) {
-      toast.error(res.error ?? "Could not save cutoffs");
+    if (!res?.ok) {
+      const d = (await res?.json().catch(() => null)) as { error?: string } | null;
+      toast.error(d?.error ?? "Could not save cutoffs");
       return;
     }
+    toast.success(`Cutoffs saved for ${cutoffCasinoName}`);
     setEditingCutoffs(false);
     // New boundaries: the window list is different now.
     if (activePlanId !== null) void loadPlan(activePlanId);
@@ -432,7 +450,11 @@ export default function RebatesPage() {
           variant="outline"
           onClick={openCutoffs}
           className="shrink-0 cursor-pointer"
-          title={isAdmin ? undefined : "Only the super admin changes cutoffs"}
+          title={
+            canEditCutoffs
+              ? `Cutoffs for ${cutoffCasinoName}`
+              : "Only the super admin or this casino's leader changes cutoffs"
+          }
         >
           <Settings2 className="h-3.5 w-3.5" />
           Cutoff times
@@ -814,11 +836,12 @@ export default function RebatesPage() {
         onOpenChange={(o) => !o && !savingCutoffs && setEditingCutoffs(false)}
       >
         <DialogContent className="sm:max-w-md">
-          <DialogTitle>Cutoff times</DialogTitle>
+          <DialogTitle>Cutoff times · {cutoffCasinoName}</DialogTitle>
           <DialogDescription>
             When a rebate day, week and month roll over, in Malaysia time. A window runs from
             one cutoff to the next; &quot;Generate&quot; measures the loss between them.
-            {!isAdmin && " Only the super admin can change these."}
+            {" "}These are {cutoffCasinoName}&apos;s own; other casinos keep theirs.
+            {!canEditCutoffs && " Only the super admin or this casino's leader can change them."}
           </DialogDescription>
           <div className="space-y-4 py-2">
             <div className="grid grid-cols-[88px_1fr] items-center gap-3">
@@ -826,7 +849,7 @@ export default function RebatesPage() {
               <Input
                 type="time"
                 value={cutoffForm.daily.time}
-                disabled={!isAdmin}
+                disabled={!canEditCutoffs}
                 onChange={(e) => setCutoffForm((f) => ({ ...f, daily: { time: e.target.value } }))}
               />
               <Label>Weekly</Label>
@@ -836,7 +859,7 @@ export default function RebatesPage() {
                   onValueChange={(v) =>
                     setCutoffForm((f) => ({ ...f, weekly: { ...f.weekly, weekday: Number(v) } }))
                   }
-                  disabled={!isAdmin}
+                  disabled={!canEditCutoffs}
                   items={WEEKDAY_ITEMS}
                 >
                   <SelectTrigger className="w-[150px] cursor-pointer">
@@ -853,7 +876,7 @@ export default function RebatesPage() {
                 <Input
                   type="time"
                   value={cutoffForm.weekly.time}
-                  disabled={!isAdmin}
+                  disabled={!canEditCutoffs}
                   onChange={(e) =>
                     setCutoffForm((f) => ({ ...f, weekly: { ...f.weekly, time: e.target.value } }))
                   }
@@ -867,7 +890,7 @@ export default function RebatesPage() {
                   min={1}
                   max={31}
                   value={cutoffForm.monthly.day}
-                  disabled={!isAdmin}
+                  disabled={!canEditCutoffs}
                   className="w-20"
                   onChange={(e) =>
                     setCutoffForm((f) => ({
@@ -879,7 +902,7 @@ export default function RebatesPage() {
                 <Input
                   type="time"
                   value={cutoffForm.monthly.time}
-                  disabled={!isAdmin}
+                  disabled={!canEditCutoffs}
                   onChange={(e) =>
                     setCutoffForm((f) => ({ ...f, monthly: { ...f.monthly, time: e.target.value } }))
                   }
@@ -896,9 +919,9 @@ export default function RebatesPage() {
               onClick={() => setEditingCutoffs(false)}
               className="cursor-pointer"
             >
-              {isAdmin ? "Cancel" : "Close"}
+              {canEditCutoffs ? "Cancel" : "Close"}
             </Button>
-            {isAdmin && (
+            {canEditCutoffs && (
               <Button onClick={saveCutoffs} disabled={savingCutoffs} className="cursor-pointer">
                 {savingCutoffs && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                 Save

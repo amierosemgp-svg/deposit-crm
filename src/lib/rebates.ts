@@ -75,8 +75,26 @@ export function parseRebateCutoffs(raw: unknown): RebateCutoffs {
   };
 }
 
-export async function loadRebateCutoffs(): Promise<RebateCutoffs> {
-  const [row] = await db.select().from(settings).where(eq(settings.key, REBATE_CUTOFFS_KEY));
+/**
+ * Where a casino's cutoffs live: one row per casino, `rebate_cutoffs:<id>`.
+ *
+ * The cutoffs were one row for the whole system, so a Demo Group admin trying
+ * out a plan moved Pokercity's week from Monday to Friday. Each casino keeps
+ * its own now; the shared row stays only as the starting point for a casino
+ * that hasn't set any, and for a plan that spans every casino.
+ */
+export function rebateCutoffsKey(casinoId: number | null): string {
+  return casinoId == null ? REBATE_CUTOFFS_KEY : `${REBATE_CUTOFFS_KEY}:${casinoId}`;
+}
+
+/** A casino's cutoffs, falling back to the shared row, then the defaults. */
+export async function loadRebateCutoffs(casinoId: number | null = null): Promise<RebateCutoffs> {
+  const own = rebateCutoffsKey(casinoId);
+  const rows = await db
+    .select()
+    .from(settings)
+    .where(inArray(settings.key, [...new Set([own, REBATE_CUTOFFS_KEY])]));
+  const row = rows.find((r) => r.key === own) ?? rows.find((r) => r.key === REBATE_CUTOFFS_KEY);
   return parseRebateCutoffs(row?.value);
 }
 
