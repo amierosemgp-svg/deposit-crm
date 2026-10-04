@@ -557,6 +557,17 @@ const EMPTY_ALIASES: Record<string, string> = {};
 /** Likewise for the bonus rates, which are read straight out of settings. */
 const EMPTY_RATES: number[] = [];
 
+/**
+ * How one of our accounts reads in a Bank / Paid From cell: its label and its
+ * number, "MBB 2-ENT · Maybank 562076551494". Two casinos can share a label;
+ * the number is what keeps CS from picking — or the sheet from resolving — the
+ * other casino's account.
+ */
+function accountCell(a: { label?: string | null; bank_name: string; account_number: string }) {
+  const num = `${a.bank_name} ${a.account_number}`;
+  return a.label?.trim() ? `${a.label.trim()} · ${num}` : num;
+}
+
 export default function TransactionsPage() {
   const deposits = useStore((s) => s.deposits);
   const withdrawals = useStore((s) => s.withdrawals);
@@ -1046,10 +1057,11 @@ export default function TransactionsPage() {
       bankAccounts
         .filter((a) => a.status === "active" && companyInScope(a.entity_id))
         .map((a) => ({
-          value: a.label || `${a.bank_name} ${a.account_number}`,
-          hint: `${a.bank_name} · ${fmtAmount(a.current_balance)}`,
+          value: accountCell(a),
+          hint: `${entityName(a.entity_id)} · ${fmtAmount(a.current_balance)}`,
         })),
-    [bankAccounts, companyInScope],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [bankAccounts, companyInScope, entityName, selectedCompanyId, selectedLeaderId],
   );
 
   /**
@@ -1137,19 +1149,44 @@ export default function TransactionsPage() {
     }
     return m;
   }, [users, transferLeaders]);
+  /**
+   * A typed account → the account, preferring the right casino's.
+   *
+   * Every key can name several accounts: a CS desk sees every casino its
+   * company runs, and two casinos may both label an account "MBB 1". Picking
+   * whichever came last handed a Pokercity deposit Abdullah Club's Maybank, and
+   * the server refused it as another company's. So `get` takes the casino the
+   * row is for — the member's — and falls back to the casino selected in the
+   * top bar, then to any.
+   */
   const accountByLabel = useMemo(() => {
-    const m = new Map<string, (typeof bankAccounts)[number]>();
+    const m = new Map<string, (typeof bankAccounts)[number][]>();
+    const add = (key: string, a: (typeof bankAccounts)[number]) => {
+      const list = m.get(key);
+      if (list) list.push(a);
+      else m.set(key, [a]);
+    };
     for (const a of bankAccounts) {
       // The label first, because that is what every dropdown offers: the lists
       // show "AMBANK 2" and "CIMB · Moganah", and a map keyed only on
       // "<bank> <number>" rejected the very value it had just suggested.
-      if (a.label?.trim()) m.set(a.label.trim().toLowerCase(), a);
-      m.set(`${a.bank_name} ${a.account_number}`.toLowerCase(), a);
-      // The number alone is enough when it's unambiguous.
-      if (!m.has(a.account_number.toLowerCase())) m.set(a.account_number.toLowerCase(), a);
+      if (a.label?.trim()) add(a.label.trim().toLowerCase(), a);
+      add(accountCell(a).toLowerCase(), a);
+      add(`${a.bank_name} ${a.account_number}`.toLowerCase(), a);
+      add(a.account_number.toLowerCase(), a);
     }
-    return m;
-  }, [bankAccounts]);
+    return {
+      get: (key: string, casinoId?: number | null) => {
+        const list = m.get(key);
+        if (!list?.length) return undefined;
+        return (
+          (casinoId != null ? list.find((a) => a.entity_id === casinoId) : undefined) ??
+          list.find((a) => companyInScope(a.entity_id)) ??
+          list[0]
+        );
+      },
+    };
+  }, [bankAccounts, companyInScope]);
 
   // Column definitions by key; COLUMN_KEYS decides the order they appear in.
   const columnsByTab = useMemo<Record<TabKey, SheetColumn[]>>(() => {
@@ -1190,7 +1227,7 @@ export default function TransactionsPage() {
         // alike. Never an entry cell: a total someone can type is a total that
         // can disagree with the figures it is made of.
         total: { label: "Total", width: 100, align: "right", numeric: true },
-        bank: { label: "Bank", width: 130, entry: true, required: true, options: OUR_ACCOUNTS, placeholder: "our account" },
+        bank: { label: "Bank", width: 220, entry: true, required: true, options: OUR_ACCOUNTS, placeholder: "our account" },
         mode,
         status,
         date,
@@ -1215,7 +1252,7 @@ export default function TransactionsPage() {
         // what to deduct, so a paid withdrawal moved no balance at all.
         paidfrom: {
           label: "Paid From",
-          width: 150,
+          width: 220,
           entry: true,
           options: OUR_ACCOUNTS,
           placeholder: "our account",
@@ -1658,7 +1695,10 @@ export default function TransactionsPage() {
             bonuspct: pct ? `${pct}%` : "—",
             bonus: d.bonus_amount ? fmtAmount(d.bonus_amount) : "—",
             total: fmtAmount(d.total_amount),
-            bank: ourAccountById(d.received_into_account_id)?.label ?? d.bank_name,
+            bank: (() => {
+              const a = ourAccountById(d.received_into_account_id);
+              return a ? accountCell(a) : d.bank_name;
+            })(),
             mode: modeCell(d.skip_bot),
             status: DEPOSIT_STATUS_LABEL[d.status],
             // Bot-matched rows carry the bank's own timestamp; a sheet-entered
@@ -1715,7 +1755,10 @@ export default function TransactionsPage() {
             account: w.bank_account_number ?? "",
             holder:
               payoutAccountOf(p, w.bank_name, w.bank_account_number)?.account_holder ?? "",
-            paidfrom: ourAccountById(w.paid_from_account_id)?.label ?? "",
+            paidfrom: (() => {
+              const a = ourAccountById(w.paid_from_account_id);
+              return a ? accountCell(a) : "";
+            })(),
             mode: modeCell(w.skip_bot),
             status: WITHDRAWAL_STATUS_LABEL[w.status],
             date: sheetDate(w.created_at),
@@ -2314,7 +2357,7 @@ export default function TransactionsPage() {
       if (!bank.trim()) return { ok: false, error: "Bank is required" };
       // The cell names one of our accounts. Resolving it here is what lets the
       // completion credit a balance rather than just record a bank's name.
-      const into = accountByLabel.get(bank.trim().toLowerCase());
+      const into = accountByLabel.get(bank.trim().toLowerCase(), player.company_entity_id);
       if (!into)
         return {
           ok: false,
@@ -2386,7 +2429,9 @@ export default function TransactionsPage() {
       const mode = parseMode(d[c.mode]);
       if (!mode.ok) return mode;
       const paidCell = (d[c.paidfrom] ?? "").trim();
-      const paidFrom = paidCell ? accountByLabel.get(paidCell.toLowerCase()) : undefined;
+      const paidFrom = paidCell
+        ? accountByLabel.get(paidCell.toLowerCase(), player.company_entity_id)
+        : undefined;
       if (paidCell && !paidFrom)
         return {
           ok: false,
@@ -3416,7 +3461,10 @@ export default function TransactionsPage() {
           if (!v) {
             patch = { paid_from_account_id: null };
           } else {
-            const account = accountByLabel.get(v.toLowerCase());
+            const account = accountByLabel.get(
+              v.toLowerCase(),
+              playerById.get(w.player_id)?.company_entity_id,
+            );
             if (!account) {
               toast.error(`"${v}" is not one of our accounts — pick one from the list`);
               return;
@@ -3614,7 +3662,10 @@ export default function TransactionsPage() {
         }
         // The cell names one of our accounts, same as a new entry — the account
         // is what moves the balance; the bank's name alone moved nothing.
-        const into = accountByLabel.get(v.toLowerCase());
+        const into = accountByLabel.get(
+          v.toLowerCase(),
+          dep?.player_id != null ? playerById.get(dep.player_id)?.company_entity_id : undefined,
+        );
         if (!into) {
           toast.error(`"${v}" is not one of our accounts — pick one from the list`);
           return;
