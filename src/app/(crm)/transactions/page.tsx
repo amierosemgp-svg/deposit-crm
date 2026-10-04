@@ -5609,19 +5609,10 @@ export default function TransactionsPage() {
             )}
             {can.payReb && (
               <>
+                {/* By hand is the main action: no agent has ever completed a
+                    credit, so a rebate queued for one is never paid. */}
                 <Button
                   size="xs"
-                  disabled={acting}
-                  onClick={() => handlePayRebates(false)}
-                  title="Queue a free credit for the agent"
-                  className="cursor-pointer gap-1"
-                >
-                  <Play className="h-3 w-3" />
-                  Pay
-                </Button>
-                <Button
-                  size="xs"
-                  variant="outline"
                   disabled={acting}
                   onClick={() => handlePayRebates(true)}
                   title="CS already credited the game by hand — book it"
@@ -5629,6 +5620,17 @@ export default function TransactionsPage() {
                 >
                   <HandCoins className="h-3 w-3" />
                   Paid by hand
+                </Button>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={acting}
+                  onClick={() => handlePayRebates(false)}
+                  title="Queue a free credit for the agent"
+                  className="cursor-pointer gap-1"
+                >
+                  <Play className="h-3 w-3" />
+                  Queue for agent
                 </Button>
               </>
             )}

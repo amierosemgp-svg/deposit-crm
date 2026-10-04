@@ -320,12 +320,15 @@ export default function RebatesPage() {
   type PayTarget = { rows: RebatePayoutView[]; single: boolean; windowStart: string };
   const [payTarget, setPayTarget] = useState<PayTarget | null>(null);
   const [payGame, setPayGame] = useState("");
-  const [paySkipBot, setPaySkipBot] = useState(false);
+  // By hand unless someone opts into the agent: no agent has ever completed a
+  // credit, and a rebate queued for one sits "Queued" and then fails while the
+  // player is never paid. Same default as deposits, withdrawals, free credits.
+  const [paySkipBot, setPaySkipBot] = useState(true);
 
   function startPay(rows: RebatePayoutView[], single: boolean, windowStart: string) {
     setPayTarget({ rows, single, windowStart });
     setPayGame(single ? (rows[0]?.game_name ?? "") : "");
-    setPaySkipBot(false);
+    setPaySkipBot(true);
   }
 
   async function confirmPay() {

@@ -20,7 +20,7 @@ const schema = z.object({
     )
     .min(1)
     .max(500),
-  // true = CS already credited the games by hand; false = queue for the agent.
+  // true (default) = CS already credited the games by hand; false = queue for the agent.
   skip_bot: z.boolean().optional(),
 });
 
@@ -35,7 +35,8 @@ export async function POST(request: Request) {
     const user = await requireWriteUser();
     const parsed = schema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return jsonError("Provide payouts to pay");
-    const skipBot = parsed.data.skip_bot ?? false;
+    // Manual by default, as on deposits, withdrawals and free credits.
+    const skipBot = parsed.data.skip_bot ?? true;
 
     let paid = 0;
     let total = 0;
