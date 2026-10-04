@@ -22,6 +22,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useStore } from "@/lib/store";
 import { REPORT_DEFS } from "@/lib/report-defs";
+import { inSheetGrid, matchesAction } from "@/lib/shortcut-keys";
 import type { UserRole } from "@/lib/types";
 
 type NavItem = {
@@ -146,15 +147,23 @@ export function Sidebar() {
     ),
   })).filter((group) => group.items.length > 0);
 
-  // Shift+⌘/Ctrl+↑/↓ steps through the visible menu pages, top to bottom and
+  // ⌘/Ctrl+Alt+↑/↓ steps through the visible menu pages, top to bottom and
   // wrapping around — a keyboard way to move between pages without the mouse.
+  // Shift+⌘/Ctrl+↑/↓ was the key first and still works, except inside the
+  // spreadsheet grid: there it is Google Sheets' "extend the selection to the
+  // top / bottom", and the grid gets it.
   const flatHrefs = groups.flatMap((g) => g.items.map((i) => i.href));
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = IS_MAC ? e.metaKey : e.ctrlKey;
       const wrongMod = IS_MAC ? e.ctrlKey : e.metaKey;
-      if (!mod || wrongMod || !e.shiftKey || e.altKey) return;
-      const dir = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
+      const oldKey = mod && !wrongMod && e.shiftKey && !e.altKey && !inSheetGrid(e.target);
+      const dir =
+        matchesAction(e, "nextPage") || (oldKey && e.key === "ArrowDown")
+          ? 1
+          : matchesAction(e, "prevPage") || (oldKey && e.key === "ArrowUp")
+            ? -1
+            : 0;
       if (!dir || flatHrefs.length === 0) return;
       e.preventDefault();
       e.stopPropagation();

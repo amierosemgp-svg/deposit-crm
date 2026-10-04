@@ -7,6 +7,7 @@ import { usePlayerProfile } from "@/components/player-name-link";
 import { initialsOf, formatRM } from "@/lib/format";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
+import { actionLabel, inSheetGrid, matchesAction } from "@/lib/shortcut-keys";
 import { Search, X } from "lucide-react";
 
 const MAX_RESULTS = 8;
@@ -84,10 +85,14 @@ export function PlayerSearch() {
     };
   }, [open]);
 
-  // ⌘K / Ctrl-K from anywhere — CS looks players up constantly.
+  // ⌘E / Ctrl-E from anywhere — CS looks players up constantly. ⌘K was the
+  // key first and still works, except in the spreadsheet grid: that takes
+  // Google Sheets' keys, and there ⌘K is "insert link".
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+      const oldKey =
+        (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k" && !inSheetGrid(e.target);
+      if (matchesAction(e, "searchPlayers") || oldKey) {
         e.preventDefault();
         inputRef.current?.focus();
         inputRef.current?.select();
@@ -146,7 +151,7 @@ export function PlayerSearch() {
             inputRef.current?.focus();
           }}
           aria-label="Clear search"
-          // Same chip treatment as the ⌘K badge it replaces, so the right end
+          // Same chip treatment as the shortcut badge it replaces, so the right end
           // of the borderless field doesn't change shape as you type.
           className="absolute right-2 top-1/2 inline-flex -translate-y-1/2 cursor-pointer items-center rounded border bg-muted p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
         >
@@ -154,7 +159,7 @@ export function PlayerSearch() {
         </button>
       ) : (
         <kbd className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-          ⌘K
+          {actionLabel("searchPlayers")}
         </kbd>
       )}
 
