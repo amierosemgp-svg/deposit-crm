@@ -1466,6 +1466,25 @@ export default function TransactionsPage() {
    * the fallback for rows entered before the number was recorded.
    */
   /** One of our accounts by id, for showing which one a saved row used. */
+  /**
+   * The game a typed login belongs to, for this member. A login that is theirs
+   * on the row's current game keeps it; one that is theirs on exactly one other
+   * game moves the row there, so changing Username alone can switch Mega888 to
+   * 918Kiss. Otherwise null — the server says what's wrong with it.
+   */
+  const gameOfLogin = useCallback(
+    (playerId: number | null | undefined, login: string, current: string | null | undefined) => {
+      const v = login.trim().toLowerCase();
+      if (!v || playerId == null) return null;
+      const games = (playerById.get(playerId)?.game_accounts ?? [])
+        .filter((a) => (a.game_username ?? "").trim().toLowerCase() === v)
+        .map((a) => a.game_name);
+      if (current && games.some((g) => g.toLowerCase() === current.toLowerCase())) return current;
+      return new Set(games.map((g) => g.toLowerCase())).size === 1 ? games[0] : null;
+    },
+    [playerById],
+  );
+
   const ourAccountById = useCallback(
     (accountId?: number | null) =>
       accountId == null
@@ -3510,7 +3529,11 @@ export default function TransactionsPage() {
           }
           patch = { game_name: g };
         } else if (colIndex === c.username) {
-          patch = { game_username: v || null };
+          const game = gameOfLogin(w.player_id, v, w.game_name);
+          patch = {
+            game_username: v || null,
+            ...(game && game !== w.game_name ? { game_name: game } : {}),
+          };
         } else if (colIndex === c.amount) {
           const amt = parseAmount(v);
           if (amt === null || amt <= 0) {
@@ -3653,8 +3676,10 @@ export default function TransactionsPage() {
         const res = await updateDepositDraft(dep.deposit_id, { bonus_percentage: pct });
         report(res, "Failed to set bonus");
       } else if (colIndex === COL.deposit.username) {
+        const game = gameOfLogin(dep.player_id, v, dep.selected_game);
         const res = await updateDepositDraft(dep.deposit_id, {
           selected_game_username: v || null,
+          ...(game && game !== dep.selected_game ? { selected_game: game } : {}),
         });
         report(res, "Failed to set the kiosk login");
       } else if (colIndex === COL.deposit.amount) {
@@ -3692,6 +3717,7 @@ export default function TransactionsPage() {
     },
     [
       tab,
+      gameOfLogin,
       REPARSE_EDIT,
       editByReparse,
       playerById,

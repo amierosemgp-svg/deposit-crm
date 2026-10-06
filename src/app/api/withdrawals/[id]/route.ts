@@ -8,7 +8,7 @@ import { assertNotArchived, jsonError } from "@/lib/api-helpers";
 import { appendEditNote, describeChanges, diffFields, logActivity } from "@/lib/activity-log";
 import { InsufficientBankBalanceError } from "@/lib/bank-balance";
 import { canonicalise } from "@/lib/game-name";
-import { holdsGameLogin } from "@/lib/game-credits";
+import { holdsGameLogin, loginForGame } from "@/lib/game-credits";
 import { InsufficientKioskCreditError } from "@/lib/kiosk-credit";
 import { paysWithdrawals } from "@/lib/types";
 import {
@@ -256,6 +256,10 @@ export async function PATCH(
       }
       const amountChanged = wasPulled && willPull && pulledAmount !== row.credit_pulled_amount;
       const gameChanged = gameName !== undefined && gameName !== row.game_name;
+      // A game change on its own carries the login across — see loginForGame.
+      if (gameChanged && body.game_username === undefined && row.game_username) {
+        body.game_username = loginForGame(nextPlayer.game_accounts ?? null, gameName, row.game_username);
+      }
       const loginChanged =
         body.game_username !== undefined && body.game_username !== row.game_username;
 

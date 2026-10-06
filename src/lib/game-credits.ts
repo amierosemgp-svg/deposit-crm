@@ -315,6 +315,28 @@ export async function applyCreditRebook(
  * A named one has to be on the player's list, or a correction would credit a
  * wallet nobody can reach.
  */
+/**
+ * The login to keep when a row moves to another game: the current one if the
+ * member holds it on that game, otherwise their own login for it, otherwise
+ * null ("the member's first account for the game").
+ *
+ * The sheet edits one cell at a time, so moving a row from Mega888 to 918Kiss
+ * sent the game alone and kept the Mega888 login — which isn't a 918Kiss login,
+ * so the edit was refused; and editing the login first was refused against the
+ * old game. Neither cell could ever change.
+ */
+export function loginForGame(
+  gameAccounts: PlayerGameAccount[] | null | undefined,
+  gameName: string,
+  current: string | null | undefined,
+): string | null {
+  if (current && holdsGameLogin(gameAccounts, gameName, current)) return current;
+  return (
+    (gameAccounts ?? []).find((a) => a.game_name.toLowerCase() === gameName.toLowerCase())
+      ?.game_username ?? null
+  );
+}
+
 export function holdsGameLogin(
   gameAccounts: PlayerGameAccount[] | null | undefined,
   gameName: string,

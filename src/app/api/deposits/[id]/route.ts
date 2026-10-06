@@ -17,7 +17,7 @@ import {
 import { InsufficientKioskCreditError } from "@/lib/kiosk-credit";
 import { syncReferralBonus } from "@/lib/referral";
 import { canonicalise } from "@/lib/game-name";
-import { holdsGameLogin } from "@/lib/game-credits";
+import { holdsGameLogin, loginForGame } from "@/lib/game-credits";
 import {
   appendEditNote,
   describeChanges,
@@ -376,6 +376,27 @@ export async function PATCH(
 
       const nextGame =
         body.selected_game !== undefined ? body.selected_game : row.selected_game;
+
+      // A game change on its own carries the login across to the new game —
+      // see loginForGame.
+      if (
+        body.selected_game !== undefined &&
+        body.selected_game !== row.selected_game &&
+        body.selected_game_username === undefined &&
+        row.selected_game_username &&
+        nextGame &&
+        playerId !== null
+      ) {
+        const [holder] = await txn
+          .select({ game_accounts: players.game_accounts })
+          .from(players)
+          .where(eq(players.player_id, playerId));
+        body.selected_game_username = loginForGame(
+          holder?.game_accounts ?? null,
+          await canonicalise(nextGame, txn),
+          row.selected_game_username,
+        );
+      }
 
       /**
        * A named login has to be one the member actually has.
