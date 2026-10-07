@@ -1915,7 +1915,7 @@ export default function TransactionsPage() {
       if (bank) return BANK_TRANSFER;
       if (accountId == null) return "—";
       const a = transferAccounts.find((x) => x.account_id === accountId);
-      return a ? (a.label ?? `${a.bank_name} ${a.account_number}`) : `#${accountId}`;
+      return a ? accountCell(a) : `#${accountId}`;
     },
     [transferAccounts],
   );
@@ -2271,7 +2271,8 @@ export default function TransactionsPage() {
           { value: CASH, hint: "changed hands as cash — no account involved" },
           { value: BANK_TRANSFER, hint: "paid by bank, not from/into one of our accounts" },
           ...allowed.map((a) => ({
-            value: a.label ?? `${a.bank_name} ${a.account_number}`,
+            // With its number: two casinos both have an "MBB 2-ENT".
+            value: accountCell(a),
             hint: `${a.entity_name ?? entityName(a.entity_id)} · ${fmtAmount(a.current_balance)}`,
           })),
         ];
@@ -2836,6 +2837,10 @@ export default function TransactionsPage() {
       if (!v) return { ok: true };
       if (v.toLowerCase() === CASH.toLowerCase()) return { ok: true, cash: true };
       if (v.toLowerCase() === BANK_TRANSFER.toLowerCase()) return { ok: true, bank: true };
+      // The full "label · bank number" names exactly one account; a bare label
+      // or number, typed or pasted, can name several.
+      const exact = transferAccounts.find((a) => accountCell(a).toLowerCase() === v.toLowerCase());
+      if (exact) return { ok: true, account_id: exact.account_id };
       const named = transferAccounts.filter(
         (a) =>
           (a.label ?? "").trim().toLowerCase() === v.toLowerCase() ||
