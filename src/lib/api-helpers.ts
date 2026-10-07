@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, lt, or, type SQL } from "drizzle-orm";
+import { and, eq, inArray, isNull, lt, or, sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import {
   bankAccounts,
@@ -108,6 +108,47 @@ export async function transferEntityIds(user: AuthedUser): Promise<number[] | nu
  */
 export async function leaderTransferEntityIds(user: AuthedUser): Promise<number[] | null> {
   if (user.role !== "cs_agent") return transferEntityIds(user);
+  return organisationEntityIds(user);
+}
+
+/**
+ * Which leader settlements a user may READ — narrower than who they may name.
+ *
+ * A CS desk names any leader in the house (leaderTransferEntityIds), but its
+ * list shows only settlements touching its own company — the company that owns
+ * its casino and the casinos under it — plus any it recorded itself. Reading
+ * with the naming scope put every other company's settlements, a leader moving
+ * money between their own accounts included, on every desk in the house.
+ * Everyone else reads what they could already name.
+ *
+ * `from` / `to` / `createdBy` are the row's columns, so the list and the
+ * worksheet can share it whatever they alias the table as.
+ */
+export async function leaderTransferReadFilter(
+  user: AuthedUser,
+  cols: { from: SQL; to: SQL; createdBy: SQL },
+): Promise<SQL> {
+  const scope =
+    user.role === "cs_agent" ? await transferEntityIds(user) : await leaderTransferEntityIds(user);
+  if (scope === null) return sql`true`;
+  const mine = user.role === "cs_agent" ? sql` OR ${cols.createdBy} = ${user.user_id}` : sql``;
+  if (!scope.length) return user.role === "cs_agent" ? sql`(${cols.createdBy} = ${user.user_id})` : sql`false`;
+  const ids = sql.join(scope.map((id) => sql`${id}`), sql`, `);
+  // The ends are people; their scope is the company they sit on or hold.
+  return sql`(EXISTS (
+    SELECT 1 FROM users u
+     WHERE u.user_id IN (${cols.from}, ${cols.to})
+       AND (u.entity_id IN (${ids})
+            OR EXISTS (SELECT 1 FROM leader_memberships m
+                        WHERE m.user_id = u.user_id AND m.leader_entity_id IN (${ids}))))${mine})`;
+}
+
+/**
+ * Every entity under the main company this user belongs to — the whole house.
+ * Used to name leaders on a settlement: a desk or a leader settles with any
+ * leader in the organisation, not only those of its own company.
+ */
+export async function organisationEntityIds(user: AuthedUser): Promise<number[]> {
   const all = await db
     .select({ id: entities.entity_id, parent: entities.parent_entity_id })
     .from(entities);

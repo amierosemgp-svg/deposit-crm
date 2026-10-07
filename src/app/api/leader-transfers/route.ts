@@ -10,7 +10,12 @@ import {
   users,
 } from "@/db/schema";
 import { AuthError, authErrorResponse, requireUser, requireWriteUser } from "@/lib/auth";
-import { jsonError, leaderTransferEntityIds, transferEntityIds } from "@/lib/api-helpers";
+import {
+  jsonError,
+  leaderTransferEntityIds,
+  leaderTransferReadFilter,
+  transferEntityIds,
+} from "@/lib/api-helpers";
 import { InsufficientBankBalanceError, moveBankBalance } from "@/lib/bank-balance";
 import { logActivity } from "@/lib/activity-log";
 
@@ -59,26 +64,12 @@ const createSchema = z
 export async function GET() {
   try {
     const user = await requireUser();
-    const visible = await leaderTransferEntityIds(user);
-    /**
-     * Visible when either person belongs to something the reader can see.
-     *
-     * The ends are people now, and a person's scope is the company they sit on,
-     * so the test goes through users rather than comparing entity ids directly.
-     */
-    const mine =
-      visible === null
-        ? sql`true`
-        : visible.length
-          ? sql`EXISTS (
-              SELECT 1 FROM users u
-               WHERE u.user_id IN (${leaderTransfers.from_leader_user_id},
-                                   ${leaderTransfers.to_leader_user_id})
-                 AND u.entity_id IN (${sql.join(
-                   visible.map((id) => sql`${id}`),
-                   sql`, `,
-                 )}))`
-          : sql`false`;
+    // Either person in the reader's own scope — or, for a desk, one it recorded.
+    const mine = await leaderTransferReadFilter(user, {
+      from: sql`${leaderTransfers.from_leader_user_id}`,
+      to: sql`${leaderTransfers.to_leader_user_id}`,
+      createdBy: sql`${leaderTransfers.created_by_user_id}`,
+    });
     const rows = await db
       .select()
       .from(leaderTransfers)

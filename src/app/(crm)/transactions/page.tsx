@@ -863,7 +863,20 @@ export default function TransactionsPage() {
    * until then, so the sheet is never blank while it loads.
    */
   const inRangeOr = useCallback(
-    <T,>(which: TabKey, fallback: T[]): T[] => (rangeRows[which]?.rows as T[]) ?? fallback,
+    <T,>(which: TabKey, fallback: T[]): T[] => {
+      const rows = (rangeRows[which]?.rows as T[]) ?? fallback;
+      // One line per saved row. A refresh that lands while a save is settling
+      // could hand the same row back twice, and a row shown twice reads as a
+      // row that needs keying again.
+      const seen = new Set<unknown>();
+      return rows.filter((r) => {
+        const k = rowKey(r);
+        if (typeof k !== "number") return true;
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+    },
     [rangeRows],
   );
 
@@ -883,6 +896,12 @@ export default function TransactionsPage() {
   const [generatingRebate, setGeneratingRebate] = useState(false);
   const [search, setSearch] = useState("");
   const [saving, setSaving] = useState(false);
+  /**
+   * The save lock itself. `saving` only takes effect on the next render, so
+   * ⌘S pressed twice — or the button and the shortcut together — could start
+   * a second save of the same drafts before the first had cleared them.
+   */
+  const savingRef = useRef(false);
   const [refreshing, setRefreshing] = useState(false);
   /**
    * Create-player, opened from the sheet.
@@ -4437,7 +4456,9 @@ export default function TransactionsPage() {
   };
 
   const handleCommit = useCallback(async () => {
-    if (saving || isViewer) return;
+    if (savingRef.current || saving || isViewer) return;
+    savingRef.current = true;
+    try {
     /**
      * Land the cell still under the cursor first.
      *
@@ -4558,6 +4579,9 @@ export default function TransactionsPage() {
     // deposits short on the same kiosk say it once.
     for (const w of new Set(warnings)) {
       toast.warning(`${w} — saved, waiting at Processing.`, { duration: 10_000 });
+    }
+    } finally {
+      savingRef.current = false;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [saving, isViewer, draftsRaw, parseDraft, tab, commitErrors, draftKey, refresh, loadLedgers, loadRangeRows, playerByCode, searchPlayers, selectedCompanyId]);

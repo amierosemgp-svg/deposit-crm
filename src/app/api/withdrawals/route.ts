@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, gte, isNull, ne } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { gameCredits, players, transactions, withdrawals } from "@/db/schema";
@@ -91,6 +91,36 @@ export async function POST(request: Request) {
 
     const skipBot = body.skip_bot ?? true;
     const nowIso = new Date().toISOString();
+
+    /**
+     * The same withdrawal twice in a minute is a double save, not two payouts:
+     * same member, game, amount and paying account. Refused with a reason
+     * rather than taking the money out of the bank and the wallet twice.
+     */
+    if (requested > 0) {
+      const [dup] = await db
+        .select({ withdrawal_id: withdrawals.withdrawal_id, created_at: withdrawals.created_at })
+        .from(withdrawals)
+        .where(
+          and(
+            eq(withdrawals.player_id, body.player_id),
+            eq(withdrawals.requested_amount, requested),
+            eq(withdrawals.game_name, body.game_name),
+            body.paid_from_account_id != null
+              ? eq(withdrawals.paid_from_account_id, body.paid_from_account_id)
+              : isNull(withdrawals.paid_from_account_id),
+            ne(withdrawals.status, "failed"),
+            gte(withdrawals.created_at, new Date(Date.now() - 60_000).toISOString()),
+          ),
+        )
+        .limit(1);
+      if (dup) {
+        return jsonError(
+          `${player.username} ${body.game_name} RM${requested} was already saved a moment ago (#${dup.withdrawal_id}) — not saved twice`,
+          409,
+        );
+      }
+    }
 
     /**
      * A manual withdrawal is already pulled by the time it is typed.

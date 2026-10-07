@@ -1,7 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { authErrorResponse, requireUser } from "@/lib/auth";
-import { jsonError, leaderTransferEntityIds, visibleEntityIds } from "@/lib/api-helpers";
+import { jsonError, leaderTransferReadFilter, visibleEntityIds } from "@/lib/api-helpers";
 import {
   all,
   businessDay,
@@ -77,8 +77,12 @@ export async function GET(request: Request) {
      */
     const cutoff = csCutoff(user);
     const visible = await visibleEntityIds(user);
-    // Settlements reach further for a CS desk: any two leaders in the house.
-    const settlementScope = await leaderTransferEntityIds(user);
+    // The same settlements the Leader Transfer list shows this reader.
+    const settlementScope = await leaderTransferReadFilter(user, {
+      from: sql`t.from_leader_user_id`,
+      to: sql`t.to_leader_user_id`,
+      createdBy: sql`t.created_by_user_id`,
+    });
 
     /**
      * A worksheet shows every row, whatever state it is in.
@@ -202,14 +206,7 @@ export async function GET(request: Request) {
         from: sql`leader_transfers t`,
         // One end in the caller's tree. The sheet is open to the desk now, and
         // an unscoped ledger would show them every organisation's settlements.
-        scope: settlementScope === null
-          ? sql`true`
-          : settlementScope.length
-            // The ends are people; their scope is the company they sit on.
-            ? sql`EXISTS (SELECT 1 FROM users u
-                           WHERE u.user_id IN (t.from_leader_user_id, t.to_leader_user_id)
-                             AND u.entity_id IN (${sql.join(settlementScope.map((id) => sql`${id}`), sql`, `)}))`
-            : sql`false`,
+        scope: settlementScope,
         date: sql`t.created_at`,
         numerics: ["amount"],
         alias: "t",

@@ -29,6 +29,7 @@ import {
   autoConfirmExpiredTransfers,
   depositScopeFilter,
   leaderTransferEntityIds,
+  organisationEntityIds,
   retryStuckGameTransfers,
   transferEntityIds,
   visibleEntityIds,
@@ -202,9 +203,16 @@ export async function GET() {
      * Every leader a CS desk may name on a settlement — the whole house, not
      * just the one owning its casino. Names and the companies they hold only:
      * the staff list proper (logins, IP allowlists) stays scoped to the desk's
-     * own tree. Empty for other roles, whose users list already covers this.
+     * own tree. A leader gets the same; admins' users list already covers this.
      */
-    const leaderScope = user.role === "cs_agent" ? await leaderTransferEntityIds(user) : null;
+    // A leader settles with leaders of other companies too, so it needs their
+    // names as much as a desk does — not their logins, only names and holdings.
+    const leaderScope =
+      user.role === "cs_agent"
+        ? await leaderTransferEntityIds(user)
+        : user.role === "company_leader"
+          ? await organisationEntityIds(user)
+          : null;
     const transferLeaders = leaderScope?.length
       ? await (async () => {
           const people = await db
