@@ -76,7 +76,6 @@ export const TALLY_COMPANIES: TallyCompany[] = [
     name: "Fishing Star",
     entity: { names: ["Fishing Star"] },
     sheet: monthlyFile(["Fishing", "Star"], "Fishing Star"),
-    paused: "no deposits in the CRM yet",
   },
   {
     key: "robinhood",
