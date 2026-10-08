@@ -2666,7 +2666,10 @@ export default function TransactionsPage() {
       if (!(EXPENSE_CATEGORIES as readonly string[]).includes(cat))
         return { ok: false, error: `Unknown category "${category.trim()}"` };
       if (!description.trim()) return { ok: false, error: "Description is required" };
-      const amt = parseAmount(amount);
+      // An expense is always money out, so the workbook's "-15" for a bank
+      // charge means the same as 15 — the sign is how the old file wrote it.
+      const parsedAmt = parseAmount(amount);
+      const amt = parsedAmt === null ? null : Math.abs(parsedAmt);
       if (amt === null || amt <= 0) return { ok: false, error: `Bad amount "${amount}"` };
       let company_entity_id: number | null = null;
       if (company.trim()) {
