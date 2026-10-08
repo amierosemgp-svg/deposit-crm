@@ -1934,9 +1934,7 @@ export default function TransactionsPage() {
           date: sheetDate(e.expense_date),
           category: EXPENSE_CATEGORY_LABEL[e.category] ?? e.category,
           description: e.description,
-          // Money out, read the way the workbooks write it: -15.00. The parser
-          // ignores the sign, so editing the row doesn't see a change here.
-          amount: fmtAmount(-e.amount),
+          amount: fmtAmount(e.amount),
           company: e.company_entity_id ? (companyNameById.get(e.company_entity_id) ?? "") : "",
           paidfrom:
             e.paid_from_account_id != null
@@ -2668,11 +2666,10 @@ export default function TransactionsPage() {
       if (!(EXPENSE_CATEGORIES as readonly string[]).includes(cat))
         return { ok: false, error: `Unknown category "${category.trim()}"` };
       if (!description.trim()) return { ok: false, error: "Description is required" };
-      // An expense is always money out, so the workbook's "-15" for a bank
-      // charge means the same as 15 — the sign is how the old file wrote it.
-      const parsedAmt = parseAmount(amount);
-      const amt = parsedAmt === null ? null : Math.abs(parsedAmt);
-      if (amt === null || amt <= 0) return { ok: false, error: `Bad amount "${amount}"` };
+      // As the workbooks write it: 15 is money out, -4.85 is money in — the
+      // bank's interest or smart bonus, kept on the same sheet.
+      const amt = parseAmount(amount);
+      if (amt === null || amt === 0) return { ok: false, error: `Bad amount "${amount}"` };
       let company_entity_id: number | null = null;
       if (company.trim()) {
         const id = companyByName.get(company.trim().toLowerCase());

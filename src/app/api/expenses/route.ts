@@ -13,7 +13,9 @@ const createSchema = z
     expense_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     category: z.enum(EXPENSE_CATEGORIES),
     description: z.string().min(1).max(200),
-    amount: z.number().positive(),
+    // Negative is money in — a bank's interest or "smart bonus", which the
+    // workbooks write on the same sheet as -4.85. The balance moves by -amount.
+    amount: z.number().refine((n) => n !== 0, "Amount can't be zero"),
     company_entity_id: z.number().int().positive().nullable().optional(),
     notes: z.string().optional(),
     // What it was paid out of: one of our accounts, or a leader's own cash.

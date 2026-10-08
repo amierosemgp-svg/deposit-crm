@@ -13,7 +13,8 @@ const patchSchema = z
     expense_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     category: z.enum(EXPENSE_CATEGORIES).optional(),
     description: z.string().min(1).max(200).optional(),
-    amount: z.number().positive().optional(),
+    // Negative is money in (interest, a bank's bonus); see POST.
+    amount: z.number().refine((n) => n !== 0, "Amount can't be zero").optional(),
     company_entity_id: z.number().int().positive().nullable().optional(),
     notes: z.string().nullable().optional(),
     // The Paid-from cell is one choice: an account, a leader's cash, or
