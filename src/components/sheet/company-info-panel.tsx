@@ -50,20 +50,21 @@ import {
  * nobody anticipated is visible and easy to fix rather than silently gone.
  */
 const KIOSK_ORDER: readonly (readonly string[])[] = [
+  // The three the desk checks scores on most, asked for at the top.
+  ["mega888", "mega"],
+  ["scr918kiss", "918kiss"],
+  ["pussy888", "pussy"],
   ["rollex", "rollex11"],
   ["scr888"],
   ["suncity"],
   ["luckypalace", "lpe88"],
   ["3win8"],
   ["ace333"],
-  ["mega888"],
   ["sky777"],
   ["joker123", "joker"],
   ["xe88"],
-  ["scr918kiss", "918kiss"],
   ["ac", "allcity"],
   ["918kaya", "kaya"],
-  ["pussy888"],
   ["4d"],
 ];
 

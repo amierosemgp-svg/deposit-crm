@@ -1934,7 +1934,9 @@ export default function TransactionsPage() {
           date: sheetDate(e.expense_date),
           category: EXPENSE_CATEGORY_LABEL[e.category] ?? e.category,
           description: e.description,
-          amount: fmtAmount(e.amount),
+          // Money out, read the way the workbooks write it: -15.00. The parser
+          // ignores the sign, so editing the row doesn't see a change here.
+          amount: fmtAmount(-e.amount),
           company: e.company_entity_id ? (companyNameById.get(e.company_entity_id) ?? "") : "",
           paidfrom:
             e.paid_from_account_id != null
