@@ -756,6 +756,8 @@ export type ServerSettings = {
    */
   game_aliases?: Record<string, string>;
   banks?: string[];
+  /** Recommend bonus % per casino, {"<company id>": 20}; others pay the house rate (30). */
+  referral_bonus_pct_by_company?: Record<string, number>;
   /** Rebate window boundaries per period, in business time. See lib/rebates. */
   rebate_cutoffs?: {
     daily: { time: string };

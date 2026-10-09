@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   Ban,
@@ -845,6 +845,8 @@ function SystemTab() {
         </div>
       </Card>
 
+      <RecommendRates />
+
       <Card className="p-5 space-y-4">
         <div>
           <h2 className="text-sm font-semibold">Games</h2>
@@ -873,6 +875,87 @@ function SystemTab() {
         </Button>
       </div>
     </div>
+  );
+}
+
+/**
+ * The recommend (referral) bonus rate, one per casino. A blank box pays the
+ * house rate; the map is saved whole, so clearing a box puts that casino back
+ * on it. Only new bonuses use the rate — one already created keeps its own.
+ */
+const HOUSE_REFERRAL_PCT = 30;
+function RecommendRates() {
+  const settings = useStore((s) => s.settings);
+  const updateSetting = useStore((s) => s.updateSetting);
+  const entities = useStore((s) => s.entities);
+  const casinos = useMemo(
+    () => entities.filter((e) => e.entity_type === "company").sort((a, b) => a.name.localeCompare(b.name)),
+    [entities],
+  );
+  const server = settings.referral_bonus_pct_by_company ?? {};
+  const serverSig = JSON.stringify(server);
+  const toDraft = (m: Record<string, number>) =>
+    Object.fromEntries(Object.entries(m).map(([k, v]) => [k, String(v)]));
+  const [draft, setDraft] = useState<Record<string, string>>(() => toDraft(server));
+  const [synced, setSynced] = useState(serverSig);
+  if (serverSig !== synced) {
+    setSynced(serverSig);
+    setDraft(toDraft(server));
+  }
+  const [busy, setBusy] = useState(false);
+
+  async function save() {
+    const next: Record<string, number> = {};
+    for (const [id, v] of Object.entries(draft)) {
+      if (!v.trim()) continue;
+      const n = Number(v);
+      if (!Number.isFinite(n) || n <= 0 || n > 100) {
+        const name = casinos.find((c) => String(c.entity_id) === id)?.name ?? id;
+        return void toast.error(`${name}: the rate must be between 0 and 100`);
+      }
+      next[id] = n;
+    }
+    setBusy(true);
+    const r = await updateSetting({ referral_bonus_pct_by_company: next });
+    setBusy(false);
+    if (!r.ok) toast.error(r.error ?? "Failed to save");
+    else toast.success("Recommend bonus rates saved");
+  }
+
+  return (
+    <Card className="p-5 space-y-4">
+      <div>
+        <h2 className="text-sm font-semibold">Recommend bonus</h2>
+        <p className="text-xs text-muted-foreground mt-0.5">
+          The share of a new member&apos;s first deposit their upline earns, per casino. Leave
+          blank for the house rate ({HOUSE_REFERRAL_PCT}%). Applies to bonuses created from now
+          on; one already created keeps its rate.
+        </p>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {casinos.map((c) => (
+          <label key={c.entity_id} className="flex items-center gap-2 text-sm">
+            <span className="flex-1 truncate">{c.name}</span>
+            <Input
+              type="number"
+              min={0}
+              max={100}
+              step="0.5"
+              className="w-24"
+              placeholder={String(HOUSE_REFERRAL_PCT)}
+              value={draft[String(c.entity_id)] ?? ""}
+              onChange={(e) => setDraft((d) => ({ ...d, [String(c.entity_id)]: e.target.value }))}
+            />
+            <span className="text-muted-foreground">%</span>
+          </label>
+        ))}
+      </div>
+      <div className="flex justify-end">
+        <Button onClick={save} disabled={busy} variant="outline" className="cursor-pointer">
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save rates"}
+        </Button>
+      </div>
+    </Card>
   );
 }
 

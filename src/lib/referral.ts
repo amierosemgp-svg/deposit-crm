@@ -1,4 +1,4 @@
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { bonusOn } from "@/lib/bonus-math";
 import { CREDIT_CONFLICT_TARGET } from "@/lib/game-credits";
@@ -22,17 +22,32 @@ import {
  */
 export const REFERRAL_BONUS_PERCENTAGE = 30;
 const REFERRAL_PCT_KEY = "referral_bonus_pct";
+/**
+ * Per casino, {"<company entity id>": 20}. A casino not named here pays the
+ * house rate above — Fishing Star pays 20 where Pokercity and RobinHood pay 30,
+ * so one figure for everyone was always wrong for someone.
+ */
+export const REFERRAL_PCT_BY_COMPANY_KEY = "referral_bonus_pct_by_company";
 
-async function referralPercentage(txn: {
-  select: typeof db.select;
-}): Promise<number> {
-  const [row] = await txn
-    .select({ value: settings.value })
+const validPct = (v: unknown): v is number =>
+  typeof v === "number" && Number.isFinite(v) && v > 0 && v <= 100;
+
+async function referralPercentage(
+  txn: { select: typeof db.select },
+  companyEntityId: number | null,
+): Promise<number> {
+  const rows = await txn
+    .select({ key: settings.key, value: settings.value })
     .from(settings)
-    .where(eq(settings.key, REFERRAL_PCT_KEY));
-  const pct = typeof row?.value === "number" ? row.value : REFERRAL_BONUS_PERCENTAGE;
+    .where(inArray(settings.key, [REFERRAL_PCT_KEY, REFERRAL_PCT_BY_COMPANY_KEY]));
+  const byCompany = rows.find((r) => r.key === REFERRAL_PCT_BY_COMPANY_KEY)?.value as
+    | Record<string, unknown>
+    | undefined;
+  const own = companyEntityId !== null ? byCompany?.[String(companyEntityId)] : undefined;
+  if (validPct(own)) return own;
+  const house = rows.find((r) => r.key === REFERRAL_PCT_KEY)?.value;
   // A nonsense setting pays nonsense bonuses; fall back rather than trust it.
-  return Number.isFinite(pct) && pct > 0 && pct <= 100 ? pct : REFERRAL_BONUS_PERCENTAGE;
+  return validPct(house) ? house : REFERRAL_BONUS_PERCENTAGE;
 }
 
 type Txn = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -148,7 +163,7 @@ export async function syncReferralBonus(
 
   // Bonus is on the deposit itself, not the bonused total — the house bonus
   // isn't the referrer's to take a cut of.
-  const percentage = await referralPercentage(txn);
+  const percentage = await referralPercentage(txn, player.company_entity_id);
   const bonusAmount = bonusOn(firstDeposit.deposit_amount, percentage);
   if (bonusAmount <= 0) return;
 

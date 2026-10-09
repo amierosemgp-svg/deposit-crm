@@ -31,6 +31,14 @@ const schema = z.object({
    * locks out the whole desk at once.
    */
   device_policy: z.enum(["off", "enforce"]).optional(),
+  /**
+   * The recommend (referral) bonus rate per casino, {"<company id>": 20}. A
+   * casino left out pays the house rate. Sent whole: a casino removed from the
+   * map goes back to the house rate.
+   */
+  referral_bonus_pct_by_company: z
+    .record(z.string().regex(/^\d+$/), z.number().gt(0, "Rate must be above 0").max(100, "Rate can't exceed 100"))
+    .optional(),
 });
 
 const KEYS = [
@@ -40,6 +48,7 @@ const KEYS = [
   "banks",
   "rebate_cutoffs",
   "device_policy",
+  "referral_bonus_pct_by_company",
 ] as const;
 
 /** PATCH /api/settings — super_admin edits system configuration. */

@@ -642,6 +642,7 @@ type Store = {
     rebate_cutoffs?: ServerSettings["rebate_cutoffs"];
     banks?: string[];
     device_policy?: ServerSettings["device_policy"];
+    referral_bonus_pct_by_company?: Record<string, number>;
   }) => Promise<MutationResult>;
 
   uploadFile: (file: File) => Promise<{ ok: boolean; url?: string; error?: string }>;

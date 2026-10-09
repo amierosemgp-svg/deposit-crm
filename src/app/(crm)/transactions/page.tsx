@@ -1050,8 +1050,10 @@ export default function TransactionsPage() {
     () => [
       ...bankAccounts
         .filter((a) => a.status === "active")
+        // The number rides along: RobinHood and BonusBear both have an
+        // "MBB 2-ENT", and the label alone resolved to whichever came first.
         .map((a) => ({
-          value: a.label ?? `${a.bank_name} ${a.account_number}`,
+          value: accountCell(a),
           hint: `${entityName(a.entity_id)} · ${fmtAmount(a.current_balance)}`,
         })),
       ...entities
@@ -2628,15 +2630,23 @@ export default function TransactionsPage() {
       | { ok: false } => {
       const v = raw.trim();
       if (!v) return { ok: true };
-      const account = bankAccounts.find(
-        (a) =>
-          (a.label ?? "").trim().toLowerCase() === v.toLowerCase() ||
-          `${a.bank_name} ${a.account_number}`.toLowerCase() === v.toLowerCase(),
-      );
+      // Exact first — "MBB 2-ENT · Maybank 562076551494", or "Maybank
+      // 562076551494" — then a bare label only when one account carries it. A
+      // label two casinos share is never guessed.
+      const lower = v.toLowerCase();
+      const account =
+        bankAccounts.find(
+          (a) =>
+            accountCell(a).toLowerCase() === lower ||
+            `${a.bank_name} ${a.account_number}`.toLowerCase() === lower,
+        ) ??
+        (() => {
+          const byLabel = bankAccounts.filter((a) => (a.label ?? "").trim().toLowerCase() === lower);
+          return byLabel.length === 1 ? byLabel[0] : undefined;
+        })();
       if (account) return { ok: true, account_id: account.account_id };
       // "<leader> cash" — the suffix is what marks it as cash rather than an
       // account, so a leader named after a bank can't be mistaken for one.
-      const lower = v.toLowerCase();
       if (lower.endsWith(` ${CASH_SUFFIX}`)) {
         const name = v.slice(0, -(CASH_SUFFIX.length + 1)).trim().toLowerCase();
         const id = leaderByName.get(name);
