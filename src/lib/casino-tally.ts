@@ -3,15 +3,24 @@ import type { db as Db } from "@/db";
 import { googleClientEmail, googleSheets } from "@/lib/google-sheets";
 import {
   MONTHS,
+  bankDiffers,
+  bankKey,
   buildReport,
   countUndated,
   dayLabel,
   findingDay,
+  loadCrmBanks,
+  loadCrmFreeCredit,
   loadCrmRows,
   needsAction,
+  pairBanks,
+  parseBankBlock,
+  parseFreeCreditTab,
   parseTab,
   reconcile,
+  type BankLine,
   type CrmRow,
+  type DayTotal,
   type Finding,
   type Kind,
   type SheetRow,
@@ -98,6 +107,9 @@ const MARGIN_DAYS = 2;
 const addDays = (day: string, n: number) =>
   new Date(Date.parse(`${day}T00:00:00Z`) + n * 86400_000).toISOString().slice(0, 10);
 
+/** Today, Malaysian time. */
+const todayMyt = () => new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
+
 const squash = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
 
 /** The CRM company entity a TallyCompany refers to; throws when it isn't exactly one. */
@@ -143,6 +155,9 @@ export function pickTab(tabs: string[], kind: Kind): string {
   return found;
 }
 
+/** The plain "Free Credit" tab, if the sheet has one; not "October Free Credit Bulan". */
+const freeCreditTab = (tabs: string[]) => tabs.find((t) => squash(t) === "freecredit") ?? null;
+
 /** The CRM leader running a casino, whose PDF its section goes in. */
 export type Leader = { id: number; name: string };
 
@@ -154,6 +169,11 @@ export type TallyData = {
   findings: Finding[];
   notes: string[];
   withdrawals: boolean;
+  /** Per day from monthStart; `sheet` is null when the sheet's Free Credit tab couldn't be read. */
+  freeCredit: { sheet: DayTotal[] | null; crm: DayTotal[] };
+  /** Balances as they stood at `banksAt`; null when not compared (a past day). */
+  banks: BankLine[] | null;
+  banksAt: string;
 };
 
 export type TallyResult =
@@ -163,6 +183,8 @@ export type TallyResult =
       sheet: string;
       toCheck: number;
       stillOpen: number;
+      /** Accounts whose balance differs between the sheet and the CRM. */
+      banksDiffer: number;
       text: string;
       leader: Leader | null;
       data: TallyData;
@@ -216,15 +238,17 @@ export async function runTally(
       const message = e instanceof Error ? e.message : String(e);
       throw new Error(`Can't open the sheet (${message}). Share it with ${shareWith} as Viewer.`);
     }
-    const [dep, wdr] = await Promise.all([
+    const fcTab = freeCreditTab(meta.tabs);
+    const [dep, wdr, fc] = await Promise.all([
       google.readTab(id, pickTab(meta.tabs, "deposit")),
       google.readTab(id, pickTab(meta.tabs, "withdrawal")),
+      fcTab ? google.readTab(id, fcTab) : null,
     ]);
     const parse = (y: number, m: number): SheetRow[] => [
       ...parseTab(dep, "deposit", y, m, { requireBonus: company.requireBonus }),
       ...parseTab(wdr, "withdrawal", y, m),
     ];
-    return { title: meta.title, parse, undatedWithdrawals: countUndated(wdr, "withdrawal") };
+    return { title: meta.title, parse, undatedWithdrawals: countUndated(wdr, "withdrawal"), dep, fc };
   };
 
   const findMonthly = async (y: number, m: number) => {
@@ -290,7 +314,43 @@ export async function runTally(
     (c) => withdrawals || c.kind === "deposit",
   );
   const findings = reconcile(sheet, crm, monthStart, day);
-  const text = buildReport({ company: company.name, day, sheet, crm, findings, notes, withdrawals });
+
+  // Free credit is compared as day totals, from this month's file only.
+  let fcSheet: DayTotal[] | null = null;
+  if (!file.fc) {
+    notes.push("(Free credit not checked on the sheet: no Free Credit tab.)");
+  } else {
+    try {
+      fcSheet = parseFreeCreditTab(file.fc, year, month);
+    } catch (e) {
+      notes.push(`(Free credit not checked on the sheet: ${e instanceof Error ? e.message : String(e)}.)`);
+    }
+  }
+  const freeCredit = { sheet: fcSheet, crm: await loadCrmFreeCredit(db, entityId, monthStart, addDays(day, 1)) };
+
+  // Balances can only be read as they stand now, on both sides, so they're
+  // compared for the morning run (yesterday, or a run for today) and not when
+  // an older day is run by hand.
+  const banksAt = new Date().toISOString();
+  let banks: BankLine[] | null = null;
+  if (day >= addDays(todayMyt(), -1)) {
+    const accounts = await loadCrmBanks(db, entityId);
+    banks = pairBanks(accounts, parseBankBlock(file.dep, new Set(accounts.map((a) => bankKey(a.label)))));
+  } else {
+    notes.push("(Bank balances not compared: both sides can only be read as they stand now, not as of that day.)");
+  }
+
+  const text = buildReport({
+    company: company.name,
+    day,
+    sheet,
+    crm,
+    findings,
+    notes,
+    withdrawals,
+    freeCredit,
+    banks,
+  });
   const open = findings.filter(needsAction);
   const toCheck = open.filter((f) => findingDay(f) === day).length;
   return {
@@ -299,8 +359,9 @@ export async function runTally(
     sheet: file.title,
     toCheck,
     stillOpen: open.length - toCheck,
+    banksDiffer: (banks ?? []).filter(bankDiffers).length,
     text,
     leader,
-    data: { monthStart, sheet, crm, findings, notes, withdrawals },
+    data: { monthStart, sheet, crm, findings, notes, withdrawals, freeCredit, banks, banksAt },
   };
 }

@@ -2,11 +2,14 @@ import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage, type RGB }
 import type { Leader, TallyData, TallyResult } from "@/lib/casino-tally";
 import {
   GROUPS,
+  bankDiffers,
   dayLabel,
   findingDay,
   isSettled,
   needsAction,
   shortDate,
+  type BankLine,
+  type DayTotal,
   type Finding,
   type Kind,
 } from "@/lib/sheet-tally";
@@ -267,11 +270,30 @@ const days = (from: string, through: string) => {
   return out;
 };
 
+/** One day's free credit on each side; the sheet's is null when it has no tab to read. */
+function freeCreditOn(data: TallyData, day: string) {
+  const on = (rows: DayTotal[]) => rows.find((r) => r.day === day) ?? { day, n: 0, cents: 0 };
+  return { sheet: data.freeCredit.sheet ? on(data.freeCredit.sheet) : null, crm: on(data.freeCredit.crm) };
+}
+
 function dayTotals(w: Writer, data: TallyData, day: string) {
   const dep = sums(data, day, "deposit");
   const wd = sums(data, day, "withdrawal");
+  const fc = freeCreditOn(data, day);
   const hasBonus = data.sheet.some((r) => r.kind === "deposit" && r.bonusCents != null);
-  const line = (label: string, s: number, c: number, sn?: number, cn?: number): Cell[] => {
+  /** A sheet figure of null is one the sheet doesn't keep: the CRM's is shown alone. */
+  const line = (label: string, s: number | null, c: number, sn?: number, cn?: number): Cell[] => {
+    if (s == null) {
+      return [
+        { text: label, bold: true },
+        "",
+        { text: "not on sheet", color: MUTED },
+        cn == null ? "" : String(cn),
+        money(c),
+        "",
+        { text: "CRM only", color: MUTED },
+      ];
+    }
     const same = s === c && sn === cn;
     return [
       { text: label, bold: true },
@@ -284,8 +306,9 @@ function dayTotals(w: Writer, data: TallyData, day: string) {
     ];
   };
   const rows: Cell[][] = [line("Deposits", dep.sheet.cents, dep.crm.cents, dep.sheet.n, dep.crm.n)];
-  if (hasBonus) rows.push(line("Bonus", dep.sheet.bonus, dep.crm.bonus));
+  rows.push(line("Bonus", hasBonus ? dep.sheet.bonus : null, dep.crm.bonus));
   if (data.withdrawals) rows.push(line("Withdrawals", wd.sheet.cents, wd.crm.cents, wd.sheet.n, wd.crm.n));
+  rows.push(line("Free credit", fc.sheet?.cents ?? null, fc.crm.cents, fc.sheet?.n, fc.crm.n));
   w.table(
     [
       { title: "", width: 90 },
@@ -312,20 +335,28 @@ function monthToDate(w: Writer, data: TallyData, day: string) {
       { text: `${money(c)}${n(cn)}`, color },
     ];
   };
-  const total = { dep: [0, 0, 0, 0], bonus: [0, 0], wd: [0, 0, 0, 0], open: 0 };
+  /** The CRM's figure beside a sheet that doesn't keep it. */
+  const crmOnly = (c: number, cn?: number): [Cell, Cell] => [
+    { text: "n/a", color: MUTED },
+    `${money(c)}${cn == null ? "" : ` (${cn})`}`,
+  ];
+  const total = { dep: [0, 0, 0, 0], bonus: [0, 0], wd: [0, 0, 0, 0], fc: [0, 0, 0, 0], open: 0 };
   const rows: Cell[][] = days(data.monthStart, day).map((d) => {
     const dep = sums(data, d, "deposit");
     const wd = sums(data, d, "withdrawal");
+    const fc = freeCreditOn(data, d);
     const items = open.filter((f) => findingDay(f) === d).length;
     total.dep = [total.dep[0] + dep.sheet.cents, total.dep[1] + dep.crm.cents, total.dep[2] + dep.sheet.n, total.dep[3] + dep.crm.n];
     total.bonus = [total.bonus[0] + dep.sheet.bonus, total.bonus[1] + dep.crm.bonus];
     total.wd = [total.wd[0] + wd.sheet.cents, total.wd[1] + wd.crm.cents, total.wd[2] + wd.sheet.n, total.wd[3] + wd.crm.n];
+    total.fc = [total.fc[0] + (fc.sheet?.cents ?? 0), total.fc[1] + fc.crm.cents, total.fc[2] + (fc.sheet?.n ?? 0), total.fc[3] + fc.crm.n];
     total.open += items;
     return [
       dayLabel(d),
       ...cell(dep.sheet.cents, dep.crm.cents, dep.sheet.n, dep.crm.n),
-      ...(hasBonus ? cell(dep.sheet.bonus, dep.crm.bonus) : ["n/a", "n/a"]),
+      ...(hasBonus ? cell(dep.sheet.bonus, dep.crm.bonus) : crmOnly(dep.crm.bonus)),
       ...(data.withdrawals ? cell(wd.sheet.cents, wd.crm.cents, wd.sheet.n, wd.crm.n) : ["not checked", "not checked"]),
+      ...(fc.sheet ? cell(fc.sheet.cents, fc.crm.cents, fc.sheet.n, fc.crm.n) : crmOnly(fc.crm.cents, fc.crm.n)),
       { text: items ? String(items) : "-", color: items ? WARN : MUTED, bold: items > 0 },
     ];
   });
@@ -334,29 +365,78 @@ function monthToDate(w: Writer, data: TallyData, day: string) {
     [
       "Month to date",
       ...cell(total.dep[0], total.dep[1], total.dep[2], total.dep[3]),
-      ...(hasBonus ? cell(total.bonus[0], total.bonus[1]) : ["n/a", "n/a"]),
+      ...(hasBonus ? cell(total.bonus[0], total.bonus[1]) : crmOnly(total.bonus[1])),
       ...(data.withdrawals
         ? cell(total.wd[0], total.wd[1], total.wd[2], total.wd[3])
         : ["not checked", "not checked"]),
+      ...(data.freeCredit.sheet
+        ? cell(total.fc[0], total.fc[1], total.fc[2], total.fc[3])
+        : crmOnly(total.fc[1], total.fc[3])),
       { text: total.open ? String(total.open) : "-", color: total.open ? WARN : MUTED },
     ].map(b),
   );
   w.table(
     [
-      { title: "Day", width: 70 },
-      { title: "Deposits sheet RM (n)", width: 100, align: "right" },
-      { title: "Deposits CRM RM (n)", width: 100, align: "right" },
-      { title: "Bonus sheet RM", width: 80, align: "right" },
-      { title: "Bonus CRM RM", width: 80, align: "right" },
-      { title: "Withdrawals sheet RM (n)", width: 110, align: "right" },
-      { title: "Withdrawals CRM RM (n)", width: 110, align: "right" },
-      { title: "Still open", width: 55, align: "right" },
+      { title: "Day", width: 58 },
+      { title: "Deposits sheet RM (n)", width: 98, align: "right" },
+      { title: "Deposits CRM RM (n)", width: 98, align: "right" },
+      { title: "Bonus sheet RM", width: 74, align: "right" },
+      { title: "Bonus CRM RM", width: 74, align: "right" },
+      { title: "Wd sheet RM (n)", width: 90, align: "right" },
+      { title: "Wd CRM RM (n)", width: 90, align: "right" },
+      { title: "FC sheet RM (n)", width: 84, align: "right" },
+      { title: "FC CRM RM (n)", width: 84, align: "right" },
+      { title: "Open", width: 34, align: "right" },
     ],
     rows,
   );
   w.text(
-    "Amounts in orange differ between the sheet and the CRM. A day can differ and still have nothing open: " +
-      "entries either side of midnight, or keyed in late, land on different days in each.",
+    "Wd is withdrawals, FC free credit, Open still open. Amounts in orange differ between the sheet and the CRM. " +
+      "A day can differ and still have nothing open: entries either side of midnight, or keyed in late, land on " +
+      "different days in each.",
+    { size: 7.5, color: MUTED },
+  );
+}
+
+function bankBalances(w: Writer, banks: BankLine[]) {
+  const rows: Cell[][] = banks.map((b) => {
+    const off = bankDiffers(b);
+    return [
+      { text: b.label, bold: true },
+      b.account,
+      b.sheet == null ? { text: "not on sheet", color: MUTED } : money(b.sheet),
+      money(b.crm),
+      b.sheet == null ? "" : { text: money(b.sheet - b.crm), color: off ? WARN : MUTED },
+      off
+        ? { text: "Differs", color: WARN, bold: true }
+        : { text: b.sheet == null ? "Empty" : "Match", color: b.sheet == null ? MUTED : OK, bold: true },
+    ];
+  });
+  const sheet = banks.reduce((a, b) => a + (b.sheet ?? 0), 0);
+  const crm = banks.reduce((a, b) => a + b.crm, 0);
+  rows.push([
+    { text: "Total", bold: true },
+    "",
+    { text: money(sheet), bold: true },
+    { text: money(crm), bold: true },
+    { text: money(sheet - crm), color: sheet === crm ? MUTED : WARN, bold: true },
+    "",
+  ]);
+  w.table(
+    [
+      { title: "Account", width: 130 },
+      { title: "Bank and number", width: 170 },
+      { title: "Sheet RM", width: 90, align: "right" },
+      { title: "CRM RM", width: 90, align: "right" },
+      { title: "Sheet - CRM", width: 90, align: "right" },
+      { title: "", width: 70 },
+    ],
+    rows,
+    { size: 9 },
+  );
+  w.text(
+    "Sheet is the balance beside each bank in the block above the deposit tab's header, which the sheet " +
+      "works out from its own rows. An account the sheet doesn't list is shown with the CRM's balance alone.",
     { size: 7.5, color: MUTED },
   );
 }
@@ -379,8 +459,10 @@ function casinoSection(w: Writer, o: CasinoOutcome, day: string, first: boolean)
     return;
   }
   const status = o.toCheck ? `${o.toCheck} to check on ${dayLabel(day)}` : `All match on ${dayLabel(day)}`;
+  const banks = o.banksDiffer ? ` · ${o.banksDiffer} bank balance${o.banksDiffer === 1 ? "" : "s"} differ` : "";
   const open = o.stillOpen ? ` · ${o.stillOpen} still open from earlier this month` : "";
-  w.text(`${status}${open}`, { size: 10, bold: true, color: o.toCheck || o.stillOpen ? WARN : OK, gap: 3 });
+  const flagged = o.toCheck || o.banksDiffer || o.stillOpen;
+  w.text(`${status}${banks}${open}`, { size: 10, bold: true, color: flagged ? WARN : OK, gap: 3 });
   w.text(`Sheet: ${o.sheet}`, { size: 8.5, color: MUTED, gap: 4 });
 
   const { data } = o;
@@ -394,6 +476,11 @@ function casinoSection(w: Writer, o: CasinoOutcome, day: string, first: boolean)
 
   w.heading(`Day totals · ${dayLabel(day)}`);
   dayTotals(w, data, day);
+
+  if (data.banks) {
+    w.heading(`Bank balances · as they stood at ${myt(data.banksAt)} (when this ran)`);
+    bankBalances(w, data.banks);
+  }
 
   w.heading(`To check · ${dayLabel(day)} (${today.length})`);
   if (today.length) {
@@ -423,10 +510,12 @@ function casinoSection(w: Writer, o: CasinoOutcome, day: string, first: boolean)
 }
 
 /** Malaysian wall-clock time, "2 Oct 2026 06:00". */
-function nowMyt(): string {
-  const d = new Date(Date.now() + 8 * 3600_000).toISOString();
+function myt(iso: string): string {
+  const d = new Date(Date.parse(iso) + 8 * 3600_000).toISOString();
   return `${shortDate(d.slice(0, 10))} ${d.slice(0, 4)} ${d.slice(11, 16)}`;
 }
+
+const nowMyt = () => myt(new Date().toISOString());
 
 export async function buildLeaderPdf(leader: Leader, day: string, outcomes: CasinoOutcome[]): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
@@ -446,20 +535,22 @@ export async function buildLeaderPdf(leader: Leader, day: string, outcomes: Casi
       { title: "Result", width: 110 },
       { title: `To check (${shortDate(day)})`, width: 80, align: "right" },
       { title: "Still open (earlier)", width: 90, align: "right" },
-      { title: "Sheet", width: 230 },
+      { title: "Banks differ", width: 70, align: "right" },
+      { title: "Sheet", width: 210 },
     ],
     outcomes.map((o): Cell[] =>
       o.ok
         ? [
             { text: o.company, bold: true },
-            o.toCheck || o.stillOpen
+            o.toCheck || o.stillOpen || o.banksDiffer
               ? { text: "Needs checking", color: WARN, bold: true }
               : { text: "All match", color: OK, bold: true },
             String(o.toCheck),
             String(o.stillOpen),
+            o.data.banks ? String(o.banksDiffer) : "-",
             o.sheet,
           ]
-        : [{ text: o.company, bold: true }, { text: "Couldn't run", color: BAD, bold: true }, "", "", ""],
+        : [{ text: o.company, bold: true }, { text: "Couldn't run", color: BAD, bold: true }, "", "", "", ""],
     ),
     { size: 9.5 },
   );

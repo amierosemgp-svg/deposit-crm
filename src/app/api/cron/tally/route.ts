@@ -39,7 +39,11 @@ type Outcome = CasinoOutcome;
 
 function overviewLine(o: Outcome): string {
   if (!o.ok) return `• ${o.company}: ❌ couldn't run`;
-  const today = o.toCheck ? `⚠️ ${o.toCheck} to check` : "✅ all match";
+  const problems = [
+    ...(o.toCheck ? [`${o.toCheck} to check`] : []),
+    ...(o.banksDiffer ? [`${o.banksDiffer} bank balance${o.banksDiffer === 1 ? "" : "s"} differ`] : []),
+  ];
+  const today = problems.length ? `⚠️ ${problems.join(", ")}` : "✅ all match";
   const open = o.stillOpen ? `, ${o.stillOpen} still open from earlier` : "";
   return `• ${o.company}: ${today}${open}`;
 }
@@ -49,9 +53,11 @@ const escapeHtml = (s: string) =>
 
 function compose(day: string, outcomes: Outcome[], pdfs: LeaderPdf[]) {
   const toCheck = outcomes.reduce((a, o) => a + (o.ok ? o.toCheck : 0), 0);
+  const banks = outcomes.reduce((a, o) => a + (o.ok ? o.banksDiffer : 0), 0);
   const broken = outcomes.filter((o) => !o.ok).length;
   const status = [
     ...(toCheck ? [`${toCheck} to check`] : []),
+    ...(banks ? [`${banks} bank balance${banks === 1 ? "" : "s"} differ`] : []),
     ...(broken ? [`${broken} couldn't run`] : []),
   ];
   const year = day.slice(0, 4);
@@ -157,7 +163,14 @@ export async function GET(request: Request) {
       day,
       companies: outcomes.map((o) =>
         o.ok
-          ? { company: o.company, ok: true, sheet: o.sheet, toCheck: o.toCheck, stillOpen: o.stillOpen }
+          ? {
+              company: o.company,
+              ok: true,
+              sheet: o.sheet,
+              toCheck: o.toCheck,
+              stillOpen: o.stillOpen,
+              banksDiffer: o.banksDiffer,
+            }
           : { company: o.company, ok: false },
       ),
       subject: mail.subject,

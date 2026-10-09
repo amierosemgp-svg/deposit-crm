@@ -231,6 +231,97 @@ export function parseTab(
   return rows;
 }
 
+// ── free credit and bank balances on the sheet ──────────────────────────────
+
+/** One day's total of something compared as totals, not row by row. */
+export type DayTotal = { day: string; n: number; cents: number };
+
+/**
+ * The Free Credit tab to day totals. Its header sits under a block of game
+ * balances, like the deposit tab's, and is found the same way; only Date and
+ * Amount are needed, since free credit is compared as totals. A negative
+ * amount is a correction on the game account, not credit given away.
+ */
+export function parseFreeCreditTab(grid: string[][], year: number, month: number): DayTotal[] {
+  const headerAt = grid.findIndex((r) => {
+    const c = findColumns(r);
+    return c.date >= 0 && c.amount >= 0;
+  });
+  if (headerAt < 0) throw new Error("No header row (Date / Amount) on the free credit tab");
+  const c = findColumns(grid[headerAt]);
+  const byDay = new Map<string, DayTotal>();
+  for (const r of grid.slice(headerAt + 1)) {
+    const day = parseSheetDay(r[c.date] ?? "", year, month);
+    const cents = parseCents(r[c.amount] ?? "");
+    if (!day || cents <= 0) continue;
+    const t = byDay.get(day) ?? { day, n: 0, cents: 0 };
+    byDay.set(day, { day, n: t.n + 1, cents: t.cents + cents });
+  }
+  return [...byDay.values()].sort((a, b) => a.day.localeCompare(b.day));
+}
+
+/**
+ * What a bank label names, ignoring the holder: "MBB 2-ENT", "F-MBB 2-THACHAINI
+ * SRI" and "MBB 2/ YAIKATH" are all "mbb2". A one-letter casino prefix ("F-")
+ * is dropped. The CRM's account labels follow the sheet's, so this is how a
+ * sheet balance finds its account.
+ */
+export function bankKey(label: string): string {
+  const parts = label.split(/[-/]/).map((s) => s.trim()).filter(Boolean);
+  const head = parts.length > 1 && /^[a-z]$/i.test(parts[0]) ? parts[1] : (parts[0] ?? "");
+  return head.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+const NUMBER = /^-?[\d,]+(\.\d+)?$/;
+
+/**
+ * Bank balances from the block above the deposit tab's header.
+ *
+ * The block is laid out in groups of four across the page, one row per
+ * account: [bank's balance] [label] [sheet's balance] [difference]. The cell
+ * after the label is the sheet's own running balance (opening + deposits −
+ * withdrawals, from the Bank 1 / Bank 2 table further right) and is what's
+ * compared, being the same arithmetic the CRM keeps. Pokercity leaves a blank
+ * cell after some labels, so the next cell over is read too.
+ *
+ * Only labels for `keys` (the CRM's accounts) are looked for. That table
+ * further right, from its "Bank 1" cell on, repeats the labels beside
+ * opening balances and is left out; so is any column where a label turns up
+ * only once, which is a note ("RHB" over a holder's name), not the block.
+ */
+export function parseBankBlock(grid: string[][], keys: Set<string>): Map<string, { label: string; cents: number }> {
+  const { headerAt } = findHeader(grid, "deposit");
+  const block = grid.slice(0, headerAt);
+  let width = Math.max(0, ...block.map((r) => r.length));
+  for (const r of block) {
+    const i = r.findIndex((v) => /^bank\s*1$/i.test(v.trim()));
+    if (i >= 0) width = Math.min(width, i);
+  }
+  const balanceAt = (r: string[], j: number) => {
+    const next = [r[j + 1], r[j + 2]].map((v) => (v ?? "").trim()).find(Boolean) ?? "";
+    return NUMBER.test(next) ? parseCents(next) : null;
+  };
+  const hits: { j: number; i: number; key: string; label: string; cents: number }[] = [];
+  block.forEach((r, i) => {
+    for (let j = 0; j < Math.min(width, r.length); j++) {
+      const key = bankKey(r[j] ?? "");
+      if (!key || !keys.has(key)) continue;
+      const cents = balanceAt(r, j);
+      if (cents != null) hits.push({ j, i, key, label: r[j].trim(), cents });
+    }
+  });
+  const perColumn = new Map<number, number>();
+  for (const h of hits) perColumn.set(h.j, (perColumn.get(h.j) ?? 0) + 1);
+  const out = new Map<string, { label: string; cents: number }>();
+  hits
+    .filter((h) => (perColumn.get(h.j) ?? 0) >= 2)
+    .sort((a, b) => a.j - b.j || a.i - b.i)
+    .forEach((h) => {
+      if (!out.has(h.key)) out.set(h.key, { label: h.label, cents: h.cents });
+    });
+  return out;
+}
+
 // ── the CRM side ────────────────────────────────────────────────────────────
 
 /** Settled in the CRM — what the sheet's rows should match. */
@@ -288,6 +379,77 @@ export async function loadCrmRows(
     time: r.time == null ? null : String(r.time),
   }));
 }
+
+/**
+ * One casino's free credit per business day in [from, to). Free credit has no
+ * table of its own: it's the game_topup ledger row issueFreeCredit writes,
+ * rebates included, as the sheets' Free Credit tabs include theirs.
+ */
+export async function loadCrmFreeCredit(
+  db: typeof Db,
+  entityId: number,
+  from: string,
+  to: string,
+): Promise<DayTotal[]> {
+  const res = await db.execute(sql`
+    SELECT to_char(t.created_at AT TIME ZONE ${BUSINESS_TZ}, 'YYYY-MM-DD') AS day,
+           count(*)::int AS n,
+           round(sum(t.amount) * 100)::bigint AS cents
+      FROM transactions t
+     WHERE t.entity_id = ${entityId}
+       AND t.type = 'game_topup' AND t.details->>'action' = 'free_credit'
+       AND t.created_at >= (${from}::date)::timestamp AT TIME ZONE ${BUSINESS_TZ}
+       AND t.created_at <  (${to}::date)::timestamp AT TIME ZONE ${BUSINESS_TZ}
+     GROUP BY 1 ORDER BY 1
+  `);
+  return (res.rows as Record<string, unknown>[]).map((r) => ({
+    day: String(r.day),
+    n: Number(r.n),
+    cents: Number(r.cents),
+  }));
+}
+
+/** A CRM bank account and what it holds now. */
+export type CrmBank = { id: number; label: string; account: string; cents: number };
+
+/** The casino's bank accounts: active ones, and any closed one still holding money. */
+export async function loadCrmBanks(db: typeof Db, entityId: number): Promise<CrmBank[]> {
+  const res = await db.execute(sql`
+    SELECT account_id, coalesce(nullif(trim(label), ''), bank_name) AS label,
+           bank_name || ' ' || account_number AS account,
+           round(current_balance * 100)::bigint AS cents
+      FROM bank_accounts
+     WHERE entity_id = ${entityId} AND (status = 'active' OR current_balance <> 0)
+     ORDER BY 2
+  `);
+  return (res.rows as Record<string, unknown>[]).map((r) => ({
+    id: Number(r.account_id),
+    label: String(r.label),
+    account: String(r.account),
+    cents: Number(r.cents),
+  }));
+}
+
+/** One account's balance on both sides. `sheet` is null when the sheet has no line for it. */
+export type BankLine = { label: string; account: string; sheetLabel: string | null; sheet: number | null; crm: number };
+
+/**
+ * Each CRM account beside the sheet's balance for it. Two accounts sharing a
+ * key (two plain "CIMB"s) can't be told apart on the sheet, so neither is
+ * paired rather than guessing.
+ */
+export function pairBanks(crm: CrmBank[], sheet: Map<string, { label: string; cents: number }>): BankLine[] {
+  const count = new Map<string, number>();
+  for (const b of crm) count.set(bankKey(b.label), (count.get(bankKey(b.label)) ?? 0) + 1);
+  return crm.map((b) => {
+    const key = bankKey(b.label);
+    const s = count.get(key) === 1 ? sheet.get(key) : undefined;
+    return { label: b.label, account: b.account, sheetLabel: s?.label ?? null, sheet: s?.cents ?? null, crm: b.cents };
+  });
+}
+
+/** Needs a look: the two balances differ, or money sits in an account the sheet doesn't list. */
+export const bankDiffers = (b: BankLine) => (b.sheet == null ? b.crm !== 0 : b.sheet !== b.crm);
 
 // ── matching ────────────────────────────────────────────────────────────────
 
@@ -529,8 +691,12 @@ export function buildReport(args: {
   notes?: string[];
   /** Leave the withdrawal total out, when the sheet's withdrawals couldn't be read. */
   withdrawals?: boolean;
+  /** Per-day free credit; `sheet` is null when the sheet has no Free Credit tab to read. */
+  freeCredit?: { sheet: DayTotal[] | null; crm: DayTotal[] };
+  /** Each account's balance now; null when balances weren't compared. */
+  banks?: BankLine[] | null;
 }): string {
-  const { company, day, sheet, crm, findings, notes = [], withdrawals = true } = args;
+  const { company, day, sheet, crm, findings, notes = [], withdrawals = true, freeCredit, banks } = args;
   const done = crm.filter((c) => DONE.has(c.status));
 
   const onDay = findings.filter((f) => findingDay(f) === day);
@@ -538,18 +704,27 @@ export function buildReport(args: {
   const late = onDay.filter((f) => !needsAction(f));
   // A late fix is mentioned the once, on its own day; after that it's settled.
   const older = findings.filter((f) => findingDay(f) < day && needsAction(f));
+  const banksOff = (banks ?? []).filter(bankDiffers);
 
-  const status = today.length ? `⚠️ ${today.length} to check` : "✅ all match";
+  const problems = [
+    ...(today.length ? [`${today.length} to check`] : []),
+    ...(banksOff.length ? [`${banksOff.length} bank balance${banksOff.length === 1 ? "" : "s"} differ`] : []),
+  ];
+  const status = problems.length ? `⚠️ ${problems.join(" · ")}` : "✅ all match";
   const lines = [`${company} tally · ${dayLabel(day)} — ${status}`];
   let totalsDiffer = false;
-  const total = (label: string, s: { n?: number; cents: number }, c: { n?: number; cents: number }) => {
-    const n = (x: { n?: number }) => (x.n == null ? "" : ` (${x.n})`);
+  const n = (x: { n?: number }) => (x.n == null ? "" : ` (${x.n})`);
+  const compare = (label: string, s: { n?: number; cents: number }, c: { n?: number; cents: number }) => {
     if (s.n === c.n && s.cents === c.cents) {
       lines.push(`${label}: RM ${amt(s.cents)}${n(s)} ✓`);
-    } else {
-      totalsDiffer = true;
-      lines.push(`${label}: sheet RM ${amt(s.cents)}${n(s)} · CRM RM ${amt(c.cents)}${n(c)}`);
+      return false;
     }
+    lines.push(`${label}: sheet RM ${amt(s.cents)}${n(s)} · CRM RM ${amt(c.cents)}${n(c)}`);
+    return true;
+  };
+  /** A deposit, bonus or withdrawal total: a difference there is explained by the rows below. */
+  const total = (label: string, s: { n?: number; cents: number }, c: { n?: number; cents: number }) => {
+    if (compare(label, s, c)) totalsDiffer = true;
   };
   total("Deposits", dayTotals(sheet, day, "deposit"), dayTotals(done, day, "deposit"));
   const bonus = (rows: { day: string; kind: Kind; bonusCents: number | null }[]) => ({
@@ -557,12 +732,23 @@ export function buildReport(args: {
       .filter((x) => x.day === day && x.kind === "deposit")
       .reduce((a, x) => a + (x.bonusCents ?? 0), 0),
   });
-  // Only when the sheet keeps bonuses; otherwise there's nothing to compare.
+  // Compared when the sheet keeps bonuses; otherwise the CRM's figure alone.
   if (sheet.some((x) => x.kind === "deposit" && x.bonusCents != null)) {
     total("Bonus", bonus(sheet), bonus(done));
+  } else {
+    lines.push(`Bonus: CRM RM ${amt(bonus(done).cents)} (no Bonus column on the sheet)`);
   }
   if (withdrawals) {
     total("Withdrawals", dayTotals(sheet, day, "withdrawal"), dayTotals(done, day, "withdrawal"));
+  }
+  if (freeCredit) {
+    const on = (rows: DayTotal[]) => rows.find((r) => r.day === day) ?? { n: 0, cents: 0 };
+    if (freeCredit.sheet) compare("Free credit", on(freeCredit.sheet), on(freeCredit.crm));
+    else lines.push(`Free credit: CRM RM ${amt(on(freeCredit.crm).cents)}${n(on(freeCredit.crm))}`);
+  }
+  if (banks) {
+    const sum = (f: (b: BankLine) => number | null) => banks.reduce((a, b) => a + (f(b) ?? 0), 0);
+    compare("Bank balance now", { cents: sum((b) => b.sheet) }, { cents: sum((b) => b.crm) });
   }
   if (late.length) {
     lines.push(`${late.length} keyed in late, now matched. No action.`);
@@ -570,6 +756,16 @@ export function buildReport(args: {
     lines.push("Totals differ only by entries across midnight.");
   }
 
+  if (banksOff.length) {
+    lines.push("", `Bank balance differs (${banksOff.length})`);
+    for (const b of banksOff) {
+      lines.push(
+        b.sheet == null
+          ? `• ${b.label} not on sheet, CRM ${amt(b.crm)}`
+          : `• ${b.label} sheet ${amt(b.sheet)}, CRM ${amt(b.crm)}`,
+      );
+    }
+  }
   if (today.length) lines.push("", ...grouped(today, false));
   if (older.length) {
     lines.push("", `Still open from earlier: ${older.length}`);
