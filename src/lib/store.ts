@@ -426,6 +426,11 @@ type Store = {
     skip_bot?: boolean;
   }) => Promise<MutationResult>;
   confirmBankTransfer: (transferId: number) => Promise<MutationResult>;
+  /** Correct a settled transfer — either account, amount, notes; re-books the banks. */
+  updateBankTransfer: (
+    transferId: number,
+    patch: { from_account_id?: number; to_account_id?: number; amount?: number; notes?: string | null },
+  ) => Promise<MutationResult>;
   rejectBankTransfer: (transferId: number) => Promise<MutationResult>;
   /** Record cash a leader took out of a company account; debits the account. */
   recordBankCashOut: (input: {
@@ -1222,6 +1227,13 @@ export const useStore = create<Store>((set, get) => {
               ? `Transfer of RM ${amount.toFixed(2)} initiated — awaiting recipient confirmation`
               : `Transfer of RM ${amount.toFixed(2)} recorded — both accounts updated`,
         },
+      ),
+
+    updateBankTransfer: (transferId, patch) =>
+      mutate(
+        `/api/transfers/${transferId}`,
+        { method: "PATCH", body: JSON.stringify(patch) },
+        { kind: "transfer", message: "Transfer corrected — both accounts re-booked" },
       ),
 
     confirmBankTransfer: (transferId) =>

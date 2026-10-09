@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { gameTransfers, players, rebatePayouts, transactions } from "@/db/schema";
+import { gameTransfers, players, rebatePayouts, transactions, users } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { assertNotArchived, jsonError } from "@/lib/api-helpers";
 import {
@@ -66,11 +66,16 @@ export async function DELETE(
         throw new AuthError(403, "Free credit is outside your company scope");
       }
       /**
-       * Only the person holding the row may remove it, as on deposits and
+       * The person holding the row may remove it, as on deposits and
        * withdrawals. A free credit has no assignee column — the ledger row's
        * user_id is who issued it, and that is who holds it.
+       *
+       * A leader or admin may remove any in their scope (checked above): the
+       * desk keys a duplicate, and the leader reconciling the kiosk is who
+       * finds it. The log names who issued it as well as who removed it.
        */
-      if (row.user_id !== user.user_id) {
+      const overseer = user.role === "super_admin" || user.role === "company_leader";
+      if (!overseer && row.user_id !== user.user_id) {
         throw new AuthError(
           409,
           row.user_id === null
@@ -150,13 +155,21 @@ export async function DELETE(
       return { row, player, queuedUnperformed };
     });
 
+    // Who keyed it, for the log line — a leader may now remove someone else's.
+    const [issuer] = result.row.user_id
+      ? await db
+          .select({ username: users.username, full_name: users.full_name })
+          .from(users)
+          .where(eq(users.user_id, result.row.user_id))
+      : [undefined];
+    const issuedBy = issuer ? issuer.full_name || issuer.username : null;
     await logActivity({
       category: "transaction",
       action: "free_credit.deleted",
       summary:
         `Free credit deleted: ${result.player?.username ?? "unassigned"} — ` +
         `RM ${result.row.amount.toFixed(2)} ${result.row.game_name ?? ""}`.trimEnd() +
-        ` (issued ${result.row.created_at})` +
+        ` (issued ${result.row.created_at}${issuedBy ? ` by ${issuedBy}` : ""})` +
         (result.queuedUnperformed ? ", was still queued" : ""),
       actor: user,
       companyEntityId: result.row.entity_id,
@@ -167,6 +180,7 @@ export async function DELETE(
         amount: result.row.amount,
         player_username: result.player?.username ?? null,
         issued_at: result.row.created_at,
+        issued_by: issuedBy,
         reason: (result.row.details as { reason?: string } | null)?.reason ?? null,
         queued: result.queuedUnperformed,
       },

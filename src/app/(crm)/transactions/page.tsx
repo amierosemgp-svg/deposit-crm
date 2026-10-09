@@ -4024,6 +4024,15 @@ export default function TransactionsPage() {
   // selectable; the buttons show, disabled, with the hint to claim first. A
   // company leader may act on a colleague's claim (see lib/claims).
   const mine = (userId: number | null | undefined) => canActOnClaim(me, userId);
+  // A free credit is removed by whoever issued it, or by a leader or admin —
+  // the desk keys a duplicate and the leader is who finds it. The server
+  // applies the same rule.
+  const canDeleteFreeCredit = useCallback(
+    (f: FreeCredit) =>
+      !!me &&
+      (me.role === "super_admin" || me.role === "company_leader" || f.user_id === me.user_id),
+    [me],
+  );
   const approvable = selectedDeposits.filter((d) => ["pending", "matched"].includes(d.status));
   const rejectableDep = selectedDeposits.filter((d) =>
     ["pending_match", "matched", "pending"].includes(d.status),
@@ -4076,7 +4085,7 @@ export default function TransactionsPage() {
       delCash: tab === "leaderwithdrawal" && selectedCashOuts.length > 0,
       delLt: tab === "leadertransfer" && selectedLeaderTransfers.length > 0,
       delFcMine:
-        selectedFreeCredits.length > 0 && selectedFreeCredits.every((f) => mine(f.user_id)),
+        selectedFreeCredits.length > 0 && selectedFreeCredits.every(canDeleteFreeCredit),
       // Reversing a cash-out is a leader's call; paying/skipping a rebate is CS work.
       revCash:
         tab === "leaderwithdrawal" &&
@@ -4249,11 +4258,9 @@ export default function TransactionsPage() {
     () =>
       setConfirming({
         kind: "delete-freecredit",
-        ids: selectedFreeCredits
-          .filter((f) => !!me && f.user_id === me.user_id)
-          .map((f) => f.transaction_id),
+        ids: selectedFreeCredits.filter(canDeleteFreeCredit).map((f) => f.transaction_id),
       }),
-    [selectedFreeCredits, me],
+    [selectedFreeCredits, canDeleteFreeCredit],
   );
   const handleDeleteCashOuts = useCallback(
     () =>

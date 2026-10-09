@@ -29,6 +29,7 @@ import { Switch } from "@/components/ui/switch";
 import { BankAccountFormModal } from "@/components/bank-account-form-modal";
 import { ListLoading } from "@/components/list-loading";
 import { BankTransferModal } from "@/components/bank-transfer-modal";
+import { BankTransferEditModal } from "@/components/bank-transfer-edit-modal";
 import { BankCashOutModal } from "@/components/bank-cash-out-modal";
 import {
   ConfirmActionDialog,
@@ -107,6 +108,7 @@ export default function BankAccountsPage() {
   const [editingAccount, setEditingAccount] = useState<BankAccount | null>(null);
   const [transferOpen, setTransferOpen] = useState(false);
   const [transferDefaultFrom, setTransferDefaultFrom] = useState<number | null>(null);
+  const [editingTransfer, setEditingTransfer] = useState<BankTransfer | null>(null);
   // Cash a leader took out by hand — recorded here, listed below the accounts.
   const [cashOutAccount, setCashOutAccount] = useState<BankAccount | null>(null);
   const [cashOuts, setCashOuts] = useState<BankCashOut[]>([]);
@@ -840,13 +842,14 @@ export default function BankAccountsPage() {
                 <th className="px-3 py-2.5 text-left font-medium whitespace-nowrap">
                   Confirmed At
                 </th>
+                {canTransfer && <th className="px-3 py-2.5" aria-label="Edit" />}
               </tr>
             </thead>
             <tbody>
               {sortedTransfers.length === 0 && (
                 <tr>
                   <td
-                    colSpan={8}
+                    colSpan={canTransfer ? 9 : 8}
                     className="px-3 py-10 text-center text-sm text-muted-foreground"
                   >
                     {!hydrated ? (
@@ -915,6 +918,22 @@ export default function BankAccountsPage() {
                     <td className="px-3 py-2 text-[11px] text-muted-foreground whitespace-nowrap">
                       {t.confirmed_at ? formatDateTime(t.confirmed_at) : "—"}
                     </td>
+                    {canTransfer && (
+                      <td className="px-2 py-2 text-right">
+                        {/* Settled transfers only; a pending one is confirmed or rejected. */}
+                        {(t.status === "confirmed" || t.status === "auto_confirmed") && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 cursor-pointer"
+                            onClick={() => setEditingTransfer(t)}
+                            title="Edit — fix the account, amount or notes"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                      </td>
+                    )}
                   </motion.tr>
                 );
               })}
@@ -932,6 +951,11 @@ export default function BankAccountsPage() {
         open={transferOpen}
         onOpenChange={setTransferOpen}
         defaultFromAccountId={transferDefaultFrom}
+      />
+      <BankTransferEditModal
+        key={editingTransfer?.transfer_id ?? "none"}
+        transfer={editingTransfer}
+        onOpenChange={(o) => !o && setEditingTransfer(null)}
       />
       <BankCashOutModal
         open={cashOutAccount !== null}
