@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { bonusPlans, deposits, players, withdrawals } from "@/db/schema";
 import { AuthError, type AuthedUser } from "./auth";
 import { bonusOn } from "@/lib/bonus-math";
+import { POINTS_ONLY_BANK } from "@/lib/points-adjustment";
 
 export type BonusPlan = typeof bonusPlans.$inferSelect;
 export type BonusPeriod = "daily" | "weekly" | "monthly";
@@ -109,6 +110,7 @@ export async function netLossOverPeriod(
       and(
         eq(deposits.player_id, playerId),
         eq(deposits.status, "completed"),
+        ne(deposits.bank_name, POINTS_ONLY_BANK),
         gte(deposits.deposit_date, sinceIso),
         excludeDepositId
           ? ne(deposits.deposit_id, excludeDepositId)

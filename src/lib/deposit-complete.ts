@@ -10,6 +10,7 @@ import {
 import { moveBankBalance } from "@/lib/bank-balance";
 import { moveKioskCredit } from "@/lib/kiosk-credit";
 import { maybeCreateReferralBonus } from "@/lib/referral";
+import { isPointsOnly } from "@/lib/points-adjustment";
 
 type Txn = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type DepositRow = typeof deposits.$inferSelect;
@@ -116,10 +117,15 @@ export async function completeManualDeposit(
       });
   }
 
-  await txn
-    .update(players)
-    .set({ total_deposits: sql`${players.total_deposits} + ${row.deposit_amount}` })
-    .where(eq(players.player_id, row.player_id));
+  // A points-only adjustment moved points, not money: it isn't a deposit
+  // the player made, and it earns no recommend bonus (see below).
+  const pointsOnly = isPointsOnly(row);
+  if (!pointsOnly) {
+    await txn
+      .update(players)
+      .set({ total_deposits: sql`${players.total_deposits} + ${row.deposit_amount}` })
+      .where(eq(players.player_id, row.player_id));
+  }
 
   const [updated] = await txn
     .update(deposits)
@@ -151,7 +157,7 @@ export async function completeManualDeposit(
   });
 
   // Inside the same transaction, so a bonus can't survive a rollback.
-  await maybeCreateReferralBonus(txn, row.deposit_id);
+  if (!pointsOnly) await maybeCreateReferralBonus(txn, row.deposit_id);
 
   return updated;
 }
@@ -263,12 +269,12 @@ export async function rebookCompletedDeposit(
   // Out with the old booking…
   addKiosk(before.company_entity_id, beforeGame, before.total_amount);
   addWallet(before.player_id, beforeGame, beforeLogin, -before.total_amount);
-  addTotal(before.player_id, -before.deposit_amount);
+  addTotal(before.player_id, isPointsOnly(before) ? 0 : -before.deposit_amount);
   addBank(before.received_into_account_id, -before.deposit_amount);
   // …in with the new.
   addKiosk(after.company_entity_id, afterGame, -after.total_amount);
   addWallet(after.player_id, afterGame, afterLogin, after.total_amount);
-  addTotal(after.player_id, after.deposit_amount);
+  addTotal(after.player_id, isPointsOnly(after) ? 0 : after.deposit_amount);
   addBank(after.received_into_account_id, after.deposit_amount);
 
   for (const k of kiosk.values()) {
@@ -417,7 +423,7 @@ export async function reverseCompletedDeposit(
   }
   const walletReversed = walletWasCredited && !!row.player_id && !!gameName;
 
-  if (row.player_id) {
+  if (row.player_id && !isPointsOnly(row)) {
     await txn
       .update(players)
       .set({ total_deposits: sql`${players.total_deposits} - ${row.deposit_amount}` })

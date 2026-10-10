@@ -5,6 +5,7 @@ import { jsonError } from "@/lib/api-helpers";
 import {
   all,
   businessDay,
+  NOT_POINTS_ONLY,
   parseReportParams,
   scopeDepositsAsOf,
   searchAcross,
@@ -36,7 +37,7 @@ export async function GET(request: Request) {
     const p = parseReportParams(request.url);
     if ("error" in p) return jsonError(p.error);
 
-    const w: SQL[] = [...scopeDepositsAsOf(user, sql`d.deposit_date`)];
+    const w: SQL[] = [...scopeDepositsAsOf(user, sql`d.deposit_date`), NOT_POINTS_ONLY];
     if (p.from) w.push(sql`${businessDay(sql`d.deposit_date`)} >= ${p.from}::date`);
     if (p.to) w.push(sql`${businessDay(sql`d.deposit_date`)} <= ${p.to}::date`);
     if (p.companyId !== null) w.push(sql`d.company_entity_id = ${p.companyId}`);

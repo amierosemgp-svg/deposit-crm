@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lt, ne, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   bonusPlans,
@@ -10,6 +10,7 @@ import {
   withdrawals,
 } from "@/db/schema";
 import { BUSINESS_UTC_OFFSET_MS } from "@/lib/bonus";
+import { POINTS_ONLY_BANK } from "@/lib/points-adjustment";
 import { AuthError, type AuthedUser } from "@/lib/auth";
 import type { BonusPeriod, BonusPlan } from "@/lib/types";
 
@@ -244,6 +245,7 @@ export async function computeRebateCandidates(
     .where(
       and(
         eq(deposits.status, "completed"),
+        ne(deposits.bank_name, POINTS_ONLY_BANK),
         gte(deposits.deposit_date, startIso),
         lt(deposits.deposit_date, endIso),
       ),

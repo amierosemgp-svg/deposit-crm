@@ -2,7 +2,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { authErrorResponse, requireUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
-import { businessDay, DATE_RE, IS_FREE_CREDIT } from "@/lib/report-sql";
+import { businessDay, DATE_RE, DEPOSIT_COUNTS, IS_FREE_CREDIT } from "@/lib/report-sql";
 
 /**
  * GET /api/players/win-loss — how each member has done against the house.
@@ -57,7 +57,7 @@ export async function GET(request: Request) {
                count(*)::int                              AS deposit_count,
                max(d.deposit_date)                        AS last_deposit_at
           FROM deposits d
-         WHERE d.status <> 'failed' AND d.player_id IS NOT NULL
+         WHERE ${DEPOSIT_COUNTS} AND d.player_id IS NOT NULL
                ${within("d.deposit_date")}
          GROUP BY 1
       ), wdr AS (

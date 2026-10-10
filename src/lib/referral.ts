@@ -1,6 +1,7 @@
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, ne, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { bonusOn } from "@/lib/bonus-math";
+import { POINTS_ONLY_BANK } from "@/lib/points-adjustment";
 import { CREDIT_CONFLICT_TARGET } from "@/lib/game-credits";
 import {
   bonusPlans,
@@ -118,6 +119,7 @@ export async function syncReferralBonus(
           and(
             eq(deposits.player_id, downlinePlayerId),
             eq(deposits.status, "completed"),
+            ne(deposits.bank_name, POINTS_ONLY_BANK),
             sql`coalesce(${bonusPlans.type}::text, '') <> 'welcome'`,
           ),
         )
@@ -140,6 +142,7 @@ export async function syncReferralBonus(
             and(
               eq(deposits.player_id, downlinePlayerId),
               eq(deposits.status, "completed"),
+              ne(deposits.bank_name, POINTS_ONLY_BANK),
             ),
           )
           .limit(1);

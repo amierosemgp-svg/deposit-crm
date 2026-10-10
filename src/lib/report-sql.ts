@@ -1,5 +1,6 @@
 import { sql, type SQL } from "drizzle-orm";
 import type { AuthedUser } from "@/lib/auth";
+import { POINTS_ONLY_BANK } from "@/lib/points-adjustment";
 
 /**
  * Shared plumbing for the server-side report endpoints.
@@ -232,7 +233,13 @@ export function scopeByPlayer(user: AuthedUser, alias = "pl"): SQL[] {
  * would under-report the day CS entered it and over-report the day they got
  * round to completing it.
  */
-export const DEPOSIT_COUNTS = sql`d.status <> 'failed'`;
+export const DEPOSIT_COUNTS = sql`(d.status <> 'failed' AND d.bank_name <> ${POINTS_ONLY_BANK})`;
+
+/**
+ * Not a points-only adjustment — a deposit keyed with no bank moved points,
+ * not money, so no deposit total counts it (DEPOSIT_COUNTS includes this).
+ */
+export const NOT_POINTS_ONLY = sql`d.bank_name <> ${POINTS_ONLY_BANK}`;
 
 /** Withdrawals that count as money out: only what was actually paid. */
 export const WITHDRAWAL_COUNTS = sql`wd.status = 'paid'`;

@@ -117,7 +117,7 @@ export async function GET(request: Request) {
           SELECT d.player_id,
                  min(${businessDay(sql`d.deposit_date`)}) AS first_day
             FROM deposits d
-           WHERE d.status <> 'failed' AND d.player_id IS NOT NULL
+           WHERE ${DEPOSIT_COUNTS} AND d.player_id IS NOT NULL
            GROUP BY 1
         ) firsts
          GROUP BY 1

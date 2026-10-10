@@ -4,6 +4,7 @@ import { gameTransfers, players, settings, transactions } from "@/db/schema";
 import { AuthError, type AuthedUser } from "@/lib/auth";
 import { creditRecommendBonus, InsufficientBoCreditError } from "@/lib/referral";
 import { resolveGameLogin } from "@/lib/game-credits";
+import { POINTS_ONLY_BANK } from "@/lib/points-adjustment";
 
 export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type PlayerRow = typeof players.$inferSelect;
@@ -177,6 +178,7 @@ export async function freeCreditAllowance(
            coalesce((SELECT sum(d.deposit_amount) FROM deposits d
                       WHERE d.company_entity_id = c.id
                         AND d.status <> 'failed'
+                        AND d.bank_name <> ${POINTS_ONLY_BANK}
                         AND (d.deposit_date AT TIME ZONE 'Asia/Kuala_Lumpur')::date >= m.d), 0)::float8
              AS deposits,
            coalesce((SELECT sum(t.amount) FROM transactions t

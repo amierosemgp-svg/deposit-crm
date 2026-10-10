@@ -29,6 +29,9 @@ const createSchema = z.object({
   received_into_account_id: z.number().int().positive().optional(),
   receipt_url: z.string().url().optional(),
   notes: z.string().optional(),
+  // The sheet's Remark cell. A deposit with no account is a points-only
+  // correction, and this names the mistake it fixes.
+  remark: z.string().max(500).optional(),
   // Fully manual: no agent bank-match or top-up — CS approves → completes it.
   skip_bot: z.boolean().optional(),
   // Claim it under the caller's name as it's created (the sheet's "Assign to
@@ -139,6 +142,7 @@ export async function POST(request: Request) {
           source: "manual",
           skip_bot: skipBot,
           receipt_url: body.receipt_url,
+          remark: body.remark?.trim() || null,
           handled_by_user_id: user.user_id,
           ...(autoComplete ? { approved_at: nowIso } : {}),
           ...(body.assign_to_me

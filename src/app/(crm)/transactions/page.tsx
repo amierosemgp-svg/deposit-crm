@@ -18,7 +18,7 @@ import { bonusOn } from "@/lib/bonus-math";
 import { canActOnClaim } from "@/lib/claims";
 import { formatClock, formatRelative, formatRM } from "@/lib/format";
 import { byBankOrder } from "@/lib/bank-order";
-import { extractSenderName } from "@/lib/bank-remark";
+import { POINTS_ONLY_BANK } from "@/lib/points-adjustment";
 import {
   matchesAction,
   actionLabel,
@@ -1260,12 +1260,14 @@ export default function TransactionsPage() {
         // alike. Never an entry cell: a total someone can type is a total that
         // can disagree with the figures it is made of.
         total: { label: "Total", width: 100, align: "right", numeric: true },
-        bank: { label: "Bank", width: 220, entry: true, required: true, options: OUR_ACCOUNTS, placeholder: "our account" },
+        // Blank = a points-only correction: the kiosk and the player's game
+        // move, no bank does. The Remark then has to say which mistake it fixes.
+        bank: { label: "Bank", width: 220, entry: true, options: OUR_ACCOUNTS, placeholder: "our account / blank = points only" },
         mode,
         status,
         date,
         time,
-        remark: { label: "Remark / Name", width: 200 },
+        remark: { label: "Remark", width: 200, entry: true, placeholder: "remark" },
         bankdesc: { label: "Bank Description", width: 260 },
       }),
       withdrawal: order("withdrawal", {
@@ -1670,7 +1672,6 @@ export default function TransactionsPage() {
           : undefined;
         if (tab === "deposit") {
           const c = COL.deposit;
-          fill(c.remark, pl.full_name);
           fill(c.username, lastGame?.game_username);
           fill(c.product, lastGame?.game_name);
         } else if (tab === "withdrawal") {
@@ -1757,19 +1758,9 @@ export default function TransactionsPage() {
             // row only knows its date.
             date: sheetDate(d.deposit_date),
             time: d.deposit_time_known ? formatClock(d.deposit_date) : "",
-            // Who the money is from, and — once someone has corrected the
-            // row — who changed what. The correction goes first: it is the
-            // thing being looked for when a figure is questioned.
-            remark: [
-              d.remark,
-              d.edit_note,
-              p?.full_name ??
-                extractSenderName(d.bank_description) ??
-                d.bank_account_holder ??
-                "",
-            ]
-              .filter(Boolean)
-              .join(" · "),
+            // What the desk typed, and — once someone has corrected the row —
+            // who changed what.
+            remark: [d.remark, d.edit_note].filter(Boolean).join(" · "),
             bankdesc: d.bank_description ?? "",
           }),
         };
@@ -2407,11 +2398,18 @@ export default function TransactionsPage() {
       }
       const amt = parseAmount(amount);
       if (amt === null || amt <= 0) return { ok: false, error: `Bad amount "${amount}"` };
-      if (!bank.trim()) return { ok: false, error: "Bank is required" };
+      const remark = (d[c.remark] ?? "").trim();
+      // No bank: a points-only correction for points keyed wrong. Nothing
+      // lands in an account, so it must carry the code of the mistake it fixes.
+      const pointsOnly = !bank.trim();
+      if (pointsOnly && !remark)
+        return { ok: false, error: "No bank = points-only adjustment — key the mistake's code in Remark" };
       // The cell names one of our accounts. Resolving it here is what lets the
       // completion credit a balance rather than just record a bank's name.
-      const into = accountByLabel.get(bank.trim().toLowerCase(), player.company_entity_id);
-      if (!into)
+      const into = pointsOnly
+        ? null
+        : accountByLabel.get(bank.trim().toLowerCase(), player.company_entity_id);
+      if (!pointsOnly && !into)
         return {
           ok: false,
           error: `"${bank.trim()}" is not one of our accounts — pick one from the list`,
@@ -2431,8 +2429,10 @@ export default function TransactionsPage() {
         payload: {
           player_id: player.player_id,
           amount: amt,
-          bank_name: into.bank_name,
-          received_into_account_id: into.account_id,
+          ...(into
+            ? { bank_name: into.bank_name, received_into_account_id: into.account_id }
+            : { bank_name: POINTS_ONLY_BANK }),
+          ...(remark ? { remark } : {}),
           // Entered from the workbook = the money is already in the bank, so it
           // goes straight to the CS queue instead of waiting for a bank match.
           status: "pending",
