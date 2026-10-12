@@ -6,6 +6,7 @@ import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { assertNotArchived, jsonError } from "@/lib/api-helpers";
 import { checkWithdrawalMinimum } from "@/lib/withdrawal-limits";
 import { bookManualPayout, bookManualPull } from "@/lib/withdrawal-pull";
+import { POINTS_FORFEIT_BANK } from "@/lib/points-adjustment";
 
 const createSchema = z.object({
   player_id: z.number().int().positive(),
@@ -26,6 +27,11 @@ const createSchema = z.object({
   // Claim it under the caller's name as it's created (the sheet's "Assign to
   // me" cell) — the same ownership marker POST /api/assignments sets.
   assign_to_me: z.boolean().optional(),
+  // The sheet's Remark cell.
+  remark: z.string().max(500).optional(),
+  // Take the points back and pay nobody (see isForfeit). Manual, a figure,
+  // no paying account, and a remark saying why.
+  forfeit: z.boolean().optional(),
 });
 
 /** POST /api/withdrawals — CS logs a withdrawal request received on Telegram/WeChat. */
@@ -71,6 +77,15 @@ export async function POST(request: Request) {
     if (!withdrawAll && !body.requested_amount) {
       return jsonError("Enter an amount, or tick withdraw all");
     }
+    const forfeit = body.forfeit ?? false;
+    if (forfeit) {
+      if (withdrawAll) return jsonError("A forfeit needs the figure taken, not ALL");
+      if (body.skip_bot === false) return jsonError("A forfeit is keyed as Manual");
+      if (body.paid_from_account_id !== undefined) {
+        return jsonError("A forfeit pays nobody — leave out the paying account");
+      }
+      if (!body.remark?.trim()) return jsonError("Say why in Remark — a forfeit needs a reason");
+    }
 
     // House minimum, measured on the player's own money — bonus credit in the
     // wallet does not count toward it. Inert until an admin sets one.
@@ -80,11 +95,14 @@ export async function POST(request: Request) {
     // provider. The minimum is a house policy rather than a solvency check, so
     // it is applied to the figure the CRM holds and CS is told what that figure
     // is, rather than being refused with no explanation.
-    const minCheck = await checkWithdrawalMinimum(db, {
-      playerId: body.player_id,
-      gameName: body.game_name,
-      balance,
-    });
+    // A forfeit is the house taking points back, not a payout, so no minimum.
+    const minCheck = forfeit
+      ? ({ ok: true } as const)
+      : await checkWithdrawalMinimum(db, {
+          playerId: body.player_id,
+          gameName: body.game_name,
+          balance,
+        });
     if (!minCheck.ok) return jsonError(minCheck.message, 422);
     // 0 is the placeholder for "as much as is there"; the pull writes the truth.
     const requested = withdrawAll ? 0 : body.requested_amount!;
@@ -146,9 +164,10 @@ export async function POST(request: Request) {
           withdraw_all: withdrawAll,
           game_name: body.game_name,
           game_username: body.game_username,
-          bank_name: body.bank_name,
-          bank_account_number: body.bank_account_number,
+          bank_name: forfeit ? POINTS_FORFEIT_BANK : body.bank_name,
+          bank_account_number: forfeit ? null : body.bank_account_number,
           paid_from_account_id: body.paid_from_account_id ?? null,
+          remark: body.remark?.trim() || null,
           source: "manual",
           skip_bot: skipBot,
           handled_by_user_id: user.user_id,
@@ -170,6 +189,7 @@ export async function POST(request: Request) {
           action: "requested",
           source: "manual",
           withdraw_all: withdrawAll,
+          ...(forfeit ? { forfeit: true, reason: body.remark?.trim() } : {}),
           // What the CRM believed the wallet held at the time. Kept because it
           // is a cache — when the pulled figure differs, this says by how much.
           known_balance: balance,
@@ -202,7 +222,7 @@ export async function POST(request: Request) {
         // Requested?" is answered where it is asked.
         ...(!pulled && skipBot && withdrawAll
           ? { warning: "Saved as Requested — pull it once you know what the wallet held." }
-          : pulled && !body.paid_from_account_id
+          : pulled && !body.paid_from_account_id && !forfeit
             ? {
                 warning:
                   "Credits pulled, but no paying account was named — the bank has not been " +

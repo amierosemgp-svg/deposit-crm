@@ -11,6 +11,7 @@ import { canonicalise } from "@/lib/game-name";
 import { holdsGameLogin, loginForGame } from "@/lib/game-credits";
 import { InsufficientKioskCreditError } from "@/lib/kiosk-credit";
 import { paysWithdrawals } from "@/lib/types";
+import { isForfeit } from "@/lib/points-adjustment";
 import {
   bookManualPayout,
   bookManualPull,
@@ -229,6 +230,17 @@ export async function PATCH(
           422,
           "A paid withdrawal needs Paid From — set the status to Credits Pulled to undo the payout",
         );
+      }
+      // A forfeit took the points back and pays nobody. Paying it, or
+      // relabelling it into an ordinary withdrawal, would leave a payout the
+      // desk never meant — fail it and key a normal withdrawal instead.
+      if (isForfeit(row)) {
+        if (nextStatus === "paid") {
+          throw new AuthError(422, "A forfeit is never paid — fail it and key a normal withdrawal");
+        }
+        if (body.bank_name !== undefined && body.bank_name !== row.bank_name) {
+          throw new AuthError(422, "A forfeit's bank stays \"Points forfeit\" — fail it and key a normal withdrawal");
+        }
       }
       if (nextStatus !== row.status) {
         const from = MANUAL_STATUS_FROM[nextStatus as keyof typeof MANUAL_STATUS_FROM];

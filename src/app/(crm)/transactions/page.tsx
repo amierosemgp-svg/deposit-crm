@@ -18,7 +18,11 @@ import { bonusOn } from "@/lib/bonus-math";
 import { canActOnClaim } from "@/lib/claims";
 import { formatClock, formatRelative, formatRM } from "@/lib/format";
 import { byBankOrder } from "@/lib/bank-order";
-import { POINTS_ONLY_BANK } from "@/lib/points-adjustment";
+import {
+  FORFEIT_PAID_FROM,
+  isForfeit,
+  POINTS_ONLY_BANK,
+} from "@/lib/points-adjustment";
 import {
   matchesAction,
   actionLabel,
@@ -1285,18 +1289,22 @@ export default function TransactionsPage() {
         // Which of OUR accounts the money leaves. The three columns before it
         // are the player's — where the payout goes — and none of them says
         // what to deduct, so a paid withdrawal moved no balance at all.
+        // Or "Forfeit": the points go back to the kiosk and nobody is paid.
         paidfrom: {
           label: "Paid From",
           width: 220,
           entry: true,
-          options: OUR_ACCOUNTS,
-          placeholder: "our account",
+          options: [
+            { value: FORFEIT_PAID_FROM, hint: "take the points back — no payout, no bank" },
+            ...OUR_ACCOUNTS,
+          ],
+          placeholder: "our account / Forfeit",
         },
         mode,
         status,
         date,
         time,
-        remark2: { label: "Remark 2", width: 200 },
+        remark2: { label: "Remark 2", width: 200, entry: true, placeholder: "remark" },
       }),
       freecredit: order("freecredit", {
         assign,
@@ -1681,7 +1689,6 @@ export default function TransactionsPage() {
           fill(c.bank, lastBank?.bank_name);
           fill(c.account, lastBank?.account_number);
           fill(c.holder, lastBank?.account_holder);
-          fill(c.remark2, pl.full_name);
         } else if (tab === "freecredit") {
           const c = COL.freecredit;
           fill(c.username, lastGame?.game_username);
@@ -1799,11 +1806,15 @@ export default function TransactionsPage() {
             holder:
               payoutAccountOf(p, w.bank_name, w.bank_account_number)?.account_holder ?? "",
             paidfrom: (() => {
+              if (isForfeit(w)) return FORFEIT_PAID_FROM;
               const a = ourAccountById(w.paid_from_account_id);
               return a ? accountCell(a) : "";
             })(),
             mode: modeCell(w.skip_bot),
-            status: WITHDRAWAL_STATUS_LABEL[w.status],
+            status:
+              isForfeit(w) && w.status === "credits_pulled"
+                ? "Forfeited"
+                : WITHDRAWAL_STATUS_LABEL[w.status],
             date: sheetDate(w.created_at),
             time: formatClock(w.created_at),
             remark2: [w.remark, w.edit_note, p?.full_name ?? ""].filter(Boolean).join(" · "),
@@ -2481,7 +2492,28 @@ export default function TransactionsPage() {
         return { ok: false, error: `Bad amount "${amount}" (number or ALL)` };
       const mode = parseMode(d[c.mode]);
       if (!mode.ok) return mode;
+      const remark = (d[c.remark2] ?? "").trim();
       const paidCell = (d[c.paidfrom] ?? "").trim();
+      // "Forfeit" in Paid From: the points come back to the kiosk, nobody is
+      // paid, no bank moves, and no withdrawal total counts it.
+      if (paidCell.toLowerCase() === FORFEIT_PAID_FROM.toLowerCase()) {
+        if (all) return { ok: false, error: "A forfeit needs the figure taken, not ALL" };
+        if (!mode.skip_bot) return { ok: false, error: "A forfeit is keyed as Manual" };
+        if (!remark) return { ok: false, error: "Forfeit — say why in Remark" };
+        return {
+          ok: true,
+          payload: {
+            player_id: player.player_id,
+            game_name: g,
+            skip_bot: true,
+            forfeit: true,
+            remark,
+            requested_amount: amt,
+            ...(username.trim() ? { game_username: username.trim() } : {}),
+            ...(assign ? { assign_to_me: true } : {}),
+          },
+        };
+      }
       const paidFrom = paidCell
         ? accountByLabel.get(paidCell.toLowerCase(), player.company_entity_id)
         : undefined;
@@ -2507,6 +2539,7 @@ export default function TransactionsPage() {
           ...(all ? { withdraw_all: true } : { requested_amount: amt }),
           ...(bank.trim() ? { bank_name: bank.trim() } : {}),
           ...(account.trim() ? { bank_account_number: account.trim() } : {}),
+          ...(remark ? { remark } : {}),
           ...(assign ? { assign_to_me: true } : {}),
         },
       };
@@ -4071,7 +4104,7 @@ export default function TransactionsPage() {
       rejectDepMine:
         rejectableDep.length > 0 && rejectableDep.every((d) => mine(d.assigned_to_user_id)),
       pull: selectedWithdrawals.some((w) => w.status === "requested"),
-      paid: selectedWithdrawals.some((w) => w.status === "credits_pulled"),
+      paid: selectedWithdrawals.some((w) => w.status === "credits_pulled" && !isForfeit(w)),
       rejectWd: rejectableWd.length > 0,
       rejectWdMine:
         rejectableWd.length > 0 && rejectableWd.every((w) => mine(w.assigned_to_user_id)),
@@ -4180,7 +4213,7 @@ export default function TransactionsPage() {
       runBulk(
         "Mark paid",
         selectedWithdrawals
-          .filter((w) => w.status === "credits_pulled")
+          .filter((w) => w.status === "credits_pulled" && !isForfeit(w))
           .map((w) => w.withdrawal_id),
         (id) => markWithdrawalPaid(id),
       ),

@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useStore } from "@/lib/store";
+import { isForfeit } from "@/lib/points-adjustment";
 import { REPORT_DEFS } from "@/lib/report-defs";
 import { inSheetGrid, matchesAction } from "@/lib/shortcut-keys";
 import type { UserRole } from "@/lib/types";
@@ -134,7 +135,7 @@ export function Sidebar() {
   );
   const pendingWithdrawals = useStore((s) =>
     s.withdrawals.filter(
-      (w) => w.status === "requested" || w.status === "credits_pulled",
+      (w) => w.status === "requested" || (w.status === "credits_pulled" && !isForfeit(w)),
     ).length,
   );
 

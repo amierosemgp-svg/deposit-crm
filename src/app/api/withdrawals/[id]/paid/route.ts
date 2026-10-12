@@ -10,6 +10,7 @@ import {
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import { paysWithdrawals } from "@/lib/types";
+import { isForfeit } from "@/lib/points-adjustment";
 
 const paidSchema = z.object({
   paid_from_account_id: z.number().int().positive().optional(),
@@ -44,6 +45,9 @@ export async function POST(
           409,
           `Withdrawal is "${row.status}", pull credits first`,
         );
+      }
+      if (isForfeit(row)) {
+        throw new AuthError(422, "A forfeit is never paid — the points went back to the kiosk");
       }
 
       const [player] = await txn

@@ -2,6 +2,7 @@
 
 import { useMemo, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
+import { isForfeit } from "@/lib/points-adjustment";
 import { useHydratePlayers } from "@/lib/use-players";
 import { formatRM, formatShortDateTime, formatRelative } from "@/lib/format";
 import { Button } from "@/components/ui/button";
@@ -173,8 +174,9 @@ export default function WithdrawalsPage() {
     [searched, statusFilter],
   );
 
+  // A forfeit sits at credits_pulled for good — nobody is ever paid.
   const pending = scoped.filter(
-    (w) => w.status === "requested" || w.status === "credits_pulled",
+    (w) => w.status === "requested" || (w.status === "credits_pulled" && !isForfeit(w)),
   ).length;
   const activeCompany = companiesFn().find(
     (c) => c.company_id === selectedCompanyId,
@@ -208,7 +210,7 @@ export default function WithdrawalsPage() {
         ? []
         : sorted
             .filter(
-              (w) => w.status === "requested" || w.status === "credits_pulled",
+              (w) => w.status === "requested" || (w.status === "credits_pulled" && !isForfeit(w)),
             )
             .map((w) => w.withdrawal_id),
     [sorted, isViewer],
@@ -609,10 +611,10 @@ export default function WithdrawalsPage() {
                   ? "Handled by someone else"
                   : "Assign this withdrawal to yourself first"
                 : undefined;
-              const canPay = !isViewer && w.status === "credits_pulled";
+              const canPay = !isViewer && w.status === "credits_pulled" && !isForfeit(w);
               const selectable =
                 !isViewer &&
-                (w.status === "requested" || w.status === "credits_pulled");
+                (w.status === "requested" || (w.status === "credits_pulled" && !isForfeit(w)));
               return (
                 // One withdrawal is two rows — detail above, how-it-pays and the
                 // actions below — so the group is a tbody of its own.
