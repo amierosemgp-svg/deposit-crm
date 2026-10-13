@@ -2117,14 +2117,14 @@ export function SheetGrid({
         case "ArrowDown":
           e.preventDefault();
           tabOriginRef.current = null;
-          // Ctrl+Down runs to the end of the block the cursor is in, as Excel
-          // does — the last saved row, or the last entry row if already in the
-          // dock. Landing on a blank entry row from the middle of the day's
-          // takings would be a jump to nowhere.
+          // Ctrl+Down goes to the very last row of the sheet, entry dock
+          // included, and Ctrl+Up to the very first. The desk asked for plain
+          // top / bottom over Excel's stop-at-the-end-of-the-block: one press
+          // gets you there from anywhere.
           // With Shift it grows from the moving corner, as Sheets does.
           if (mod) {
             const at = e.shiftKey ? (ext ?? sel) : sel;
-            moveTo(at.r >= draftStart ? nRows - 1 : draftStart - 1, at.c, e.shiftKey);
+            moveTo(nRows - 1, at.c, e.shiftKey);
           } else if (e.shiftKey) moveTo((ext ?? sel).r + 1, (ext ?? sel).c, true);
           else moveTo(sel.r + 1, sel.c);
           break;
@@ -2133,7 +2133,7 @@ export function SheetGrid({
           tabOriginRef.current = null;
           if (mod) {
             const at = e.shiftKey ? (ext ?? sel) : sel;
-            moveTo(at.r >= draftStart ? draftStart : 0, at.c, e.shiftKey);
+            moveTo(0, at.c, e.shiftKey);
           } else if (e.shiftKey) moveTo((ext ?? sel).r - 1, (ext ?? sel).c, true);
           else moveTo(sel.r - 1, sel.c);
           break;
@@ -2263,17 +2263,41 @@ export function SheetGrid({
          * arithmetic to cover either.
          */
         draggingRef.current = false; // picking rows, not dragging a range
-        setHeldRanges((held) => {
-          const at = held.findIndex((b) => b.r1 === r && b.r2 === r && b.c2 === WHOLE_ROW);
-          if (at >= 0) return held.filter((_, i) => i !== at);
+        const inRange = (b: Bounds) => r >= b.r1 && r <= b.r2;
+        if (heldRanges.some(inRange)) {
+          /**
+           * Dropping a picked row. It is cut out of whatever range holds it,
+           * and the cursor moves off it to the last row still picked: left
+           * on it, the live rectangle kept it lit and still sent it to the
+           * action bar, so the drop did nothing anyone could see.
+           */
+          const rest = heldRanges.flatMap((b) =>
+            inRange(b)
+              ? [
+                  ...(b.r1 < r ? [{ ...b, r2: r - 1 }] : []),
+                  ...(r < b.r2 ? [{ ...b, r1: r + 1 }] : []),
+                ]
+              : [b],
+          );
+          setHeldRanges(rest);
+          const last = rest.at(-1);
+          setSel(last ? { r: last.r2, c } : null);
+          setExt(null);
+        } else {
+          // The first pick turns what was already selected into whole rows,
+          // the clicked one included when it sits inside — Ctrl+click on the
+          // row you are on lights it end to end rather than dropping it.
           const carried =
-            bounds && !held.length
+            bounds && !heldRanges.length
               ? [{ r1: bounds.r1, r2: bounds.r2, c1: 0, c2: WHOLE_ROW }]
               : [];
-          return [...held, ...carried, { r1: r, r2: r, c1: 0, c2: WHOLE_ROW }];
-        });
-        setSel({ r, c });
-        setExt(null);
+          const picked = carried.some(inRange)
+            ? carried
+            : [...carried, { r1: r, r2: r, c1: 0, c2: WHOLE_ROW }];
+          setHeldRanges([...heldRanges, ...picked]);
+          setSel({ r, c });
+          setExt(null);
+        }
       } else {
         // A plain click is a fresh start — it drops the scattered selection.
         setHeldRanges([]);
@@ -2281,7 +2305,7 @@ export function SheetGrid({
         setExt(null);
       }
     },
-    [editing, commitEdit, sel, bounds],
+    [editing, commitEdit, sel, bounds, heldRanges],
   );
 
   const onCellMouseEnter = useCallback((r: number, c: number) => {

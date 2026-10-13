@@ -37,7 +37,7 @@ const GROUPS: Group[] = [
       { keys: ["↑", "↓", "←", "→"], label: "Move one cell" },
       { keys: ["Tab"], label: "Next cell · Shift+Tab back" },
       { keys: ["Enter"], label: "Down a row · after a Tab run, back to its first column · on a ▾ cell, opens its list" },
-      { keys: [MOD, "↑↓"], label: "Top / bottom of the block you're in (saved rows or entry rows)" },
+      { keys: [MOD, "↑↓"], label: "Top row / bottom row of the sheet" },
       { keys: [MOD, "←→"], label: "Edge of the data in the row" },
       { keys: ["Home"], label: "First column" },
       { keys: ["End"], label: "Last column" },
