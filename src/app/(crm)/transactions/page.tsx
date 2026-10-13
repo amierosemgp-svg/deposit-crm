@@ -1109,7 +1109,7 @@ export default function TransactionsPage() {
    * apart.
    */
   const leaderMemberships = useStore((s) => s.leaderMemberships);
-  // For a CS desk: every leader in the house, beyond its own company's.
+  // For a CS desk or a leader: every leader in the house, beyond their own company's.
   const transferLeaders = useStore((s) => s.transferLeaders);
 
   const LEADER_SUGGESTIONS = useMemo<SheetSuggestion[]>(

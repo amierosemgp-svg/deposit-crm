@@ -201,9 +201,12 @@ export async function POST(request: Request) {
       : [];
     const accountById = new Map(accounts.map((a) => [a.id, a]));
 
-    // A CS desk may name any leader in the house, but only its own company's
-    // accounts — the ones it can see and answer for.
-    const accountScope = user.role === "cs_agent" ? await transferEntityIds(user) : null;
+    // A CS desk or a leader may name any leader in the house, but only their
+    // own company's accounts — the ones they can see and answer for.
+    const accountScope =
+      user.role === "cs_agent" || user.role === "company_leader"
+        ? await transferEntityIds(user)
+        : null;
     for (const [side, accountId, person] of [
       ["Sending", body.from_account_id, from],
       ["Receiving", body.to_account_id, to],
