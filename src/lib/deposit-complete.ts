@@ -51,6 +51,19 @@ export async function completeManualDeposit(
     throw new Error("completeManualDeposit needs a player and a game");
   }
 
+  // The float pays for the top-up. Silently skipped when the company keeps no
+  // kiosk row for the game — see moveKioskCredit.
+  //
+  // First, before the bank: this is the step that throws when the float is
+  // short, and POST /api/deposits absorbs that throw and commits the row at
+  // "processing". Run after the bank, the bank credit committed with it, and
+  // pressing Complete later credited the bank a second time.
+  await moveKioskCredit(txn, {
+    companyEntityId: row.company_entity_id,
+    gameName: row.selected_game,
+    delta: -row.total_amount,
+  });
+
   /**
    * The bank that took the money goes up by what the player actually paid.
    *
@@ -69,14 +82,6 @@ export async function completeManualDeposit(
       delta: row.deposit_amount,
     });
   }
-
-  // The float pays for the top-up. Silently skipped when the company keeps no
-  // kiosk row for the game — see moveKioskCredit.
-  await moveKioskCredit(txn, {
-    companyEntityId: row.company_entity_id,
-    gameName: row.selected_game,
-    delta: -row.total_amount,
-  });
 
   // Same two rules as the agent's completion path: one canonical spelling per
   // game, and never add a delta on top of a balance the agent has already read
