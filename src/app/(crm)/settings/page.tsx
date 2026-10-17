@@ -627,11 +627,14 @@ function CreateKeyModal({
   const createApiKey = useStore((s) => s.createApiKey);
   const companies = useStore((s) => s.companies)();
   const [label, setLabel] = useState("");
-  const [scope, setScope] = useState("all");
+  // No default: a key reaches every company unless one is picked, so the
+  // choice has to be made on purpose ("Agent bot" went out full-access because
+  // the box started there).
+  const [scope, setScope] = useState("");
   const [ips, setIps] = useState("");
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => { if (open) { setLabel(""); setScope("all"); setIps(""); } }, [open]);
+  useEffect(() => { if (open) { setLabel(""); setScope(""); setIps(""); } }, [open]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -659,10 +662,12 @@ function CreateKeyModal({
             <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. OpenClaw agent — production" required />
           </div>
           <div className="space-y-1.5">
-            <Label>Scope</Label>
+            <Label>
+              Scope <span className="text-rose-600 dark:text-rose-400">*</span>
+            </Label>
             <Select
-              value={scope}
-              onValueChange={(v) => setScope(v ?? "all")}
+              value={scope || null}
+              onValueChange={(v) => setScope(v ?? "")}
               items={[
                 { value: "all", label: "Full access (all companies)" },
                 ...companies.map((c) => ({
@@ -672,7 +677,7 @@ function CreateKeyModal({
               ]}
             >
               <SelectTrigger className="h-9 w-full cursor-pointer">
-                <SelectValue />
+                <SelectValue placeholder="Pick a company" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all" className="cursor-pointer">
@@ -696,7 +701,7 @@ function CreateKeyModal({
           </div>
           <div className="flex justify-end gap-2 pt-1">
             <Button type="button" variant="outline" className="cursor-pointer" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button type="submit" disabled={busy || !label} className="cursor-pointer">
+            <Button type="submit" disabled={busy || !label || !scope} className="cursor-pointer">
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Create key"}
             </Button>
           </div>
