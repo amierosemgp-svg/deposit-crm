@@ -3,18 +3,23 @@ import { z } from "zod";
 import { db } from "@/db";
 import { players } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
+import { inScope, type BotScope } from "@/lib/bot-scope";
 import { loadGameCatalogue, normaliseGameAccounts } from "@/lib/game-name";
 import { botErrorResponse, isFkViolation, jsonError, playerJson } from "@/lib/bot-crud";
 import { recordGameAccountChanges } from "@/lib/game-account-audit";
 
-/** Resolve a player by numeric id or username. */
-async function findPlayer(id: string) {
+/**
+ * Resolve a player by numeric id or username, within the key's casino.
+ * Usernames are unique per casino, not overall, so a scoped key looks the
+ * name up in its own casino rather than taking whichever matches first.
+ */
+async function findPlayer(id: string, auth: BotScope) {
   const numeric = Number(id);
-  const [row] =
+  const rows =
     Number.isInteger(numeric) && numeric > 0
       ? await db.select().from(players).where(eq(players.player_id, numeric))
       : await db.select().from(players).where(eq(players.username, id.toLowerCase()));
-  return row;
+  return rows.find((r) => inScope(auth, r.company_entity_id));
 }
 
 /** GET /api/bot/players/:id  (:id = player_id or username) */
@@ -25,7 +30,7 @@ export async function GET(
   const auth = await requireBotKey(request);
   if (!auth.ok) return auth.response;
   const { id } = await params;
-  const row = await findPlayer(id);
+  const row = await findPlayer(id, auth);
   if (!row) return jsonError("Player not found", 404);
   return Response.json({ player: playerJson(row) });
 }
@@ -54,7 +59,7 @@ export async function PATCH(
   const auth = await requireBotKey(request);
   if (!auth.ok) return auth.response;
   const { id } = await params;
-  const row = await findPlayer(id);
+  const row = await findPlayer(id, auth);
   if (!row) return jsonError("Player not found", 404);
 
   const parsed = patchSchema.safeParse(await request.json().catch(() => null));
@@ -62,6 +67,10 @@ export async function PATCH(
     return jsonError(parsed.error.issues[0]?.message ?? "Invalid payload");
   }
   const patch = { ...parsed.data };
+  // A scoped key can't hand its player to another casino.
+  if (patch.company_entity_id !== undefined && !inScope(auth, patch.company_entity_id)) {
+    return jsonError(`Entity ${patch.company_entity_id} is outside this key's casino`, 403);
+  }
   if (patch.telegram_username && !patch.telegram_username.startsWith("@")) {
     patch.telegram_username = `@${patch.telegram_username}`;
   }
@@ -110,7 +119,7 @@ export async function DELETE(
   const auth = await requireBotKey(request);
   if (!auth.ok) return auth.response;
   const { id } = await params;
-  const row = await findPlayer(id);
+  const row = await findPlayer(id, auth);
   if (!row) return jsonError("Player not found", 404);
 
   try {

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { bankAccounts, players, transactions, withdrawals } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
+import { inScope, playerInScope } from "@/lib/bot-scope";
 import { BotError, botErrorResponse, jsonError, withdrawalJson } from "@/lib/bot-crud";
 import { paysWithdrawals } from "@/lib/types";
 
@@ -34,7 +35,9 @@ export async function POST(
         .from(withdrawals)
         .where(eq(withdrawals.withdrawal_id, withdrawalId))
         .for("update");
-      if (!row) throw new BotError(404, "Withdrawal not found");
+      if (!row || !(await playerInScope(auth, row.player_id))) {
+        throw new BotError(404, "Withdrawal not found");
+      }
       if (row.status !== "credits_pulled") {
         throw new BotError(409, `Withdrawal is "${row.status}", pull credits first`);
       }
@@ -50,7 +53,9 @@ export async function POST(
           .from(bankAccounts)
           .where(eq(bankAccounts.account_id, body.paid_from_account_id))
           .for("update");
-        if (!account) throw new BotError(404, "Payout account not found");
+        if (!account || !inScope(auth, account.entity_id)) {
+          throw new BotError(404, "Payout account not found");
+        }
         // A hybrid account pays out too — asking the question rather than
         // comparing to a literal is why paysWithdrawals exists.
         if (!paysWithdrawals(account.role)) {

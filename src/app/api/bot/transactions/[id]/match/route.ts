@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { deposits, transactions } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
+import { inScope } from "@/lib/bot-scope";
 import { depositToBotJson, parseBotDate } from "@/lib/bot-transactions";
 
 const matchSchema = z.object({
@@ -35,7 +36,8 @@ export async function PATCH(
     ? await db.select().from(deposits).where(eq(deposits.deposit_id, numeric))
     : await db.select().from(deposits).where(eq(deposits.external_id, id));
 
-  if (!row) {
+  // Another casino's deposit is "not found" to a casino-scoped key.
+  if (!row || !inScope(auth, row.company_entity_id)) {
     return Response.json({ error: "Transaction not found" }, { status: 404 });
   }
   // A manual deposit is a human's to drive: CS approves, processes and

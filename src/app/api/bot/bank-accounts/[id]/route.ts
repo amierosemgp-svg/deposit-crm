@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { bankAccounts } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
+import { accountInScope, inScope } from "@/lib/bot-scope";
 import { bankAccountJson, isFkViolation, jsonError } from "@/lib/bot-crud";
 
 /** GET /api/bot/bank-accounts/:id */
@@ -17,7 +18,7 @@ export async function GET(
     .select()
     .from(bankAccounts)
     .where(eq(bankAccounts.account_id, Number(id)));
-  if (!row) return jsonError("Bank account not found", 404);
+  if (!row || !inScope(auth, row.entity_id)) return jsonError("Bank account not found", 404);
   return Response.json({ bank_account: bankAccountJson(row) });
 }
 
@@ -55,6 +56,10 @@ export async function PATCH(
     );
   }
 
+  if (!(await accountInScope(auth, Number(id)))) {
+    return jsonError("Bank account not found", 404);
+  }
+
   const [updated] = await db
     .update(bankAccounts)
     .set(parsed.data)
@@ -78,7 +83,7 @@ export async function DELETE(
     .select()
     .from(bankAccounts)
     .where(eq(bankAccounts.account_id, accountId));
-  if (!row) return jsonError("Bank account not found", 404);
+  if (!row || !inScope(auth, row.entity_id)) return jsonError("Bank account not found", 404);
   if (row.current_balance > 0) {
     return jsonError("Transfer the balance out before deleting this account", 422);
   }

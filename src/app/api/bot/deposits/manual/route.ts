@@ -2,6 +2,7 @@ import { and, desc, eq, inArray, or, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { deposits } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
+import { scopeTo } from "@/lib/bot-scope";
 import { depositToBotJson, playerGameInfoMap } from "@/lib/bot-transactions";
 import { jsonError } from "@/lib/bot-crud";
 
@@ -58,6 +59,8 @@ export async function GET(request: Request) {
   const filters: SQL[] = [
     or(eq(deposits.source, "manual"), eq(deposits.skip_bot, true))!,
   ];
+  const scope = scopeTo(auth, deposits.company_entity_id);
+  if (scope) filters.push(scope);
 
   if (playerId) {
     const id = Number(playerId);

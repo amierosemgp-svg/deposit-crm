@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { gameCredits, gameTransfers, players, transactions } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
+import { playerScope } from "@/lib/bot-scope";
 import { playerGameInfoMap } from "@/lib/bot-transactions";
 import { BotError, botErrorResponse, gameTransferJson, jsonError } from "@/lib/bot-crud";
 
@@ -26,6 +27,8 @@ export async function GET(request: Request) {
   const offset = Number(url.searchParams.get("offset") ?? 0);
 
   const filters: SQL[] = [];
+  const scope = playerScope(auth, gameTransfers.player_id);
+  if (scope) filters.push(scope);
   if (playerId) filters.push(eq(gameTransfers.player_id, Number(playerId)));
   if (statusParam) {
     const wanted = statusParam
@@ -87,7 +90,10 @@ export async function POST(request: Request) {
         .select()
         .from(players)
         .where(eq(players.player_id, body.player_id));
-      if (!player) throw new BotError(404, "Player not found");
+      // Another casino's player is "not found" to a casino-scoped key.
+      if (!player || (auth.companyId != null && player.company_entity_id !== auth.companyId)) {
+        throw new BotError(404, "Player not found");
+      }
 
       const [fromCredit] = await txn
         .select()

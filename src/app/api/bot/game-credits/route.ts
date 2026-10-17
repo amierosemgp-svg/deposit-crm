@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { gameCredits, players, transactions } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
+import { playerInScope, playerScope } from "@/lib/bot-scope";
 import { gameCreditJson, jsonError } from "@/lib/bot-crud";
 import { canonicalise } from "@/lib/game-name";
 import { CREDIT_CONFLICT_TARGET, creditWhere, resolveGameLogin } from "@/lib/game-credits";
@@ -18,6 +19,8 @@ export async function GET(request: Request) {
   const gameUsername = url.searchParams.get("game_username");
 
   const filters: SQL[] = [];
+  const scope = playerScope(auth, gameCredits.player_id);
+  if (scope) filters.push(scope);
   if (playerId) filters.push(eq(gameCredits.player_id, Number(playerId)));
   if (gameName) filters.push(eq(gameCredits.game_name, gameName));
   if (gameUsername !== null)
@@ -59,7 +62,9 @@ export async function POST(request: Request) {
     .select()
     .from(players)
     .where(eq(players.player_id, body.player_id));
-  if (!player) return jsonError("Player not found", 404);
+  if (!player || (auth.companyId != null && player.company_entity_id !== auth.companyId)) {
+    return jsonError("Player not found", 404);
+  }
 
   // The name decides the row. Posting "918kiss" where the CRM holds "918Kiss"
   // used to open a second balance for the same real account and split the
@@ -122,6 +127,7 @@ export async function DELETE(request: Request) {
   const parsed = deleteSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return jsonError("Provide player_id and game_name");
   const { player_id } = parsed.data;
+  if (!(await playerInScope(auth, player_id))) return jsonError("Player not found", 404);
   const game_name = await canonicalise(parsed.data.game_name, db);
 
   const [row] = await db

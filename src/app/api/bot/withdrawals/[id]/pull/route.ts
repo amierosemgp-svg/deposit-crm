@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { gameCredits, players, transactions, withdrawals } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
+import { playerInScope } from "@/lib/bot-scope";
 import { creditWhere, resolveGameLogin } from "@/lib/game-credits";
 import { moveKioskCredit } from "@/lib/kiosk-credit";
 import { BotError, botErrorResponse, jsonError, withdrawalJson } from "@/lib/bot-crud";
@@ -9,7 +10,8 @@ import { BotError, botErrorResponse, jsonError, withdrawalJson } from "@/lib/bot
 /**
  * POST /api/bot/withdrawals/:id/pull — atomically deducts the player's game
  * balance (up to the requested amount) and moves the withdrawal to
- * credits_pulled. Same logic as the internal route, system-scoped.
+ * credits_pulled. Same logic as the internal route; a casino-scoped key only
+ * reaches its own casino's withdrawals.
  */
 export async function POST(
   request: Request,
@@ -34,7 +36,9 @@ export async function POST(
         .from(withdrawals)
         .where(eq(withdrawals.withdrawal_id, withdrawalId))
         .for("update");
-      if (!row) throw new BotError(404, "Withdrawal not found");
+      if (!row || !(await playerInScope(auth, row.player_id))) {
+        throw new BotError(404, "Withdrawal not found");
+      }
       if (row.status !== "requested") {
         throw new BotError(409, `Withdrawal is "${row.status}", expected requested`);
       }

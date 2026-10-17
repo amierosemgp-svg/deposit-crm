@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { bankAccounts, bankTransfers, transactions } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
+import { inScope, transferScope } from "@/lib/bot-scope";
 import { getSettingNumber, transferAllowed } from "@/lib/api-helpers";
 import { BotError, botErrorResponse, bankTransferJson, jsonError } from "@/lib/bot-crud";
 
@@ -27,6 +28,9 @@ export async function GET(request: Request) {
 
   // Manual (skip-agent) transfers are never surfaced to the agent.
   const filters: SQL[] = [eq(bankTransfers.skip_bot, false)];
+  // A casino-scoped key sees transfers in or out of its own accounts only.
+  const scope = transferScope(auth, bankTransfers.from_account_id, bankTransfers.to_account_id);
+  if (scope) filters.push(scope);
   if (statusParam) {
     const wanted = statusParam
       .split(",")
@@ -100,7 +104,10 @@ export async function POST(request: Request) {
         .for("update");
       const from = accounts.find((a) => a.account_id === body.from_account_id);
       const to = accounts.find((a) => a.account_id === body.to_account_id);
-      if (!from || !to) throw new BotError(404, "Account not found");
+      // A casino-scoped key can only send from its own casino's account.
+      if (!from || !to || !inScope(auth, from.entity_id)) {
+        throw new BotError(404, "Account not found");
+      }
       if (from.status !== "active" || to.status !== "active") {
         throw new BotError(422, "Both accounts must be active");
       }

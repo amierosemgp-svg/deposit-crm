@@ -88,7 +88,11 @@ export function parseBotDate(date?: string, extractedAt?: string): BotDate {
 }
 
 /** Try to identify the player from the bank description (e.g. "MBB CT- TAN KIEN HUAT *Fund Transfer"). */
-export async function matchPlayerByDescription(description?: string) {
+/** `companyEntityId` limits the match to one casino's players (a scoped key). */
+export async function matchPlayerByDescription(
+  description?: string,
+  companyEntityId: number | null = null,
+) {
   if (!description) return null;
   const upper = description.toUpperCase();
   const all = await db
@@ -98,13 +102,21 @@ export async function matchPlayerByDescription(description?: string) {
       full_name: players.full_name,
       company_entity_id: players.company_entity_id,
     })
-    .from(players);
+    .from(players)
+    .where(
+      companyEntityId == null
+        ? undefined
+        : eq(players.company_entity_id, companyEntityId),
+    );
   return (
     all.find((p) => upper.includes(p.full_name.toUpperCase())) ?? null
   );
 }
 
-export async function findPlayerByTelegram(telegram?: string) {
+export async function findPlayerByTelegram(
+  telegram?: string,
+  companyEntityId: number | null = null,
+) {
   if (!telegram) return null;
   const handle = telegram.startsWith("@") ? telegram : `@${telegram}`;
   const [p] = await db
@@ -115,17 +127,30 @@ export async function findPlayerByTelegram(telegram?: string) {
       company_entity_id: players.company_entity_id,
     })
     .from(players)
-    .where(ilike(players.telegram_username, handle));
+    .where(
+      and(
+        ilike(players.telegram_username, handle),
+        companyEntityId == null
+          ? undefined
+          : eq(players.company_entity_id, companyEntityId),
+      ),
+    );
   return p ?? null;
 }
 
 /** Resolve which company bank account received the money. */
-export async function resolveReceivingAccount(input: BotTransactionInput) {
+/** `scopeCompanyId` (a casino-scoped key) keeps the lookup to that casino's accounts. */
+export async function resolveReceivingAccount(
+  input: BotTransactionInput,
+  scopeCompanyId: number | null = null,
+) {
   if (input.account_number) {
     const normalized = input.account_number.replace(/\s+/g, "");
     const all = await db.select().from(bankAccounts);
     const byNumber = all.find(
-      (a) => a.account_number.replace(/\s+/g, "") === normalized,
+      (a) =>
+        a.account_number.replace(/\s+/g, "") === normalized &&
+        (scopeCompanyId == null || a.entity_id === scopeCompanyId),
     );
     if (byNumber) return byNumber;
   }

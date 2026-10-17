@@ -2,11 +2,13 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { bankAccounts, bankTransfers, transactions } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
+import { accountInScope } from "@/lib/bot-scope";
 import { BotError, botErrorResponse, bankTransferJson, jsonError } from "@/lib/bot-crud";
 
 /**
  * POST /api/bot/transfers/:id/confirm — confirms receipt and credits the
- * recipient account. Agent acts system-wide, so no recipient-ownership check.
+ * recipient account. A full-access key may confirm any; a casino-scoped key
+ * only one coming into its casino.
  */
 export async function POST(
   request: Request,
@@ -24,7 +26,11 @@ export async function POST(
         .from(bankTransfers)
         .where(eq(bankTransfers.transfer_id, transferId))
         .for("update");
-      if (!t) throw new BotError(404, "Transfer not found");
+      // Confirming receipt is the recipient's call: a casino-scoped key may
+      // confirm only transfers into its own casino's account.
+      if (!t || !(await accountInScope(auth, t.to_account_id))) {
+        throw new BotError(404, "Transfer not found");
+      }
       if (t.status !== "pending_confirmation") {
         throw new BotError(409, `Transfer is already ${t.status}`);
       }

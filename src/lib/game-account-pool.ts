@@ -116,16 +116,27 @@ export async function assignAccountFromPool(
 }
 
 /** How many unassigned accounts are left, per game. */
-export async function poolStock(): Promise<
-  Array<{ game_name: string; available: number }>
-> {
+export async function poolStock(
+  /** Count only what this casino can draw on: its own shelf plus the shared one. */
+  companyEntityId: number | null = null,
+): Promise<Array<{ game_name: string; available: number }>> {
   const rows = await db
     .select({
       game_name: gameAccountPool.game_name,
       available: sql<number>`count(*)::int`,
     })
     .from(gameAccountPool)
-    .where(eq(gameAccountPool.status, "available"))
+    .where(
+      and(
+        eq(gameAccountPool.status, "available"),
+        companyEntityId == null
+          ? undefined
+          : or(
+              eq(gameAccountPool.company_entity_id, companyEntityId),
+              isNull(gameAccountPool.company_entity_id),
+            ),
+      ),
+    )
     .groupBy(gameAccountPool.game_name)
     .orderBy(asc(gameAccountPool.game_name));
   return rows;

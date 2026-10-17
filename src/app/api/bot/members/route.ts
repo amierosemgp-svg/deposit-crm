@@ -1,7 +1,8 @@
-import { eq, ilike, or } from "drizzle-orm";
+import { and, eq, ilike, or } from "drizzle-orm";
 import { db } from "@/db";
 import { players } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
+import { scopeTo } from "@/lib/bot-scope";
 
 /**
  * GET /api/bot/members?telegram_username=@ahmadtan88
@@ -25,26 +26,32 @@ export async function GET(request: Request) {
     );
   }
 
+  // A casino-scoped key only finds its own casino's members.
+  const scope = scopeTo(auth, players.company_entity_id);
+
   let rows;
   if (playerId) {
     rows = await db
       .select()
       .from(players)
-      .where(eq(players.player_id, Number(playerId)));
+      .where(and(eq(players.player_id, Number(playerId)), scope));
   } else if (telegram) {
     const handle = telegram.startsWith("@") ? telegram : `@${telegram}`;
     rows = await db
       .select()
       .from(players)
-      .where(ilike(players.telegram_username, handle));
+      .where(and(ilike(players.telegram_username, handle), scope));
   } else {
     rows = await db
       .select()
       .from(players)
       .where(
-        or(
-          ilike(players.username, `%${q}%`),
-          ilike(players.full_name, `%${q}%`),
+        and(
+          or(
+            ilike(players.username, `%${q}%`),
+            ilike(players.full_name, `%${q}%`),
+          ),
+          scope,
         ),
       )
       .limit(20);

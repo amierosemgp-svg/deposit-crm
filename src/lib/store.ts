@@ -608,7 +608,12 @@ type Store = {
   }) => Promise<{ ok: boolean; key?: string; error?: string }>;
   updateApiKey: (
     keyId: number,
-    patch: { label?: string; status?: "active" | "inactive"; allowed_ips?: string[] | null },
+    patch: {
+      label?: string;
+      status?: "active" | "inactive";
+      allowed_ips?: string[] | null;
+      company_entity_id?: number | null;
+    },
   ) => Promise<MutationResult>;
   deleteApiKey: (keyId: number) => Promise<MutationResult>;
   addCsAgent: (input: {
