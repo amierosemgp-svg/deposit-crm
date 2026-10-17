@@ -10,6 +10,7 @@ import {
   withdrawals,
 } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
+import { inScope, playerInScope, playerScope, scopeTo, transferScope } from "@/lib/bot-scope";
 import {
   bankTransferJson,
   gameTransferJson,
@@ -152,6 +153,9 @@ export async function GET(request: Request) {
     if (!(statusList && statuses && statuses.length === 0)) {
       // Manual (skip-agent) deposits are never surfaced to the agent.
       const conds: SQL[] = [eq(deposits.skip_bot, false)];
+      // A casino-scoped key works its own casino's queue only.
+      const scope = scopeTo(auth, deposits.company_entity_id);
+      if (scope) conds.push(scope);
       if (statuses) {
         conds.push(
           inArray(
@@ -185,6 +189,8 @@ export async function GET(request: Request) {
     if (!(statusList && valid && valid.length === 0)) {
       // Manual (skip-agent) withdrawals are never surfaced to the agent.
       const conds: SQL[] = [eq(withdrawals.skip_bot, false)];
+      const scope = playerScope(auth, withdrawals.player_id);
+      if (scope) conds.push(scope);
       if (valid) {
         conds.push(
           inArray(
@@ -220,6 +226,12 @@ export async function GET(request: Request) {
     if (!(statusList && valid && valid.length === 0)) {
       // Manual (skip-agent) transfers are never surfaced to the agent.
       const conds: SQL[] = [eq(bankTransfers.skip_bot, false)];
+      const scope = transferScope(
+        auth,
+        bankTransfers.from_account_id,
+        bankTransfers.to_account_id,
+      );
+      if (scope) conds.push(scope);
       if (valid) {
         conds.push(
           inArray(
@@ -255,6 +267,8 @@ export async function GET(request: Request) {
     }
     if (!(statusList && valid && valid.length === 0)) {
       const conds: SQL[] = [];
+      const scope = playerScope(auth, gameTransfers.player_id);
+      if (scope) conds.push(scope);
       if (valid) {
         conds.push(
           inArray(
@@ -363,6 +377,10 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     }
+    // Another casino's player is "not found" to a casino-scoped key.
+    if (!(await playerInScope(auth, parsed.data.player_id))) {
+      return Response.json({ error: "Player not found" }, { status: 404 });
+    }
     const res = await createBotWithdrawal(parsed.data, {
       apiKeyLabel: auth.label,
     });
@@ -414,9 +432,9 @@ export async function POST(request: Request) {
   }
 
   if (input.company_entity_id !== undefined) {
-    if (auth.companyId !== null && input.company_entity_id !== auth.companyId) {
+    if (!inScope(auth, input.company_entity_id)) {
       return Response.json(
-        { error: `Entity ${input.company_entity_id} is outside this key's company scope` },
+        { error: `Entity ${input.company_entity_id} is outside this key's casino` },
         { status: 403 },
       );
     }
@@ -432,12 +450,22 @@ export async function POST(request: Request) {
     }
   }
 
+  // A casino-scoped key's deposit is its casino's: matching and the receiving
+  // account are looked up inside that casino, never in another one.
+  if (auth.companyId != null) input.company_entity_id ??= auth.companyId;
+
   // Idempotency
   if (input.external_id) {
     const [existing] = await db
       .select()
       .from(deposits)
       .where(eq(deposits.external_id, input.external_id));
+    if (existing && !inScope(auth, existing.company_entity_id)) {
+      return Response.json(
+        { error: "external_id is already used by another casino's deposit" },
+        { status: 409 },
+      );
+    }
     if (existing) {
       return Response.json(
         { duplicate: true, transaction: depositToBotJson(existing) },
@@ -447,9 +475,9 @@ export async function POST(request: Request) {
   }
 
   const player =
-    (await findPlayerByTelegram(input.telegram_username)) ??
-    (await matchPlayerByDescription(input.description));
-  const account = await resolveReceivingAccount(input);
+    (await findPlayerByTelegram(input.telegram_username, auth.companyId)) ??
+    (await matchPlayerByDescription(input.description, auth.companyId));
+  const account = await resolveReceivingAccount(input, auth.companyId);
 
   const nowIso = new Date().toISOString();
   const depositDate = parseBotDate(input.date, input.extracted_at);

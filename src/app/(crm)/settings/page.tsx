@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   Ban,
+  Building2,
   Check,
   Copy,
   KeyRound,
@@ -463,6 +464,7 @@ function KeysTab() {
   const [createOpen, setCreateOpen] = useState(false);
   const [newKey, setNewKey] = useState<string | null>(null);
   const [editIps, setEditIps] = useState<ApiKeyRow | null>(null);
+  const [editScope, setEditScope] = useState<ApiKeyRow | null>(null);
 
   useEffect(() => { void fetchApiKeys(); }, [fetchApiKeys]);
 
@@ -541,6 +543,9 @@ function KeysTab() {
                   <td className="px-4 py-3"><StatusBadge status={k.status} /></td>
                   <td className="px-4 py-3">
                     <div className="flex justify-end gap-1.5">
+                      <Button variant="outline" size="sm" className="cursor-pointer gap-1" onClick={() => setEditScope(k)}>
+                        <Building2 className="h-3.5 w-3.5" /> Scope
+                      </Button>
                       <Button variant="outline" size="sm" className="cursor-pointer gap-1" onClick={() => setEditIps(k)}>
                         <Shield className="h-3.5 w-3.5" /> IPs
                       </Button>
@@ -562,7 +567,100 @@ function KeysTab() {
       <CreateKeyModal open={createOpen} onOpenChange={setCreateOpen} onCreated={(key) => setNewKey(key)} />
       <RevealKeyModal keyValue={newKey} onClose={() => setNewKey(null)} />
       <EditIpsModal apiKey={editIps} onClose={() => setEditIps(null)} />
+      <EditScopeModal apiKey={editScope} onClose={() => setEditScope(null)} />
     </div>
+  );
+}
+
+/**
+ * The casino a key belongs to: "all" for full access, or a company entity id.
+ * One picker for both creating a key and re-scoping one already handed out.
+ */
+function ScopeSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const companies = useStore((s) => s.companies)();
+  return (
+    <div className="space-y-1.5">
+      <Label>
+        Scope <span className="text-rose-600 dark:text-rose-400">*</span>
+      </Label>
+      <Select
+        value={value || null}
+        onValueChange={(v) => onChange(v ?? "")}
+        items={[
+          { value: "all", label: "Full access (all casinos)" },
+          ...companies.map((c) => ({
+            value: String(c.company_id),
+            label: c.company_name,
+          })),
+        ]}
+      >
+        <SelectTrigger className="h-9 w-full cursor-pointer">
+          <SelectValue placeholder="Pick a casino" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all" className="cursor-pointer">
+            Full access (all casinos)
+          </SelectItem>
+          {companies.map((c) => (
+            <SelectItem key={c.company_id} value={String(c.company_id)} className="cursor-pointer">
+              {c.company_name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <p className="text-xs text-muted-foreground">
+        A casino scope holds this key to that casino: its players, deposits, withdrawals, game transfers, bank
+        accounts and kiosks. Anything of another casino answers &quot;not found&quot;.
+      </p>
+    </div>
+  );
+}
+
+function EditScopeModal({ apiKey, onClose }: { apiKey: ApiKeyRow | null; onClose: () => void }) {
+  return (
+    <Dialog open={!!apiKey} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-md">
+        {/* Keyed on the key, so the picker starts from that key's scope each time. */}
+        {apiKey && <EditScopeForm key={apiKey.key_id} apiKey={apiKey} onClose={onClose} />}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditScopeForm({ apiKey, onClose }: { apiKey: ApiKeyRow; onClose: () => void }) {
+  const updateApiKey = useStore((s) => s.updateApiKey);
+  const [scope, setScope] = useState(
+    apiKey.company_entity_id != null ? String(apiKey.company_entity_id) : "all",
+  );
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    const r = await updateApiKey(apiKey.key_id, { company_entity_id: scope === "all" ? null : Number(scope) });
+    setBusy(false);
+    if (!r.ok) return toast.error(r.error ?? "Failed to update scope");
+    toast.success("Scope updated");
+    onClose();
+  }
+
+  return (
+    <>
+      <DialogTitle>Key scope</DialogTitle>
+      <DialogDescription>
+        Change which casino <span className="font-medium">{apiKey.label}</span> can reach. The key itself stays the
+        same, so the agent keeps working without a new key.
+      </DialogDescription>
+      <form onSubmit={submit} className="mt-2 space-y-3">
+        <ScopeSelect value={scope} onChange={setScope} />
+        <div className="flex justify-end gap-2 pt-1">
+          <Button type="button" variant="outline" className="cursor-pointer" onClick={onClose}>Cancel</Button>
+          <Button type="submit" disabled={busy || !scope} className="cursor-pointer">
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save scope"}
+          </Button>
+        </div>
+      </form>
+    </>
   );
 }
 
@@ -625,7 +723,6 @@ function CreateKeyModal({
   open, onOpenChange, onCreated,
 }: { open: boolean; onOpenChange: (o: boolean) => void; onCreated: (key: string) => void }) {
   const createApiKey = useStore((s) => s.createApiKey);
-  const companies = useStore((s) => s.companies)();
   const [label, setLabel] = useState("");
   // No default: a key reaches every company unless one is picked, so the
   // choice has to be made on purpose ("Agent bot" went out full-access because
@@ -661,39 +758,7 @@ function CreateKeyModal({
             <Label>Label</Label>
             <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. OpenClaw agent — production" required />
           </div>
-          <div className="space-y-1.5">
-            <Label>
-              Scope <span className="text-rose-600 dark:text-rose-400">*</span>
-            </Label>
-            <Select
-              value={scope || null}
-              onValueChange={(v) => setScope(v ?? "")}
-              items={[
-                { value: "all", label: "Full access (all companies)" },
-                ...companies.map((c) => ({
-                  value: String(c.company_id),
-                  label: c.company_name,
-                })),
-              ]}
-            >
-              <SelectTrigger className="h-9 w-full cursor-pointer">
-                <SelectValue placeholder="Pick a company" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all" className="cursor-pointer">
-                  Full access (all companies)
-                </SelectItem>
-                {companies.map((c) => (
-                  <SelectItem key={c.company_id} value={String(c.company_id)} className="cursor-pointer">
-                    {c.company_name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">
-              A company scope limits this key to that company&apos;s bank accounts &amp; kiosks, and prefixes the key with its leader code.
-            </p>
-          </div>
+          <ScopeSelect value={scope} onChange={setScope} />
           <div className="space-y-1.5">
             <Label>IP allowlist <span className="text-muted-foreground">(optional)</span></Label>
             <Input value={ips} onChange={(e) => setIps(e.target.value)} placeholder="comma-separated, e.g. 74.220.52.20" />

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, or, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { gameAccountPool } from "@/db/schema";
@@ -33,7 +33,7 @@ export async function GET(request: Request) {
 
   const url = new URL(request.url);
   if (url.searchParams.get("stock")) {
-    return Response.json({ stock: await poolStock() });
+    return Response.json({ stock: await poolStock(auth.companyId) });
   }
 
   const gameName = url.searchParams.get("game_name");
@@ -42,6 +42,16 @@ export async function GET(request: Request) {
   const offset = Number(url.searchParams.get("offset") ?? 0);
 
   const filters: SQL[] = [];
+  // A casino-scoped key sees its own shelf and the shared one (no casino) —
+  // the same accounts auto-assign would hand its players.
+  if (auth.companyId != null) {
+    filters.push(
+      or(
+        eq(gameAccountPool.company_entity_id, auth.companyId),
+        isNull(gameAccountPool.company_entity_id),
+      )!,
+    );
+  }
   if (gameName) filters.push(eq(gameAccountPool.game_name, gameName));
   if (statusParam) {
     const wanted = statusParam
@@ -113,7 +123,7 @@ export async function POST(request: Request) {
     );
     if (bad) {
       return jsonError(
-        `Entity ${bad.company_entity_id} is outside this key's company scope`,
+        `Entity ${bad.company_entity_id} is outside this key's casino`,
         403,
       );
     }

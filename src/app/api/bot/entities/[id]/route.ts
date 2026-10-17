@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { bankAccounts, entities, players, users } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
+import { fullAccessOnly } from "@/lib/bot-scope";
 import { entityJson, isFkViolation, jsonError } from "@/lib/bot-crud";
 
 /** GET /api/bot/entities/:id */
@@ -17,7 +18,11 @@ export async function GET(
     .select()
     .from(entities)
     .where(eq(entities.entity_id, Number(id)));
-  if (!row) return jsonError("Entity not found", 404);
+  const visible =
+    auth.companyId == null ||
+    row?.entity_id === auth.companyId ||
+    row?.parent_entity_id === auth.companyId;
+  if (!row || !visible) return jsonError("Entity not found", 404);
   return Response.json({ entity: entityJson(row) });
 }
 
@@ -33,6 +38,8 @@ export async function PATCH(
 ) {
   const auth = await requireBotKey(request);
   if (!auth.ok) return auth.response;
+  const denied = fullAccessOnly(auth);
+  if (denied) return denied;
   const { id } = await params;
   const parsed = patchSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return jsonError("Invalid payload");
@@ -56,6 +63,8 @@ export async function DELETE(
 ) {
   const auth = await requireBotKey(request);
   if (!auth.ok) return auth.response;
+  const denied = fullAccessOnly(auth);
+  if (denied) return denied;
   const { id } = await params;
   const entityId = Number(id);
 

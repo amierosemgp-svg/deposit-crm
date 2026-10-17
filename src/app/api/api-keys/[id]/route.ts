@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { apiKeys } from "@/db/schema";
+import { apiKeys, entities } from "@/db/schema";
 import { AuthError, authErrorResponse, requireUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import { describeChanges, diffFields, logActivity } from "@/lib/activity-log";
@@ -16,9 +16,12 @@ const patchSchema = z.object({
   label: z.string().min(2).max(80).optional(),
   status: z.enum(["active", "inactive"]).optional(), // inactive = revoked
   allowed_ips: z.array(z.string()).nullable().optional(),
+  // Re-scope a key already handed out: a casino (company entity) or null for
+  // full access. Saves re-issuing the key to the bot team.
+  company_entity_id: z.number().int().positive().nullable().optional(),
 });
 
-/** PATCH /api/api-keys/:id — rename, revoke/reactivate, set IP allowlist. */
+/** PATCH /api/api-keys/:id — rename, revoke/reactivate, set IP allowlist, set casino scope. */
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -30,6 +33,16 @@ export async function PATCH(
     const parsed = patchSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return jsonError("Invalid payload");
     const patch = parsed.data;
+
+    if (patch.company_entity_id != null) {
+      const [company] = await db
+        .select({ type: entities.entity_type })
+        .from(entities)
+        .where(eq(entities.entity_id, patch.company_entity_id));
+      if (!company || company.type !== "company") {
+        return jsonError("Scope must be a casino (company entity)");
+      }
+    }
 
     const [before] = await db
       .select()
@@ -43,6 +56,9 @@ export async function PATCH(
         ...(patch.status !== undefined ? { status: patch.status } : {}),
         ...(patch.allowed_ips !== undefined
           ? { allowed_ips: patch.allowed_ips?.length ? patch.allowed_ips : null }
+          : {}),
+        ...(patch.company_entity_id !== undefined
+          ? { company_entity_id: patch.company_entity_id }
           : {}),
       })
       .where(eq(apiKeys.key_id, Number(id)))

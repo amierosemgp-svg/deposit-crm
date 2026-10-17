@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { entities, players } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
+import { inScope } from "@/lib/bot-scope";
 import { findOrCreatePerson } from "@/lib/people";
 import { loadGameCatalogue, normaliseGameAccounts } from "@/lib/game-name";
 import { botErrorResponse, isUniqueViolation, jsonError, playerJson } from "@/lib/bot-crud";
@@ -25,7 +26,13 @@ export async function GET(request: Request) {
   const offset = Math.max(Number(url.searchParams.get("offset") ?? 0), 0);
 
   const filters: SQL[] = [];
-  if (companyId) filters.push(eq(players.company_entity_id, Number(companyId)));
+  // A casino-scoped key only ever sees its own casino's players; the
+  // company_entity_id param can narrow a full-access key, never widen a scoped one.
+  if (auth.companyId != null) {
+    filters.push(eq(players.company_entity_id, auth.companyId));
+  } else if (companyId) {
+    filters.push(eq(players.company_entity_id, Number(companyId)));
+  }
   if (status === "active" || status === "suspended" || status === "archived") {
     filters.push(eq(players.status, status));
   } else {
@@ -89,6 +96,9 @@ export async function POST(request: Request) {
     return jsonError(parsed.error.issues[0]?.message ?? "Invalid payload");
   }
   const body = parsed.data;
+  if (!inScope(auth, body.company_entity_id)) {
+    return jsonError(`Entity ${body.company_entity_id} is outside this key's casino`, 403);
+  }
 
   const [existing] = await db
     .select()

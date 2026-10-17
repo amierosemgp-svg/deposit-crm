@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { gameAccountPool } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
+import { inScope } from "@/lib/bot-scope";
 import { jsonError } from "@/lib/bot-crud";
 
 const patchSchema = z.object({
@@ -40,7 +41,9 @@ export async function PATCH(
     .select()
     .from(gameAccountPool)
     .where(eq(gameAccountPool.pool_id, poolId));
-  if (!row) return jsonError("Pool account not found", 404);
+  if (!row || !inScope(auth, row.company_entity_id)) {
+    return jsonError("Pool account not found", 404);
+  }
 
   if (row.status === "assigned") {
     return jsonError(

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { entities } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
+import { fullAccessOnly } from "@/lib/bot-scope";
 import { entityJson, jsonError, VALID_PARENT } from "@/lib/bot-crud";
 
 /** GET /api/bot/entities?type=&parent_entity_id= — full hierarchy list. */
@@ -15,6 +16,11 @@ export async function GET(request: Request) {
   const parent = url.searchParams.get("parent_entity_id");
 
   let rows = await db.select().from(entities);
+  // A casino-scoped key sees its casino and the CS desks under it, nothing else.
+  if (auth.companyId != null) {
+    const own = auth.companyId;
+    rows = rows.filter((e) => e.entity_id === own || e.parent_entity_id === own);
+  }
   if (type) rows = rows.filter((e) => e.entity_type === type);
   if (parent) rows = rows.filter((e) => e.parent_entity_id === Number(parent));
 
@@ -31,6 +37,8 @@ const createSchema = z.object({
 export async function POST(request: Request) {
   const auth = await requireBotKey(request);
   if (!auth.ok) return auth.response;
+  const denied = fullAccessOnly(auth);
+  if (denied) return denied;
 
   const parsed = createSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) {

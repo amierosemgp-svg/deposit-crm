@@ -1,6 +1,6 @@
 /* Shared helpers for the bot CRUD endpoints (/api/bot/*).
- * Agent requests authenticate with an API key and act system-wide — there is no
- * per-request role scope, unlike the human/session API. */
+ * Agent requests authenticate with an API key. A full-access key acts
+ * system-wide; a casino-scoped key is held to its casino by lib/bot-scope. */
 import { DuplicateGameAccountError } from "./game-name";
 import type {
   bankAccounts,

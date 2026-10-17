@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { bankAccounts, entities } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
+import { inScope } from "@/lib/bot-scope";
 import { bankAccountJson, jsonError } from "@/lib/bot-crud";
 
 /** GET /api/bot/bank-accounts?entity_id=&role=&status= */
@@ -68,6 +69,10 @@ export async function POST(request: Request) {
     return jsonError(parsed.error.issues[0]?.message ?? "Invalid payload");
   }
   const body = parsed.data;
+  // A casino-scoped key adds accounts to its own casino only.
+  if (!inScope(auth, body.entity_id)) {
+    return jsonError(`Entity ${body.entity_id} is outside this key's casino`, 403);
+  }
 
   const [entity] = await db
     .select()

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { withdrawals } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
+import { playerInScope } from "@/lib/bot-scope";
 import { isFkViolation, jsonError, withdrawalJson } from "@/lib/bot-crud";
 
 /** GET /api/bot/withdrawals/:id */
@@ -17,7 +18,9 @@ export async function GET(
     .select()
     .from(withdrawals)
     .where(eq(withdrawals.withdrawal_id, Number(id)));
-  if (!row) return jsonError("Withdrawal not found", 404);
+  if (!row || !(await playerInScope(auth, row.player_id))) {
+    return jsonError("Withdrawal not found", 404);
+  }
   return Response.json({ withdrawal: withdrawalJson(row) });
 }
 
@@ -46,7 +49,9 @@ export async function PATCH(
     .select()
     .from(withdrawals)
     .where(eq(withdrawals.withdrawal_id, Number(id)));
-  if (!row) return jsonError("Withdrawal not found", 404);
+  if (!row || !(await playerInScope(auth, row.player_id))) {
+    return jsonError("Withdrawal not found", 404);
+  }
   if (row.status !== "requested") {
     return jsonError(
       `Withdrawal is "${row.status}"; only "requested" withdrawals can be edited`,
@@ -79,7 +84,9 @@ export async function DELETE(
     .select()
     .from(withdrawals)
     .where(eq(withdrawals.withdrawal_id, withdrawalId));
-  if (!row) return jsonError("Withdrawal not found", 404);
+  if (!row || !(await playerInScope(auth, row.player_id))) {
+    return jsonError("Withdrawal not found", 404);
+  }
   if (row.status !== "requested") {
     return jsonError(
       `Withdrawal is "${row.status}"; credits already moved — cannot delete`,

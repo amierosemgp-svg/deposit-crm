@@ -9,6 +9,7 @@ import {
   transactions,
 } from "@/db/schema";
 import { requireBotKey } from "@/lib/bot-auth";
+import { playerInScope } from "@/lib/bot-scope";
 import { InsufficientKioskCreditError, moveKioskCredit } from "@/lib/kiosk-credit";
 import {
   creditRecommendBonus,
@@ -85,7 +86,9 @@ export async function PATCH(
         .from(gameTransfers)
         .where(eq(gameTransfers.transfer_id, transferId))
         .for("update");
-      if (!row) throw new BotError(404, "Game transfer not found");
+      if (!row || !(await playerInScope(auth, row.player_id))) {
+        throw new BotError(404, "Game transfer not found");
+      }
       if (!(OPEN_STATUSES as readonly string[]).includes(row.status)) {
         throw new BotError(
           409,
