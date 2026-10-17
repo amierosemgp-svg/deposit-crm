@@ -52,7 +52,13 @@ export async function GET(request: Request) {
     // Which accounts this user may see at all.
     const visible = await visibleEntityIds(user);
     if (visible !== null && visible.length === 0) return Response.json({ accounts: [] });
-    const accountWhere: SQL[] = [sql`a.status = 'active'`];
+    // Active accounts, plus any account that moved money in the period: one
+    // switched off mid-day still took that day's deposits, and dropping it
+    // left the cards short of what the sheet shows. Both queries below define
+    // `movement`, so the subquery resolves in each.
+    const accountWhere: SQL[] = [
+      sql`(a.status = 'active' OR a.account_id IN (SELECT account_id FROM movement))`,
+    ];
     if (visible !== null) accountWhere.push(inList(sql`a.entity_id`, visible));
     // A casino's view carries its leader's own accounts too: that is the
     // company the casino's float is topped up from and swept back to, and the
