@@ -11,7 +11,7 @@ import { all, businessDay, inList } from "@/lib/report-sql";
  * Six things move a bank balance, and the cards used to show none of them:
  *
  *   in    deposits received, leader transfers received, bank transfers received
- *   out   withdrawals paid, expenses paid, Clear Bank taken out,
+ *   out   withdrawals paid, expenses paid, salaries paid, Clear Bank taken out,
  *         leader transfers sent, bank transfers sent
  *
  * Both cards previously showed `current_balance` filtered by the account's
@@ -124,6 +124,13 @@ export async function GET(request: Request) {
         FROM expenses e
        WHERE e.paid_from_account_id IS NOT NULL
          AND ${window(sql`e.created_at`)}
+
+      UNION ALL
+      SELECT s.paid_from_account_id, -s.net_amount, 'salary', 0
+        FROM salary_payments s
+       WHERE s.status = 'paid'
+         AND s.paid_from_account_id IS NOT NULL
+         AND ${window(sql`s.paid_at`)}
 
       UNION ALL
       SELECT c.account_id, -c.amount, 'clear_bank', 0

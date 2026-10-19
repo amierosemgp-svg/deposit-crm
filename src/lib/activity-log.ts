@@ -16,6 +16,8 @@ export type ActivityCategory =
   | "expense"
   /** A saved deposit or withdrawal corrected after the fact. */
   | "transaction"
+  /** Salary tiers, staff pay, adjustments and staff penalties. */
+  | "payroll"
   | "other";
 
 export type FieldChange = { field: string; from: unknown; to: unknown };

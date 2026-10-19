@@ -1,11 +1,13 @@
 import { destroySession, getSession } from "@/lib/auth";
 import { logActivity, requestContext } from "@/lib/activity-log";
+import { closeWorkSession, isClocked } from "@/lib/work-sessions";
 
 export async function POST(request: Request) {
   // Read the session before it's destroyed — afterwards there's no way to say
   // who signed out.
   const session = await getSession();
   await destroySession();
+  if (session && isClocked(session.role)) await closeWorkSession(session.user_id, "logout");
   if (session) {
     await logActivity({
       category: "auth",

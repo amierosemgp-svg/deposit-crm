@@ -170,6 +170,17 @@ export async function GET(request: Request) {
                           WHERE ${businessDay(sql`e2.expense_date`)} > s.day
                             AND e2.paid_from_account_id IN
                                 (SELECT ba.account_id FROM bank_accounts ba WHERE ${bankScope})), 0)
+             -- Salaries likewise: paid after this day took money out, and a
+             -- reversal after this day put it back.
+             + coalesce((SELECT sum(sp2.net_amount)::float8 FROM salary_payments sp2
+                          WHERE ${businessDay(sql`sp2.paid_at`)} > s.day
+                            AND sp2.paid_from_account_id IN
+                                (SELECT ba.account_id FROM bank_accounts ba WHERE ${bankScope})), 0)
+             - coalesce((SELECT sum(sp3.net_amount)::float8 FROM salary_payments sp3
+                          WHERE sp3.status = 'reversed'
+                            AND ${businessDay(sql`sp3.reversed_at`)} > s.day
+                            AND sp3.paid_from_account_id IN
+                                (SELECT ba.account_id FROM bank_accounts ba WHERE ${bankScope})), 0)
                                                                     AS bank_balance
         FROM days s
         LEFT JOIN dep ON dep.day = s.day

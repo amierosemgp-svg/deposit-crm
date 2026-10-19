@@ -70,6 +70,41 @@ recorded from the Bank Accounts page (any write user in that company). It
 debits the account on the spot; leaders/admins can reverse one. An existing
 database needs `migrations/2026-09-05b-bank-cash-outs.sql`.
 
+## Staff pay (Salary and Staff Penalty tabs)
+
+Salary used to be an expense category with a typed amount. It is now worked out.
+
+**The clock.** CS agents are on it, nobody else. Signing in opens a
+`work_sessions` row, signing out closes it, and five minutes without input
+(key, click, scroll, mouse) locks the page and closes it at the last input.
+The password unlocks it and opens the next one. Open tabs share "last input"
+through localStorage, so working in one tab keeps the others alive. Hours =
+sum of `last_active_at − started_at`; a session over midnight is split, and
+any day with time on it counts as a day worked (business time, UTC+8).
+
+**Tiers.** Each casino has one ladder (`salary_tiers`): a rung is reached when
+both its hours and its days are met, and the highest reached wins. A rung pays
+per month or per hour. What it pays can differ per CS (`staff_tier_rates`;
+blank = the rung's default). Any write role edits the ladder; nobody sets
+their own rate.
+
+**Paying.** Pick the CS and the month; the preview shows hours, days, rung,
+pay and every pending adjustment. Paying (leaders and the admin) claims those
+adjustments, debits the chosen account (or records a leader's cash, admin
+only), and writes a `salary` ledger row. If deductions exceed the pay, it pays
+0 and carries the rest as a `carry` adjustment onto the next salary. One paid
+salary per CS per month; reversing puts the money back and the adjustments
+back to pending.
+
+**Staff penalties.** Credit given by mistake and spent: loss = credited −
+retrieved (bonus included), and the CS bears `staff_penalty_share_pct`
+(default 50) of it. Recording one writes a pending adjustment that the next
+salary takes automatically. Look up a deposit or free credit by ID to fill in
+the CS, the amount credited and the player. Voiding (leaders and the admin)
+only works while it is still pending.
+
+An existing database needs `migrations/2026-10-19-salary-staff-penalty.sql`.
+
 ## Crawl banks (on-demand agent commands)
 
 The agent sweeps the banks on its own cycle. When that is too slow — a player

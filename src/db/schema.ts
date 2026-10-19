@@ -10,8 +10,10 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
   varchar,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 // ---------- Enums ----------
 
@@ -231,6 +233,8 @@ export const auditTypeEnum = pgEnum("audit_type", [
   // An operational cost paid out of a company bank account — bank charges,
   // rent, a subscription. The ledger line behind that balance moving.
   "expense",
+  // A CS salary paid out of a company bank account, or its reversal.
+  "salary",
 ]);
 
 // ---------- Core hierarchy ----------
@@ -1503,6 +1507,273 @@ export const leaderTransfers = pgTable("leader_transfers", {
     .defaultNow(),
 });
 
+// ---------- Staff pay ----------
+
+/**
+ * Why a work session stopped.
+ *   logout   — they signed out
+ *   idle     — five minutes without touching the page; the screen locked
+ *   replaced — they signed in again somewhere else before this one closed
+ */
+export const workSessionEndEnum = pgEnum("work_session_end", ["logout", "idle", "replaced"]);
+
+/**
+ * A stretch of time a CS agent was signed in and using the CRM — the clock
+ * their salary is paid on.
+ *
+ * Nobody clocks in. Signing in opens one, signing out closes it, and five idle
+ * minutes lock the screen and close it at the last moment they touched the
+ * page; unlocking with their password opens the next. So the time counted is
+ * `last_active_at − started_at`, never "until they remembered to clock out".
+ *
+ * `last_active_at` moves on the page's heartbeat, which only fires after real
+ * input (a key, a click, the mouse). A tab left open on the Deposits page
+ * polling for new rows is not work, and does not keep the session alive.
+ *
+ * A browser closed without signing out leaves the row open; its time still
+ * stops at `last_active_at`, and the next sign-in or heartbeat closes it.
+ */
+export const workSessions = pgTable("work_sessions", {
+  session_id: serial("session_id").primaryKey(),
+  user_id: integer("user_id")
+    .notNull()
+    .references(() => users.user_id),
+  started_at: timestamp("started_at", { withTimezone: true, mode: "string" })
+    .notNull()
+    .defaultNow(),
+  last_active_at: timestamp("last_active_at", { withTimezone: true, mode: "string" })
+    .notNull()
+    .defaultNow(),
+  // Null while open.
+  ended_at: timestamp("ended_at", { withTimezone: true, mode: "string" }),
+  end_reason: workSessionEndEnum("end_reason"),
+});
+
+/** A tier's amount is the month's pay, or a rate per hour worked. */
+export const salaryBasisEnum = pgEnum("salary_basis", ["monthly", "hourly"]);
+
+/**
+ * One rung of a casino's salary ladder.
+ *
+ * The ladder is shared by every CS at the casino: reach the hours AND the days
+ * of a rung and that rung is what the month pays. The highest rung reached
+ * wins. What a rung pays can differ per person — `staff_tier_rates` — and
+ * `default_amount` is what it pays anyone without their own figure.
+ *
+ * Retired rungs keep their rows (status inactive): past salaries point at them.
+ */
+export const salaryTiers = pgTable("salary_tiers", {
+  tier_id: serial("tier_id").primaryKey(),
+  company_entity_id: integer("company_entity_id")
+    .notNull()
+    .references(() => entities.entity_id),
+  name: varchar("name", { length: 60 }).notNull(),
+  min_hours: numeric("min_hours", { precision: 7, scale: 2, mode: "number" }).notNull().default(0),
+  min_days: integer("min_days").notNull().default(0),
+  basis: salaryBasisEnum("basis").notNull().default("monthly"),
+  default_amount: numeric("default_amount", { precision: 12, scale: 2, mode: "number" })
+    .notNull()
+    .default(0),
+  status: activeStatusEnum("status").notNull().default("active"),
+  created_by_user_id: integer("created_by_user_id").references(() => users.user_id),
+  created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .notNull()
+    .defaultNow(),
+  updated_at: timestamp("updated_at", { withTimezone: true, mode: "string" })
+    .notNull()
+    .defaultNow(),
+});
+
+/** What one rung pays one person, when it isn't the rung's default. */
+export const staffTierRates = pgTable(
+  "staff_tier_rates",
+  {
+    user_id: integer("user_id")
+      .notNull()
+      .references(() => users.user_id),
+    tier_id: integer("tier_id")
+      .notNull()
+      .references(() => salaryTiers.tier_id),
+    amount: numeric("amount", { precision: 12, scale: 2, mode: "number" }).notNull(),
+    updated_by_user_id: integer("updated_by_user_id").references(() => users.user_id),
+    updated_at: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.user_id, t.tier_id] })],
+);
+
+export const staffPenaltySourceEnum = pgEnum("staff_penalty_source", [
+  "deposit",
+  "free_credit",
+  "game_transfer",
+  "withdrawal",
+  "other",
+]);
+
+export const staffPenaltyStatusEnum = pgEnum("staff_penalty_status", ["active", "void"]);
+
+/**
+ * A CS mistake the house lost money on, and the CS's share of it.
+ *
+ * The case it exists for: a CS approves a deposit on a fake receipt, the game
+ * account is credited, and the player spends it before anyone notices. What
+ * was credited and not taken back is the house's loss; the CS bears
+ * `share_pct` of it (50 by default — the `staff_penalty_share_pct` setting),
+ * and that is deducted from their next salary.
+ *
+ *   loss   = credit_injected − credit_retrieved   (bonus included: it's credit)
+ *   amount = loss × share_pct / 100
+ *
+ * Recording one writes a pending `salary_adjustments` row in the same step;
+ * that row is what the next salary picks up, so nobody has to remember it.
+ * The source (`source_type` + `source_id`) is a pointer for the record, not a
+ * foreign key: a penalty for a mistake the CRM never saw is still a penalty.
+ */
+export const staffPenalties = pgTable("staff_penalties", {
+  penalty_id: serial("penalty_id").primaryKey(),
+  user_id: integer("user_id")
+    .notNull()
+    .references(() => users.user_id),
+  company_entity_id: integer("company_entity_id")
+    .notNull()
+    .references(() => entities.entity_id),
+  source_type: staffPenaltySourceEnum("source_type").notNull(),
+  source_id: integer("source_id"),
+  player_id: integer("player_id").references(() => players.player_id),
+  occurred_at: timestamp("occurred_at", { withTimezone: true, mode: "string" }).notNull(),
+  credit_injected: numeric("credit_injected", { precision: 12, scale: 2, mode: "number" }).notNull(),
+  credit_retrieved: numeric("credit_retrieved", { precision: 12, scale: 2, mode: "number" })
+    .notNull()
+    .default(0),
+  loss_amount: numeric("loss_amount", { precision: 12, scale: 2, mode: "number" }).notNull(),
+  share_pct: numeric("share_pct", { precision: 5, scale: 2, mode: "number" }).notNull(),
+  amount: numeric("amount", { precision: 12, scale: 2, mode: "number" }).notNull(),
+  reason: varchar("reason", { length: 200 }).notNull(),
+  notes: text("notes"),
+  status: staffPenaltyStatusEnum("status").notNull().default("active"),
+  voided_at: timestamp("voided_at", { withTimezone: true, mode: "string" }),
+  voided_by_user_id: integer("voided_by_user_id").references(() => users.user_id),
+  recorded_by_user_id: integer("recorded_by_user_id")
+    .notNull()
+    .references(() => users.user_id),
+  created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .notNull()
+    .defaultNow(),
+});
+
+export const salaryStatusEnum = pgEnum("salary_status", ["paid", "reversed"]);
+
+/**
+ * One month's pay for one CS.
+ *
+ * Every figure is frozen at pay time — hours, days, the rung reached, what it
+ * paid this person — so editing the ladder later never rewrites a payslip.
+ *
+ *   gross = base_amount + adjustments_total
+ *   net   = max(gross, 0)       what left the account
+ *   carried_forward = max(−gross, 0)
+ *
+ * A month whose penalties outrun its pay pays nothing and carries the rest as
+ * a pending `carry` adjustment onto the next salary.
+ *
+ * Paid from one of our bank accounts (debited in the same step) or a leader's
+ * own cash, like an expense. A net of 0 needs neither.
+ */
+export const salaryPayments = pgTable(
+  "salary_payments",
+  {
+    salary_id: serial("salary_id").primaryKey(),
+    user_id: integer("user_id")
+      .notNull()
+      .references(() => users.user_id),
+    company_entity_id: integer("company_entity_id")
+      .notNull()
+      .references(() => entities.entity_id),
+    // "YYYY-MM", business time (UTC+8).
+    period_month: varchar("period_month", { length: 7 }).notNull(),
+    hours_worked: numeric("hours_worked", { precision: 7, scale: 2, mode: "number" }).notNull(),
+    days_worked: integer("days_worked").notNull(),
+    // Null when no rung was reached.
+    tier_id: integer("tier_id").references(() => salaryTiers.tier_id),
+    tier_name: varchar("tier_name", { length: 60 }),
+    tier_basis: salaryBasisEnum("tier_basis"),
+    tier_rate: numeric("tier_rate", { precision: 12, scale: 2, mode: "number" }),
+    base_amount: numeric("base_amount", { precision: 12, scale: 2, mode: "number" }).notNull(),
+    adjustments_total: numeric("adjustments_total", { precision: 12, scale: 2, mode: "number" })
+      .notNull()
+      .default(0),
+    net_amount: numeric("net_amount", { precision: 12, scale: 2, mode: "number" }).notNull(),
+    carried_forward: numeric("carried_forward", { precision: 12, scale: 2, mode: "number" })
+      .notNull()
+      .default(0),
+    paid_from_account_id: integer("paid_from_account_id").references(() => bankAccounts.account_id),
+    paid_from_cash_entity_id: integer("paid_from_cash_entity_id").references(
+      () => entities.entity_id,
+    ),
+    paid_at: timestamp("paid_at", { withTimezone: true, mode: "string" }).notNull().defaultNow(),
+    status: salaryStatusEnum("status").notNull().default("paid"),
+    reversed_at: timestamp("reversed_at", { withTimezone: true, mode: "string" }),
+    reversed_by_user_id: integer("reversed_by_user_id").references(() => users.user_id),
+    notes: text("notes"),
+    recorded_by_user_id: integer("recorded_by_user_id")
+      .notNull()
+      .references(() => users.user_id),
+    created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    // One paid salary per person per month. A reversed one steps aside so the
+    // month can be paid again, correctly.
+    uniqueIndex("salary_payments_user_month_paid_key")
+      .on(t.user_id, t.period_month)
+      .where(sql`status = 'paid'`),
+  ],
+);
+
+export const salaryAdjustmentKindEnum = pgEnum("salary_adjustment_kind", [
+  "bonus",
+  "deduction",
+  "penalty",
+  "carry",
+]);
+
+/**
+ * Money added to or taken off a CS's next salary.
+ *
+ * `amount` is signed: a bonus is positive, everything else negative. Pending
+ * while `salary_id` is null; paying a salary claims every pending row for that
+ * person, so a penalty or bonus lands on the next payslip without anyone
+ * ticking it. Reversing the salary releases them again.
+ *
+ *   bonus / deduction — keyed by hand
+ *   penalty           — written by a staff penalty (`penalty_id`)
+ *   carry             — what a salary could not cover (`carried_from_salary_id`)
+ */
+export const salaryAdjustments = pgTable("salary_adjustments", {
+  adjustment_id: serial("adjustment_id").primaryKey(),
+  user_id: integer("user_id")
+    .notNull()
+    .references(() => users.user_id),
+  company_entity_id: integer("company_entity_id")
+    .notNull()
+    .references(() => entities.entity_id),
+  kind: salaryAdjustmentKindEnum("kind").notNull(),
+  amount: numeric("amount", { precision: 12, scale: 2, mode: "number" }).notNull(),
+  reason: varchar("reason", { length: 200 }).notNull(),
+  occurred_at: timestamp("occurred_at", { withTimezone: true, mode: "string" }).notNull(),
+  penalty_id: integer("penalty_id").references(() => staffPenalties.penalty_id),
+  carried_from_salary_id: integer("carried_from_salary_id").references(
+    () => salaryPayments.salary_id,
+  ),
+  salary_id: integer("salary_id").references(() => salaryPayments.salary_id),
+  created_by_user_id: integer("created_by_user_id").references(() => users.user_id),
+  created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .notNull()
+    .defaultNow(),
+});
+
 // ---------- Agent health ----------
 
 /**
@@ -1632,6 +1903,8 @@ export const activityCategoryEnum = pgEnum("activity_category", [
   "expense",
   // A saved deposit or withdrawal corrected after the fact.
   "transaction",
+  // Salary tiers, staff pay, adjustments and staff penalties.
+  "payroll",
   "other",
 ]);
 
