@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Layers, Loader2, Plus, Trash2 } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -85,11 +85,20 @@ export function TiersModal({
     () => tiers.filter((t) => t.company_entity_id === Number(casinoId) && t.status === "active"),
     [tiers, casinoId],
   );
+  // The sheet polls every 15s and hands over a fresh `tiers` array each time;
+  // reset the rows only when the ladder itself changed, and keep any new rung
+  // still being typed — unless the casino changed under it.
+  const ladderSig = useMemo(() => JSON.stringify(ladder.map(toDraft)), [ladder]);
   const [drafts, setDrafts] = useState<Draft[]>([]);
+  const draftsCasino = useRef(casinoId);
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setDrafts(ladder.map(toDraft));
-  }, [ladder]);
+    const sameCasino = draftsCasino.current === casinoId;
+    draftsCasino.current = casinoId;
+    setDrafts((prev) => [
+      ...(JSON.parse(ladderSig) as Draft[]),
+      ...(sameCasino ? prev.filter((d) => d.tier_id === null) : []),
+    ]);
+  }, [ladderSig, casinoId]);
 
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -113,6 +122,8 @@ export function TiersModal({
     setBusy(null);
     if (!res.ok) return void toast.error(res.error);
     toast.success(`Tier "${body.name}" saved`);
+    // The saved rung comes back with the reload; drop its unsaved twin.
+    if (!d.tier_id) setDrafts((ds) => ds.filter((_, j) => j !== i));
     onDone();
   }
 

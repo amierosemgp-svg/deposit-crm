@@ -1,15 +1,20 @@
 "use client";
 
 /**
- * The Salary worksheet tab: who worked how long this month and what that pays,
- * the payslips, and the bonuses / deductions / penalties waiting on the next
- * one. Rows are read-only — a salary is never typed, it is worked out — and
- * everything that changes money goes through a dialog that shows the figure.
+ * The Salary worksheet tab, three views:
+ *
+ *   Payslips     — salaries paid; the NEW ENTRIES dock pays the next ones.
+ *                  Type the month and the CS, and the hours, tier, pay and
+ *                  pending adjustments fill themselves; pick what it's paid
+ *                  from and ⌘S. Nothing about the amount is typed.
+ *   Staff & hours — each CS's month so far: hours, days, tier reached.
+ *   Adjustments  — bonuses, deductions, penalties and carries waiting on (or
+ *                  taken by) a salary; the dock adds bonuses and deductions.
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Banknote, Clock, Gift, Layers, Loader2, RefreshCw, Trash2, Undo2, X } from "lucide-react";
+import { Clock, Layers, Loader2, RefreshCw, Save, Trash2, Undo2, X } from "lucide-react";
 import { SheetGrid, type SheetColumn, type SheetRow } from "@/components/sheet/sheet-grid";
 import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 import { Button } from "@/components/ui/button";
@@ -17,60 +22,88 @@ import { Input } from "@/components/ui/input";
 import { useStore } from "@/lib/store";
 import { formatRM, formatShortDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { PaySalaryModal } from "./pay-salary-modal";
-import { AdjustmentModal, HoursModal } from "./staff-pay-dialogs";
+import { HoursModal } from "./staff-pay-dialogs";
 import { TiersModal } from "./tiers-modal";
+import {
+  fmtAmount,
+  parseAmount,
+  parseMonth,
+  parseSheetDate,
+  todaySheetDate,
+  useEntryDock,
+  type Parsed,
+} from "./entry-dock";
 import {
   ADJUSTMENT_LABEL,
   currentMonth,
   monthLabel,
   send,
   useStaffPay,
+  type AdjustmentKind,
   type SalaryAdjustment,
   type SalaryPayment,
+  type StaffRow,
 } from "./use-staff-pay";
 
-type View = "staff" | "payslips" | "adjustments";
+type View = "payslips" | "staff" | "adjustments";
 
 const VIEWS: Array<[View, string]> = [
-  ["staff", "Staff & hours"],
   ["payslips", "Payslips"],
+  ["staff", "Staff & hours"],
   ["adjustments", "Adjustments"],
 ];
 
-const fmt = (n: number) =>
-  n.toLocaleString("en-MY", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const signed = (n: number) => (n === 0 ? "—" : `${n > 0 ? "+" : "−"}${fmt(Math.abs(n))}`);
+const signed = (n: number) => (n === 0 ? "—" : `${n > 0 ? "+" : "−"}${fmtAmount(Math.abs(n))}`);
 const noop = () => {};
 const noDraftStatus = () => ({ state: "empty" as const });
+const MOD_LABEL = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl+";
+
+// Payslip columns, saved rows and the dock alike.
+const P = { month: 0, cs: 1, casino: 2, hours: 3, days: 4, tier: 5, base: 6, adj: 7, net: 8, carry: 9, from: 10, status: 11, at: 12, by: 13, notes: 14 } as const;
+const P_COLS = 15;
+// Adjustment columns.
+const A = { date: 0, cs: 1, kind: 2, reason: 3, amount: 4, status: 5, by: 6 } as const;
+const A_COLS = 7;
+
+type Preview = {
+  company_entity_id: number;
+  worked: { hours: number; days: number };
+  tier: { name: string; basis: "monthly" | "hourly"; rate: number } | null;
+  base: number;
+  adjustments_total: number;
+  net: number;
+  carried: number;
+};
+type PreviewEntry = { preview: Preview } | { error: string };
+
+/** The month before this one — the one usually being paid. */
+function lastMonth(): string {
+  const [y, m] = currentMonth().split("-").map(Number);
+  return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`;
+}
 
 export function SalarySheet() {
   const me = useStore((s) => s.me);
   const users = useStore((s) => s.users);
   const bankAccounts = useStore((s) => s.bankAccounts);
+  const entities = useStore((s) => s.entities);
   const entityName = useStore((s) => s.entityName);
   const companyInScope = useStore((s) => s.companyInScope);
   const refreshStore = useStore((s) => s.refresh);
   const isViewer = me?.role === "viewer";
-  const canManage = me?.role === "super_admin" || me?.role === "company_leader";
+  const isAdmin = me?.role === "super_admin";
+  const canManage = isAdmin || me?.role === "company_leader";
 
   const [month, setMonth] = useState(currentMonth);
-  const [view, setView] = useState<View>("staff");
+  const [view, setView] = useState<View>("payslips");
   const { data, loading, error, reload } = useStaffPay(month);
   const [selectedIds, setSelectedIds] = useState<(string | number)[]>([]);
   const [search, setSearch] = useState("");
-
-  const [payFor, setPayFor] = useState<{ open: boolean; userId: number | null }>({ open: false, userId: null });
   const [hoursFor, setHoursFor] = useState<number | null>(null);
-  const [adjOpen, setAdjOpen] = useState(false);
   const [tiersOpen, setTiersOpen] = useState(false);
   const [confirming, setConfirming] = useState<
     { kind: "reverse"; salary: SalaryPayment } | { kind: "remove"; adj: SalaryAdjustment } | null
   >(null);
-
-  const after = useCallback(async () => {
-    await Promise.all([reload(), refreshStore()]);
-  }, [reload, refreshStore]);
 
   const switchView = (v: View) => {
     setView(v);
@@ -90,22 +123,336 @@ export function SalarySheet() {
           `#${id}`),
     [data, users],
   );
-  const paidFrom = useCallback(
+
+  // ---- lookups the dock types against ----
+
+  const csOptions = useMemo(
+    () =>
+      staff
+        .filter((s) => s.status === "active")
+        .sort((a, b) => a.full_name.localeCompare(b.full_name))
+        .map((s) => ({ value: s.full_name, hint: `${s.username} · ${entityName(s.company_entity_id)}` })),
+    [staff, entityName],
+  );
+  /** A CS cell, by full name or username. */
+  const resolveCs = useCallback(
+    (cell: string): StaffRow | null => {
+      const v = cell.trim().toLowerCase();
+      if (!v) return null;
+      const active = staff.filter((s) => s.status === "active");
+      return (
+        active.find((s) => s.full_name.toLowerCase() === v) ??
+        active.find((s) => s.username.toLowerCase() === v) ??
+        null
+      );
+    },
+    [staff],
+  );
+
+  /** The casino's own accounts first, then a leader's cash (admin only). */
+  const payFrom = useMemo(() => {
+    const accounts = bankAccounts
+      .filter((a) => a.status === "active")
+      .map((a) => ({
+        cell: `${a.label?.trim() ? `${a.label.trim()} · ` : ""}${a.bank_name} ${a.account_number}`,
+        hint: `${entityName(a.entity_id)} · ${formatRM(a.current_balance)}`,
+        account_id: a.account_id as number | null,
+        cash_entity_id: null as number | null,
+        entity_id: a.entity_id,
+      }));
+    const cash = isAdmin
+      ? entities
+          .filter((e) => e.entity_type === "leader" && e.status === "active")
+          .map((e) => ({
+            cell: `Cash · ${e.name}`,
+            hint: "leader's own cash",
+            account_id: null as number | null,
+            cash_entity_id: e.entity_id as number | null,
+            entity_id: e.entity_id,
+          }))
+      : [];
+    return [...accounts, ...cash];
+  }, [bankAccounts, entities, entityName, isAdmin]);
+  const resolvePayFrom = useCallback(
+    (cell: string) => payFrom.find((p) => p.cell.toLowerCase() === cell.trim().toLowerCase()) ?? null,
+    [payFrom],
+  );
+
+  // ---- salary previews for the dock: one per (CS, month) typed ----
+
+  const [previews, setPreviews] = useState<Map<string, PreviewEntry>>(new Map());
+  const previewKey = (userId: number, m: string) => `${userId}:${m}`;
+
+  // ---- Payslips dock ----
+
+  const payAutoCells = useCallback((): Array<[number, string]> => [[P.month, monthLabel(lastMonth())]], []);
+
+  const alreadyPaid = useCallback(
+    (userId: number, m: string) =>
+      (data?.payments ?? []).some((p) => p.user_id === userId && p.period_month === m && p.status === "paid"),
+    [data],
+  );
+
+  const payDerive = useCallback(
+    (rows: string[][]) =>
+      rows.map((row) => {
+        const next = [...row];
+        for (const c of [P.casino, P.hours, P.days, P.tier, P.base, P.adj, P.net, P.carry, P.status, P.at, P.by]) next[c] = "";
+        const cs = resolveCs(row[P.cs] ?? "");
+        const m = parseMonth(row[P.month] ?? "");
+        if (!cs || !m) return next;
+        next[P.casino] = entityName(cs.company_entity_id);
+        if (alreadyPaid(cs.user_id, m)) {
+          next[P.status] = "Already paid";
+          return next;
+        }
+        const entry = previews.get(previewKey(cs.user_id, m));
+        if (!entry) {
+          next[P.status] = "Working out…";
+          return next;
+        }
+        if ("error" in entry) {
+          next[P.status] = entry.error;
+          return next;
+        }
+        const p = entry.preview;
+        next[P.hours] = String(p.worked.hours);
+        next[P.days] = String(p.worked.days);
+        next[P.tier] = p.tier ? `${p.tier.name}${p.tier.basis === "hourly" ? ` @ ${fmtAmount(p.tier.rate)}/h` : ""}` : "No tier";
+        next[P.base] = fmtAmount(p.base);
+        next[P.adj] = signed(p.adjustments_total);
+        next[P.net] = fmtAmount(p.net);
+        next[P.carry] = p.carried ? fmtAmount(p.carried) : "—";
+        next[P.status] = "To pay";
+        return next;
+      }),
+    [resolveCs, entityName, alreadyPaid, previews],
+  );
+
+  type PayBody = {
+    user_id: number;
+    month: string;
+    paid_from_account_id: number | null;
+    paid_from_cash_entity_id: number | null;
+    expected_net: number;
+    notes?: string;
+  };
+  const payParse = useCallback(
+    (row: string[]): Parsed<PayBody> | null => {
+      const m = parseMonth(row[P.month] ?? "");
+      if (!m) return { ok: false, error: `Month: type it like "Sep 2026" or 2026-09` };
+      if (!(row[P.cs] ?? "").trim()) return { ok: false, error: "Who — pick the CS" };
+      const cs = resolveCs(row[P.cs]);
+      if (!cs) return { ok: false, error: `No CS called "${row[P.cs].trim()}" — pick from the list` };
+      if (alreadyPaid(cs.user_id, m)) return { ok: false, error: `${monthLabel(m)} is already paid — reverse it first` };
+      const entry = previews.get(previewKey(cs.user_id, m));
+      if (!entry) return null;
+      if ("error" in entry) return { ok: false, error: entry.error };
+      const p = entry.preview;
+      const fromCell = (row[P.from] ?? "").trim();
+      const from = fromCell ? resolvePayFrom(fromCell) : null;
+      if (p.net > 0 && !fromCell) return { ok: false, error: "Paid From — the account (or leader's cash) it comes out of" };
+      if (fromCell && !from) return { ok: false, error: `Paid From "${fromCell}" isn't one of the accounts — pick from the list` };
+      return {
+        ok: true,
+        body: {
+          user_id: cs.user_id,
+          month: m,
+          paid_from_account_id: p.net > 0 ? (from?.account_id ?? null) : null,
+          paid_from_cash_entity_id: p.net > 0 ? (from?.cash_entity_id ?? null) : null,
+          expected_net: p.net,
+          notes: (row[P.notes] ?? "").trim() || undefined,
+        },
+      };
+    },
+    [resolveCs, alreadyPaid, previews, resolvePayFrom],
+  );
+
+  const afterSave = useCallback(async () => {
+    setPreviews(new Map());
+    await Promise.all([reload(), refreshStore()]);
+  }, [reload, refreshStore]);
+
+  const payDock = useEntryDock<PayBody>({
+    nCols: P_COLS,
+    autoCells: payAutoCells,
+    derive: payDerive,
+    parse: payParse,
+    submit: async (body) => {
+      const res = await send("/api/salaries", "POST", body);
+      if (!res.ok) {
+        // The figure may have moved — work it out again.
+        setPreviews((prev) => {
+          const next = new Map(prev);
+          next.delete(previewKey(body.user_id, body.month));
+          return next;
+        });
+      }
+      return res.ok ? { ok: true } : res;
+    },
+    noun: (n) => (n === 1 ? "salary" : "salaries"),
+    onSaved: afterSave,
+    enabled: view === "payslips" && canManage,
+  });
+
+  // Fetch a preview for every (CS, month) the dock names that we don't have.
+  const payDrafts = payDock.drafts;
+  useEffect(() => {
+    if (view !== "payslips") return;
+    const wanted = new Map<string, { userId: number; month: string }>();
+    for (const row of payDrafts) {
+      const cs = resolveCs(row[P.cs] ?? "");
+      const m = parseMonth(row[P.month] ?? "");
+      if (cs && m && !alreadyPaid(cs.user_id, m) && !previews.has(previewKey(cs.user_id, m))) {
+        wanted.set(previewKey(cs.user_id, m), { userId: cs.user_id, month: m });
+      }
+    }
+    if (!wanted.size) return;
+    let live = true;
+    void Promise.all(
+      [...wanted.entries()].map(async ([key, w]): Promise<[string, PreviewEntry]> => {
+        try {
+          const res = await fetch(`/api/salaries/preview?user_id=${w.userId}&month=${w.month}`);
+          const d = (await res.json().catch(() => null)) as { preview?: Preview; error?: string } | null;
+          return [key, res.ok && d?.preview ? { preview: d.preview } : { error: d?.error ?? "Could not work it out" }];
+        } catch {
+          return [key, { error: "Network error" }];
+        }
+      }),
+    ).then((entries) => {
+      if (!live) return;
+      setPreviews((prev) => {
+        const next = new Map(prev);
+        for (const [k, v] of entries) next.set(k, v);
+        return next;
+      });
+    });
+    return () => {
+      live = false;
+    };
+  }, [view, payDrafts, resolveCs, alreadyPaid, previews]);
+
+  // ---- Adjustments dock ----
+
+  const adjAutoCells = useCallback(
+    (): Array<[number, string]> => [
+      [A.date, todaySheetDate()],
+      [A.kind, "Bonus"],
+    ],
+    [],
+  );
+  const adjDerive = useCallback(
+    (rows: string[][]) =>
+      rows.map((row) => {
+        const next = [...row];
+        next[A.status] = resolveCs(row[A.cs] ?? "") ? "Pending — next salary" : "";
+        next[A.by] = "";
+        return next;
+      }),
+    [resolveCs],
+  );
+  type AdjBody = { user_id: number; kind: "bonus" | "deduction"; amount: number; reason: string; occurred_at: string };
+  const adjParse = useCallback(
+    (row: string[]): Parsed<AdjBody> => {
+      const date = parseSheetDate(row[A.date] ?? "");
+      if (!date) return { ok: false, error: `Bad date "${(row[A.date] ?? "").trim()}" (use 31/8/2026)` };
+      const cs = resolveCs(row[A.cs] ?? "");
+      if (!cs) return { ok: false, error: (row[A.cs] ?? "").trim() ? `No CS called "${row[A.cs].trim()}"` : "Who — pick the CS" };
+      const k = (row[A.kind] ?? "").trim().toLowerCase();
+      const kind = k.startsWith("b") || k === "+" ? "bonus" : k.startsWith("d") || k === "-" ? "deduction" : null;
+      if (!kind) return { ok: false, error: `Type is Bonus or Deduction, not "${row[A.kind].trim()}"` };
+      const amount = parseAmount(row[A.amount] ?? "");
+      if (amount === null || amount <= 0) return { ok: false, error: "Amount — a figure above 0" };
+      const reason = (row[A.reason] ?? "").trim();
+      if (!reason) return { ok: false, error: "Reason — what it's for" };
+      return { ok: true, body: { user_id: cs.user_id, kind, amount, reason, occurred_at: `${date}T12:00:00+08:00` } };
+    },
+    [resolveCs],
+  );
+  const adjDock = useEntryDock<AdjBody>({
+    nCols: A_COLS,
+    autoCells: adjAutoCells,
+    derive: adjDerive,
+    parse: adjParse,
+    submit: async (body) => {
+      const res = await send("/api/salary-adjustments", "POST", body);
+      return res.ok ? { ok: true } : res;
+    },
+    noun: (n) => (n === 1 ? "adjustment" : "adjustments"),
+    onSaved: afterSave,
+    enabled: view === "adjustments" && canManage,
+  });
+
+  // ---- what the sheet shows ----
+
+  const paidFromCell = useCallback(
     (p: SalaryPayment) => {
       if (p.paid_from_account_id) {
         const a = bankAccounts.find((x) => x.account_id === p.paid_from_account_id);
-        return a ? `${a.label?.trim() || a.bank_name} · ${a.account_number}` : `Account #${p.paid_from_account_id}`;
+        return a ? `${a.label?.trim() ? `${a.label.trim()} · ` : ""}${a.bank_name} ${a.account_number}` : `Account #${p.paid_from_account_id}`;
       }
       if (p.paid_from_cash_entity_id) return `Cash · ${entityName(p.paid_from_cash_entity_id)}`;
-      return p.net_amount === 0 ? "—" : "";
+      return "—";
     },
     [bankAccounts, entityName],
   );
 
   const q = search.trim().toLowerCase();
-  const hit = (cells: string[]) => !q || cells.some((c) => c.toLowerCase().includes(q));
+  const hit = useCallback((cells: string[]) => !q || cells.some((c) => c.toLowerCase().includes(q)), [q]);
 
   const { columns, rows } = useMemo((): { columns: SheetColumn[]; rows: SheetRow[] } => {
+    if (view === "payslips") {
+      const columns: SheetColumn[] = [
+        { key: "month", label: "Month", width: 92, entry: true, required: true, placeholder: monthLabel(lastMonth()) },
+        { key: "cs", label: "CS", width: 170, entry: true, required: true, options: csOptions, placeholder: "who" },
+        { key: "casino", label: "Casino", width: 120 },
+        { key: "hours", label: "Hours", width: 66, align: "right", numeric: true },
+        { key: "days", label: "Days", width: 52, align: "right", numeric: true },
+        { key: "tier", label: "Tier", width: 120 },
+        { key: "base", label: "Tier Pay", width: 92, align: "right", numeric: true },
+        { key: "adj", label: "Adjustments", width: 98, align: "right", numeric: true },
+        { key: "net", label: "Pay", width: 96, align: "right", numeric: true },
+        { key: "carry", label: "Carried", width: 80, align: "right", numeric: true },
+        {
+          key: "from",
+          label: "Paid From",
+          width: 200,
+          entry: true,
+          options: payFrom.map((p) => ({ value: p.cell, hint: p.hint })),
+          placeholder: "bank account / leader cash",
+        },
+        { key: "status", label: "Status", width: 150 },
+        { key: "at", label: "Paid At", width: 120 },
+        { key: "by", label: "By", width: 100 },
+        { key: "notes", label: "Notes", width: 200, entry: true, placeholder: "optional" },
+      ];
+      const rows = (data?.payments ?? [])
+        .filter((p) => companyInScope(p.company_entity_id))
+        .slice()
+        .sort((a, b) => a.paid_at.localeCompare(b.paid_at))
+        .map((p): SheetRow => {
+          const cells = Array<string>(P_COLS).fill("");
+          cells[P.month] = monthLabel(p.period_month);
+          cells[P.cs] = nameOf(p.user_id);
+          cells[P.casino] = entityName(p.company_entity_id);
+          cells[P.hours] = String(p.hours_worked);
+          cells[P.days] = String(p.days_worked);
+          cells[P.tier] = p.tier_name ? `${p.tier_name}${p.tier_basis === "hourly" ? ` @ ${fmtAmount(p.tier_rate ?? 0)}/h` : ""}` : "No tier";
+          cells[P.base] = fmtAmount(p.base_amount);
+          cells[P.adj] = signed(p.adjustments_total);
+          cells[P.net] = fmtAmount(p.net_amount);
+          cells[P.carry] = p.carried_forward ? fmtAmount(p.carried_forward) : "—";
+          cells[P.from] = p.net_amount === 0 ? "—" : paidFromCell(p);
+          cells[P.status] = p.status === "reversed" ? "Reversed" : "Paid";
+          cells[P.at] = formatShortDateTime(p.paid_at);
+          cells[P.by] = nameOf(p.recorded_by_user_id);
+          cells[P.notes] = p.notes ?? "";
+          return { id: p.salary_id, tone: p.status === "reversed" ? "muted" : "success", cells };
+        })
+        .filter((r) => hit(r.cells));
+      return { columns, rows };
+    }
+
     if (view === "staff") {
       const columns: SheetColumn[] = [
         { key: "cs", label: "CS", width: 180 },
@@ -115,8 +462,8 @@ export function SalarySheet() {
         { key: "tier", label: "Tier Reached", width: 140 },
         { key: "base", label: "Tier Pay", width: 100, align: "right", numeric: true },
         { key: "pending", label: "Pending Adj.", width: 110, align: "right", numeric: true },
-        { key: "net", label: "Would Pay", width: 110, align: "right", numeric: true },
-        { key: "status", label: `${monthLabel(month)}`, width: 110, align: "center" },
+        { key: "net", label: "Would Pay", width: 150, align: "right", numeric: true },
+        { key: "status", label: monthLabel(month), width: 100, align: "center" },
       ];
       const rows = staff
         .slice()
@@ -132,9 +479,9 @@ export function SalarySheet() {
               String(s.hours),
               String(s.days),
               s.tier_name ?? "No tier yet",
-              fmt(s.base),
+              fmtAmount(s.base),
               signed(s.pending_adjustments),
-              s.paid_salary_id ? "" : net < 0 ? `0.00 (−${fmt(-net)} carries)` : fmt(net),
+              s.paid_salary_id ? "" : net < 0 ? `0.00 (−${fmtAmount(-net)} carries)` : fmtAmount(net),
               s.paid_salary_id ? "Paid" : "Not paid",
             ],
           };
@@ -143,93 +490,46 @@ export function SalarySheet() {
       return { columns, rows };
     }
 
-    if (view === "payslips") {
-      const columns: SheetColumn[] = [
-        { key: "month", label: "Month", width: 84 },
-        { key: "cs", label: "CS", width: 160 },
-        { key: "casino", label: "Casino", width: 130 },
-        { key: "hours", label: "Hours", width: 70, align: "right", numeric: true },
-        { key: "days", label: "Days", width: 56, align: "right", numeric: true },
-        { key: "tier", label: "Tier", width: 120 },
-        { key: "base", label: "Tier Pay", width: 96, align: "right", numeric: true },
-        { key: "adj", label: "Adjustments", width: 100, align: "right", numeric: true },
-        { key: "net", label: "Paid", width: 100, align: "right", numeric: true },
-        { key: "carry", label: "Carried", width: 84, align: "right", numeric: true },
-        { key: "from", label: "Paid From", width: 190 },
-        { key: "status", label: "Status", width: 90, align: "center" },
-        { key: "at", label: "Paid At", width: 130 },
-        { key: "by", label: "By", width: 110 },
-        { key: "notes", label: "Notes", width: 200 },
-      ];
-      const rows = (data?.payments ?? [])
-        .filter((p) => companyInScope(p.company_entity_id))
-        .map((p): SheetRow => ({
-          id: p.salary_id,
-          tone: p.status === "reversed" ? "muted" : "default",
-          cells: [
-            monthLabel(p.period_month),
-            nameOf(p.user_id),
-            entityName(p.company_entity_id),
-            String(p.hours_worked),
-            String(p.days_worked),
-            p.tier_name
-              ? `${p.tier_name}${p.tier_basis === "hourly" ? ` @ ${fmt(p.tier_rate ?? 0)}/h` : ""}`
-              : "No tier",
-            fmt(p.base_amount),
-            signed(p.adjustments_total),
-            fmt(p.net_amount),
-            p.carried_forward ? fmt(p.carried_forward) : "—",
-            paidFrom(p),
-            p.status === "reversed" ? "Reversed" : "Paid",
-            formatShortDateTime(p.paid_at),
-            nameOf(p.recorded_by_user_id),
-            p.notes ?? "",
-          ],
-        }))
-        .filter((r) => hit(r.cells));
-      return { columns, rows };
-    }
-
     const payMonth = new Map((data?.payments ?? []).map((p) => [p.salary_id, p.period_month]));
     const columns: SheetColumn[] = [
-      { key: "date", label: "Date", width: 92, align: "center" },
-      { key: "cs", label: "CS", width: 160 },
-      { key: "kind", label: "Type", width: 120 },
-      { key: "reason", label: "Reason", width: 280 },
-      { key: "amount", label: "Amount", width: 100, align: "right", numeric: true },
+      { key: "date", label: "Date", width: 92, align: "center", entry: true, required: true, placeholder: todaySheetDate() },
+      { key: "cs", label: "CS", width: 170, entry: true, required: true, options: csOptions, placeholder: "who" },
+      { key: "kind", label: "Type", width: 120, entry: true, required: true, options: ["Bonus", "Deduction"] },
+      { key: "reason", label: "Reason", width: 280, entry: true, required: true, placeholder: "what it's for" },
+      { key: "amount", label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "100" },
       { key: "status", label: "Status", width: 170 },
       { key: "by", label: "By", width: 110 },
     ];
     const rows = (data?.adjustments ?? [])
       .filter((a) => companyInScope(a.company_entity_id))
+      .slice()
+      .sort((a, b) => a.occurred_at.localeCompare(b.occurred_at))
       .map((a): SheetRow => ({
         id: a.adjustment_id,
         tone: a.salary_id ? "muted" : a.amount > 0 ? "success" : "warning",
         cells: [
           new Date(a.occurred_at).toLocaleDateString("en-MY", { timeZone: "Asia/Kuala_Lumpur" }),
           nameOf(a.user_id),
-          ADJUSTMENT_LABEL[a.kind],
+          ADJUSTMENT_LABEL[a.kind as AdjustmentKind],
           a.reason,
           signed(a.amount),
-          a.salary_id
-            ? `In ${monthLabel(payMonth.get(a.salary_id) ?? "")} salary`
-            : "Pending — next salary",
+          a.salary_id ? `In ${monthLabel(payMonth.get(a.salary_id) ?? "")} salary` : "Pending — next salary",
           nameOf(a.created_by_user_id),
         ],
       }))
       .filter((r) => hit(r.cells));
     return { columns, rows };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, data, staff, month, q, companyInScope, entityName, nameOf, paidFrom]);
+  }, [view, data, staff, month, companyInScope, entityName, nameOf, paidFromCell, csOptions, payFrom, hit]);
+
+  const dock = view === "payslips" ? payDock : view === "adjustments" ? adjDock : null;
+  const dockOpen = !!dock && canManage;
 
   // ---- what the selection can do ----
   const selected = selectedIds.map(Number);
   const one = selected.length === 1 ? selected[0] : null;
   const selStaff = view === "staff" && one != null ? staff.find((s) => s.user_id === one) : undefined;
-  const selPay =
-    view === "payslips" && one != null ? data?.payments.find((p) => p.salary_id === one) : undefined;
-  const selAdj =
-    view === "adjustments" && one != null ? data?.adjustments.find((a) => a.adjustment_id === one) : undefined;
+  const selPay = view === "payslips" && one != null ? data?.payments.find((p) => p.salary_id === one) : undefined;
+  const selAdj = view === "adjustments" && one != null ? data?.adjustments.find((a) => a.adjustment_id === one) : undefined;
 
   const doConfirm = async () => {
     if (!confirming) return;
@@ -237,13 +537,10 @@ export function SalarySheet() {
       confirming.kind === "reverse"
         ? await send(`/api/salaries/${confirming.salary.salary_id}/reverse`, "POST")
         : await send(`/api/salary-adjustments/${confirming.adj.adjustment_id}`, "DELETE");
-    if (!res.ok) {
-      toast.error(res.error);
-      return;
-    }
+    if (!res.ok) return void toast.error(res.error);
     toast.success(confirming.kind === "reverse" ? "Salary reversed — money back on the account" : "Adjustment removed");
     setSelectedIds([]);
-    await after();
+    await afterSave();
   };
 
   return (
@@ -256,13 +553,6 @@ export function SalarySheet() {
             data-page-search
             placeholder="Search rows…"
             className="h-8 w-52 text-[13px]"
-          />
-          <Input
-            type="month"
-            value={month}
-            onChange={(e) => e.target.value && setMonth(e.target.value)}
-            className="h-8 w-[150px] text-[13px]"
-            title="Hours and tier for this month"
           />
           <div className="flex items-center gap-1" role="group" aria-label="View">
             {VIEWS.map(([v, label]) => (
@@ -282,6 +572,15 @@ export function SalarySheet() {
               </button>
             ))}
           </div>
+          {view === "staff" && (
+            <Input
+              type="month"
+              value={month}
+              onChange={(e) => e.target.value && setMonth(e.target.value)}
+              className="h-8 w-[150px] text-[13px]"
+              title="Hours and tier for this month"
+            />
+          )}
           <span className="text-xs text-muted-foreground">
             {rows.length} row{rows.length === 1 ? "" : "s"}
           </span>
@@ -292,24 +591,21 @@ export function SalarySheet() {
               <Layers className="h-3.5 w-3.5" />
               Salary tiers
             </Button>
-            {canManage && (
-              <Button size="sm" variant="outline" className="h-8 cursor-pointer gap-1.5" onClick={() => setAdjOpen(true)}>
-                <Gift className="h-3.5 w-3.5" />
-                Bonus / deduction
-              </Button>
-            )}
             <Button size="sm" variant="outline" className="h-8 cursor-pointer gap-1.5" onClick={() => void reload()}>
               <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
               Refresh
             </Button>
-            {canManage && (
+            {dockOpen && dock && (
               <Button
                 size="sm"
                 className="h-8 cursor-pointer gap-1.5 bg-emerald-700 text-white hover:bg-emerald-800"
-                onClick={() => setPayFor({ open: true, userId: selStaff?.user_id ?? null })}
+                disabled={dock.saving || dock.readyCount === 0}
+                onClick={() => void dock.commit()}
               >
-                <Banknote className="h-3.5 w-3.5" />
-                Pay salary
+                {dock.saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                {view === "payslips" ? "Pay" : "Save"}{" "}
+                {dock.readyCount > 0 ? `${dock.readyCount} row${dock.readyCount === 1 ? "" : "s"}` : "rows"}
+                <span className="hidden text-[10px] opacity-70 lg:inline">{MOD_LABEL}S</span>
               </Button>
             )}
           </div>
@@ -326,12 +622,13 @@ export function SalarySheet() {
           widthStorageKey={`transactions:salary:${view}`}
           columns={columns}
           rows={rows}
-          drafts={[]}
-          onDraftsChange={noop}
-          draftStatus={noDraftStatus}
-          readOnly
+          drafts={dockOpen && dock ? dock.drafts : []}
+          onDraftsChange={dockOpen && dock ? dock.onDraftsChange : noop}
+          draftStatus={dockOpen && dock ? dock.draftStatus : noDraftStatus}
+          flushRef={dockOpen && dock ? dock.flushRef : undefined}
+          readOnly={!dockOpen}
           onSelectedRowsChange={setSelectedIds}
-          focusKey={`salary:${view}`}
+          focusKey={`salary:${view}:${!!data}`}
         />
       )}
 
@@ -354,15 +651,6 @@ export function SalarySheet() {
                 <Clock className="h-3 w-3" /> Day by day
               </Button>
             )}
-            {selStaff && canManage && !selStaff.paid_salary_id && (
-              <Button
-                size="xs"
-                className="cursor-pointer gap-1 bg-emerald-700 text-white hover:bg-emerald-800"
-                onClick={() => setPayFor({ open: true, userId: selStaff.user_id })}
-              >
-                <Banknote className="h-3 w-3" /> Pay {monthLabel(month)}
-              </Button>
-            )}
             {selPay && canManage && selPay.status === "paid" && (
               <Button
                 size="xs"
@@ -383,30 +671,19 @@ export function SalarySheet() {
                 <Trash2 className="h-3 w-3" /> Remove
               </Button>
             )}
-            {selected.length > 1 && (
-              <span className="text-[11px] text-muted-foreground">Pick one row to act on it</span>
-            )}
+            {selected.length > 1 && <span className="text-[11px] text-muted-foreground">Pick one row to act on it</span>}
           </div>
         </div>
       )}
 
-      <PaySalaryModal
-        open={payFor.open}
-        onOpenChange={(o) => setPayFor((p) => ({ ...p, open: o }))}
-        staff={staff}
-        month={month}
-        userId={payFor.userId}
-        onDone={() => void after()}
-      />
       <HoursModal open={hoursFor !== null} onOpenChange={(o) => !o && setHoursFor(null)} userId={hoursFor} month={month} />
-      <AdjustmentModal open={adjOpen} onOpenChange={setAdjOpen} staff={staff} onDone={() => void reload()} />
       <TiersModal
         open={tiersOpen}
         onOpenChange={setTiersOpen}
         tiers={data?.tiers ?? []}
         rates={data?.rates ?? []}
         staff={staff}
-        onDone={() => void reload()}
+        onDone={() => void afterSave()}
       />
       {confirming && (
         <ConfirmActionDialog
@@ -423,7 +700,7 @@ export function SalarySheet() {
               ? [
                   { label: "CS", value: nameOf(confirming.salary.user_id) },
                   { label: "Month", value: monthLabel(confirming.salary.period_month) },
-                  { label: "Paid from", value: paidFrom(confirming.salary) || "—" },
+                  { label: "Paid from", value: paidFromCell(confirming.salary) },
                   { label: "Back to the account", value: formatRM(confirming.salary.net_amount), emphasis: true },
                 ]
               : [

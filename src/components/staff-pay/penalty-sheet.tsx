@@ -2,13 +2,15 @@
 
 /**
  * The Staff Penalty worksheet tab: credit lost through a CS's mistake and the
- * share they bear. Recorded here, deducted by their next salary without anyone
- * ticking it — the Status column says which salary took it.
+ * share they bear. Typed into the NEW ENTRIES dock like any other sheet —
+ * name the deposit or free credit by its ref and the CS and what was credited
+ * fill in; Lost and Penalty work themselves out. Deducted by their next salary
+ * without anyone ticking it — the Status column says which salary took it.
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Ban, Loader2, Plus, RefreshCw, X } from "lucide-react";
+import { Ban, Loader2, RefreshCw, Save, X } from "lucide-react";
 import { SheetGrid, type SheetColumn, type SheetRow } from "@/components/sheet/sheet-grid";
 import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 import { Button } from "@/components/ui/button";
@@ -16,26 +18,79 @@ import { Input } from "@/components/ui/input";
 import { useStore } from "@/lib/store";
 import { formatRM } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { PenaltyModal } from "./staff-pay-dialogs";
+import {
+  fmtAmount,
+  parseAmount,
+  parseSheetDate,
+  todaySheetDate,
+  useEntryDock,
+  type Parsed,
+} from "./entry-dock";
 import {
   currentMonth,
   monthLabel,
   PENALTY_SOURCE_LABEL,
   send,
   useStaffPay,
+  type PenaltySource,
   type StaffPenalty,
+  type StaffRow,
 } from "./use-staff-pay";
 
-const fmt = (n: number) =>
-  n.toLocaleString("en-MY", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const noop = () => {};
 const noDraftStatus = () => ({ state: "empty" as const });
+const MOD_LABEL = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl+";
+const round2 = (n: number) => Math.round(n * 100) / 100;
 
 const STATUS_PILLS: Array<[string, string]> = [
   ["pending", "Pending"],
   ["deducted", "Deducted"],
   ["void", "Void"],
 ];
+
+// Columns, saved rows and the dock alike.
+const C = { date: 0, cs: 1, casino: 2, source: 3, ref: 4, injected: 5, retrieved: 6, lost: 7, share: 8, amount: 9, reason: 10, status: 11, by: 12 } as const;
+const N_COLS = 13;
+
+const SOURCES = Object.entries(PENALTY_SOURCE_LABEL) as Array<[PenaltySource, string]>;
+const LOOKS_UP = (s: PenaltySource | null) => s === "deposit" || s === "free_credit";
+
+type SourceLookup = {
+  user_id: number | null;
+  credit_injected: number;
+  player_id: number | null;
+  player_label: string | null;
+  occurred_at: string;
+};
+type LookupEntry = { source: SourceLookup } | { error: string };
+
+function parseSource(cell: string): PenaltySource | null {
+  const v = cell.trim().toLowerCase().replace(/[\s_]+/g, " ");
+  if (!v) return null;
+  return SOURCES.find(([k, label]) => label.toLowerCase() === v || k.replace("_", " ") === v)?.[0] ?? null;
+}
+
+/** "12" or "#12" → 12. */
+const parseRef = (cell: string) => {
+  const m = cell.trim().match(/^#?(\d+)$/);
+  return m ? Number(m[1]) : null;
+};
+
+/** Credited, retrieved and share off a row; Lost and Penalty from them. */
+const figures = (row: string[]) => {
+  const inj = parseAmount(row[C.injected] ?? "");
+  const ret = parseAmount(row[C.retrieved] ?? "") ?? 0;
+  const pct = parseAmount((row[C.share] ?? "").replace("%", ""));
+  if (inj === null || inj <= 0 || pct === null) return null;
+  const lost = round2(inj - ret);
+  return { inj, ret, pct, lost, amount: round2((lost * pct) / 100) };
+};
+
+/** An ISO time → the sheet's date, business time — "19/10/2026". */
+function sheetDateOf(iso: string): string {
+  const d = new Date(new Date(iso).getTime() + 8 * 3600_000);
+  return `${d.getUTCDate()}/${d.getUTCMonth() + 1}/${d.getUTCFullYear()}`;
+}
 
 export function PenaltySheet() {
   const me = useStore((s) => s.me);
@@ -44,14 +99,14 @@ export function PenaltySheet() {
   const companyInScope = useStore((s) => s.companyInScope);
   const isViewer = me?.role === "viewer";
   const canVoid = me?.role === "super_admin" || me?.role === "company_leader";
+  // A CS can't record one against themselves (the server refuses it too).
+  const selfId = me?.role === "cs_agent" ? me.user_id : null;
 
-  // The month only matters to the staff list the dialog offers; penalties
-  // are listed whole.
+  // The month only matters to the staff list; penalties are listed whole.
   const { data, loading, error, reload } = useStaffPay(currentMonth());
   const [selectedIds, setSelectedIds] = useState<(string | number)[]>([]);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<Set<string>>(() => new Set());
-  const [newOpen, setNewOpen] = useState(false);
   const [voiding, setVoiding] = useState<StaffPenalty | null>(null);
 
   const staff = useMemo(
@@ -67,6 +122,7 @@ export function PenaltySheet() {
           `#${id}`),
     [data, users],
   );
+  const sharePct = data?.share_pct ?? 50;
 
   // Which salary took each penalty, through its adjustment.
   const deductedIn = useMemo(() => {
@@ -83,18 +139,224 @@ export function PenaltySheet() {
     [deductedIn],
   );
 
+  // ---- lookups the dock types against ----
+
+  const pickable = useMemo(
+    () => staff.filter((s) => s.status === "active" && s.user_id !== selfId),
+    [staff, selfId],
+  );
+  const csOptions = useMemo(
+    () =>
+      pickable
+        .slice()
+        .sort((a, b) => a.full_name.localeCompare(b.full_name))
+        .map((s) => ({ value: s.full_name, hint: `${s.username} · ${entityName(s.company_entity_id)}` })),
+    [pickable, entityName],
+  );
+  const resolveCs = useCallback(
+    (cell: string): StaffRow | null => {
+      const v = cell.trim().toLowerCase();
+      if (!v) return null;
+      return (
+        pickable.find((s) => s.full_name.toLowerCase() === v) ??
+        pickable.find((s) => s.username.toLowerCase() === v) ??
+        null
+      );
+    },
+    [pickable],
+  );
+
+  // ---- the row a mistake was made on, looked up by its ref ----
+
+  const [lookups, setLookups] = useState<Map<string, LookupEntry>>(new Map());
+  const lookupKey = (source: PenaltySource, id: number) => `${source}:${id}`;
+  const lookupOf = useCallback(
+    (row: string[]) => {
+      const source = parseSource(row[C.source] ?? "");
+      const ref = parseRef(row[C.ref] ?? "");
+      if (!LOOKS_UP(source) || !ref) return { wanted: false as const };
+      const key = lookupKey(source!, ref);
+      return { wanted: true as const, key, source: source!, ref, entry: lookups.get(key) };
+    },
+    [lookups],
+  );
+
+  // ---- the dock ----
+
+  const autoCells = useCallback(
+    (): Array<[number, string]> => [
+      [C.date, todaySheetDate()],
+      [C.source, PENALTY_SOURCE_LABEL.deposit],
+      [C.retrieved, "0"],
+      [C.share, `${sharePct}%`],
+    ],
+    [sharePct],
+  );
+
+  const derive = useCallback(
+    (rows: string[][]) =>
+      rows.map((row) => {
+        const next = [...row];
+        for (const c of [C.casino, C.lost, C.amount, C.status, C.by]) next[c] = "";
+        const cs = resolveCs(row[C.cs] ?? "");
+        if (cs) next[C.casino] = entityName(cs.company_entity_id);
+        const f = figures(row);
+        if (f && f.lost > 0) {
+          next[C.lost] = fmtAmount(f.lost);
+          next[C.amount] = fmtAmount(f.amount);
+        }
+        const l = lookupOf(row);
+        if (l.wanted && !l.entry) next[C.status] = "Looking it up…";
+        else if (l.wanted && l.entry && "source" in l.entry && l.entry.source.player_label) {
+          next[C.status] = `Player ${l.entry.source.player_label}`;
+        } else if (cs) next[C.status] = "Pending — next salary";
+        return next;
+      }),
+    [resolveCs, entityName, lookupOf],
+  );
+
+  type Body = {
+    user_id: number;
+    source_type: PenaltySource;
+    source_id: number | null;
+    player_id: number | null;
+    occurred_at: string;
+    credit_injected: number;
+    credit_retrieved: number;
+    share_pct: number;
+    reason: string;
+  };
+  const parse = useCallback(
+    (row: string[]): Parsed<Body> | null => {
+      const date = parseSheetDate(row[C.date] ?? "");
+      if (!date) return { ok: false, error: `Bad date "${(row[C.date] ?? "").trim()}" (use 31/8/2026)` };
+      const source = parseSource(row[C.source] ?? "");
+      if (!source) {
+        return { ok: false, error: `Mistake On is one of ${SOURCES.map(([, l]) => l).join(", ")}` };
+      }
+      const refCell = (row[C.ref] ?? "").trim();
+      const ref = refCell ? parseRef(refCell) : null;
+      if (refCell && !ref) return { ok: false, error: `Ref is the row's number, like 1234 — not "${refCell}"` };
+      if (LOOKS_UP(source) && !ref) return { ok: false, error: `Ref — the ${PENALTY_SOURCE_LABEL[source].toLowerCase()} number` };
+      const l = lookupOf(row);
+      if (l.wanted && !l.entry) return null;
+      if (l.wanted && l.entry && "error" in l.entry) return { ok: false, error: l.entry.error };
+
+      const csCell = (row[C.cs] ?? "").trim();
+      if (!csCell) return { ok: false, error: "Who — pick the CS" };
+      const cs = resolveCs(csCell);
+      if (!cs) {
+        const isSelf = selfId != null && staff.some((s) => s.user_id === selfId && [s.full_name, s.username].some((n) => n.toLowerCase() === csCell.toLowerCase()));
+        return { ok: false, error: isSelf ? "Ask a colleague or your leader to record a penalty against you" : `No CS called "${csCell}" — pick from the list` };
+      }
+      const f = figures(row);
+      if (!f) {
+        if (parseAmount((row[C.share] ?? "").replace("%", "")) === null) return { ok: false, error: "Share — a percent, like 50%" };
+        return { ok: false, error: "Credited — what went into the player's account" };
+      }
+      if (f.ret < 0 || f.ret >= f.inj) return { ok: false, error: "Retrieved has to be less than what was credited" };
+      if (f.pct < 0 || f.pct > 100) return { ok: false, error: "Share is a percent, 0–100" };
+      const reason = (row[C.reason] ?? "").trim();
+      if (!reason) return { ok: false, error: "What Happened — a line on the mistake" };
+      if (f.amount <= 0) return { ok: false, error: "That works out to RM 0 — nothing to deduct" };
+      return {
+        ok: true,
+        body: {
+          user_id: cs.user_id,
+          source_type: source,
+          source_id: ref,
+          player_id: l.wanted && l.entry && "source" in l.entry ? l.entry.source.player_id : null,
+          occurred_at: `${date}T12:00:00+08:00`,
+          credit_injected: f.inj,
+          credit_retrieved: f.ret,
+          share_pct: f.pct,
+          reason,
+        },
+      };
+    },
+    [lookupOf, resolveCs, selfId, staff],
+  );
+
+  const dock = useEntryDock<Body>({
+    nCols: N_COLS,
+    autoCells,
+    derive,
+    parse,
+    submit: async (body) => {
+      const res = await send("/api/staff-penalties", "POST", body);
+      return res.ok ? { ok: true } : res;
+    },
+    noun: (n) => (n === 1 ? "penalty" : "penalties"),
+    onSaved: () => reload(),
+    enabled: !isViewer,
+  });
+
+  // Look up every ref the dock names that we haven't; fill the blanks it can.
+  const { drafts, patchRow } = dock;
+  useEffect(() => {
+    const wanted = new Map<string, { source: PenaltySource; ref: number }>();
+    for (const row of drafts) {
+      const l = lookupOf(row);
+      if (l.wanted && !l.entry) wanted.set(l.key, { source: l.source, ref: l.ref });
+    }
+    if (!wanted.size) return;
+    let live = true;
+    void Promise.all(
+      [...wanted.entries()].map(async ([key, w]): Promise<[string, LookupEntry]> => {
+        try {
+          const res = await fetch(`/api/staff-penalties/source?type=${w.source}&id=${w.ref}`);
+          const d = (await res.json().catch(() => null)) as { source?: SourceLookup; error?: string } | null;
+          return [key, res.ok && d?.source ? { source: d.source } : { error: d?.error ?? "Not found" }];
+        } catch {
+          return [key, { error: "Network error" }];
+        }
+      }),
+    ).then((entries) => {
+      if (!live) return;
+      setLookups((prev) => {
+        const next = new Map(prev);
+        for (const [k, v] of entries) next.set(k, v);
+        return next;
+      });
+      for (const [key, entry] of entries) {
+        if (!("source" in entry)) continue;
+        const src = entry.source;
+        const handler = src.user_id != null ? pickable.find((s) => s.user_id === src.user_id) : undefined;
+        patchRow(
+          (row) => {
+            const source = parseSource(row[C.source] ?? "");
+            const ref = parseRef(row[C.ref] ?? "");
+            return !!source && !!ref && lookupKey(source, ref) === key;
+          },
+          (row) => {
+            const next = [...row];
+            if (!next[C.cs].trim() && handler) next[C.cs] = handler.full_name;
+            if (!next[C.injected].trim()) next[C.injected] = String(src.credit_injected);
+            if (next[C.date] === todaySheetDate()) next[C.date] = sheetDateOf(src.occurred_at);
+            return next;
+          },
+        );
+      }
+    });
+    return () => {
+      live = false;
+    };
+  }, [drafts, lookupOf, patchRow, pickable]);
+
+  // ---- the sheet ----
+
   const columns: SheetColumn[] = [
-    { key: "date", label: "Date", width: 92, align: "center" },
-    { key: "cs", label: "CS", width: 160 },
+    { key: "date", label: "Date", width: 92, align: "center", entry: true, required: true, placeholder: todaySheetDate() },
+    { key: "cs", label: "CS", width: 160, entry: true, required: true, options: csOptions, placeholder: "fills from Ref" },
     { key: "casino", label: "Casino", width: 130 },
-    { key: "source", label: "Mistake On", width: 110 },
-    { key: "ref", label: "Ref", width: 70, align: "right" },
-    { key: "injected", label: "Credited", width: 96, align: "right", numeric: true },
-    { key: "retrieved", label: "Retrieved", width: 96, align: "right", numeric: true },
+    { key: "source", label: "Mistake On", width: 110, entry: true, required: true, options: SOURCES.map(([, l]) => l) },
+    { key: "ref", label: "Ref", width: 70, align: "right", entry: true, placeholder: "#" },
+    { key: "injected", label: "Credited", width: 96, align: "right", numeric: true, entry: true, required: true, placeholder: "fills from Ref" },
+    { key: "retrieved", label: "Retrieved", width: 96, align: "right", numeric: true, entry: true },
     { key: "lost", label: "Lost", width: 90, align: "right", numeric: true },
-    { key: "share", label: "Share", width: 64, align: "right" },
+    { key: "share", label: "Share", width: 64, align: "right", entry: true },
     { key: "amount", label: "Penalty", width: 96, align: "right", numeric: true },
-    { key: "reason", label: "What Happened", width: 260 },
+    { key: "reason", label: "What Happened", width: 260, entry: true, required: true, placeholder: "the mistake" },
     { key: "status", label: "Status", width: 150 },
     { key: "by", label: "Recorded By", width: 120 },
   ];
@@ -105,31 +367,30 @@ export function PenaltySheet() {
       (data?.penalties ?? [])
         .filter((p) => companyInScope(p.company_entity_id))
         .filter((p) => statusFilter.size === 0 || statusFilter.has(statusOf(p)))
+        .slice()
+        .sort((a, b) => a.occurred_at.localeCompare(b.occurred_at))
         .map((p): SheetRow => {
           const st = statusOf(p);
-          return {
-            id: p.penalty_id,
-            tone: st === "void" ? "muted" : st === "deducted" ? "default" : "warning",
-            cells: [
-              new Date(p.occurred_at).toLocaleDateString("en-MY", { timeZone: "Asia/Kuala_Lumpur" }),
-              nameOf(p.user_id),
-              entityName(p.company_entity_id),
-              PENALTY_SOURCE_LABEL[p.source_type],
-              p.source_id ? `#${p.source_id}` : "",
-              fmt(p.credit_injected),
-              fmt(p.credit_retrieved),
-              fmt(p.loss_amount),
-              `${p.share_pct}%`,
-              fmt(p.amount),
-              p.reason,
-              st === "void"
-                ? "Void"
-                : st === "deducted"
-                  ? `Deducted · ${monthLabel(deductedIn.get(p.penalty_id) ?? "")} salary`
-                  : "Pending — next salary",
-              nameOf(p.recorded_by_user_id),
-            ],
-          };
+          const cells = Array<string>(N_COLS).fill("");
+          cells[C.date] = sheetDateOf(p.occurred_at);
+          cells[C.cs] = nameOf(p.user_id);
+          cells[C.casino] = entityName(p.company_entity_id);
+          cells[C.source] = PENALTY_SOURCE_LABEL[p.source_type];
+          cells[C.ref] = p.source_id ? `#${p.source_id}` : "";
+          cells[C.injected] = fmtAmount(p.credit_injected);
+          cells[C.retrieved] = fmtAmount(p.credit_retrieved);
+          cells[C.lost] = fmtAmount(p.loss_amount);
+          cells[C.share] = `${p.share_pct}%`;
+          cells[C.amount] = fmtAmount(p.amount);
+          cells[C.reason] = p.reason;
+          cells[C.status] =
+            st === "void"
+              ? "Void"
+              : st === "deducted"
+                ? `Deducted · ${monthLabel(deductedIn.get(p.penalty_id) ?? "")} salary`
+                : "Pending — next salary";
+          cells[C.by] = nameOf(p.recorded_by_user_id);
+          return { id: p.penalty_id, tone: st === "void" ? "muted" : st === "deducted" ? "default" : "warning", cells };
         })
         .filter((r) => !q || r.cells.some((c) => c.toLowerCase().includes(q))),
     [data, companyInScope, statusFilter, statusOf, nameOf, entityName, deductedIn, q],
@@ -190,10 +451,12 @@ export function PenaltySheet() {
               <Button
                 size="sm"
                 className="h-8 cursor-pointer gap-1.5 bg-emerald-700 text-white hover:bg-emerald-800"
-                onClick={() => setNewOpen(true)}
+                disabled={dock.saving || dock.readyCount === 0}
+                onClick={() => void dock.commit()}
               >
-                <Plus className="h-3.5 w-3.5" />
-                New penalty
+                {dock.saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                Save {dock.readyCount > 0 ? `${dock.readyCount} row${dock.readyCount === 1 ? "" : "s"}` : "rows"}
+                <span className="hidden text-[10px] opacity-70 lg:inline">{MOD_LABEL}S</span>
               </Button>
             )}
           </div>
@@ -210,12 +473,13 @@ export function PenaltySheet() {
           widthStorageKey="transactions:penalty"
           columns={columns}
           rows={rows}
-          drafts={[]}
-          onDraftsChange={noop}
-          draftStatus={noDraftStatus}
-          readOnly
+          drafts={isViewer ? [] : dock.drafts}
+          onDraftsChange={isViewer ? noop : dock.onDraftsChange}
+          draftStatus={isViewer ? noDraftStatus : dock.draftStatus}
+          flushRef={isViewer ? undefined : dock.flushRef}
+          readOnly={isViewer}
           onSelectedRowsChange={setSelectedIds}
-          focusKey="penalty"
+          focusKey={`penalty:${!!data}`}
         />
       )}
 
@@ -255,13 +519,6 @@ export function PenaltySheet() {
         </div>
       )}
 
-      <PenaltyModal
-        open={newOpen}
-        onOpenChange={setNewOpen}
-        staff={staff}
-        sharePct={data?.share_pct ?? 50}
-        onDone={() => void reload()}
-      />
       {voiding && (
         <ConfirmActionDialog
           open
