@@ -75,10 +75,10 @@ database needs `migrations/2026-09-05b-bank-cash-outs.sql`.
 Salary used to be an expense category with a typed amount. It is now worked out.
 
 **The clock.** CS agents are on it, nobody else. Signing in opens a
-`work_sessions` row, signing out closes it, and five minutes without input
-(key, click, scroll, mouse) locks the page and closes it at the last input.
-The password unlocks it and opens the next one. Open tabs share "last input"
-through localStorage, so working in one tab keeps the others alive. Hours =
+`work_sessions` row, signing out closes it, and an hour without input
+(key, click, scroll, mouse) signs them out and closes it at the last input, so
+the idle hour isn't paid. Open tabs share "last input" through localStorage,
+so working in one tab keeps the others alive. Hours =
 sum of `last_active_at − started_at`; a session over midnight is split, and
 any day with time on it counts as a day worked (business time, UTC+8).
 

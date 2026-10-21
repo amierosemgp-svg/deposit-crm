@@ -3,10 +3,10 @@ import { jsonError } from "@/lib/api-helpers";
 import { closeWorkSession, isClocked } from "@/lib/work-sessions";
 
 /**
- * POST /api/work-sessions/lock — the page locked after five idle minutes.
+ * POST /api/work-sessions/lock — the page went an hour without input.
  *
- * Stops the clock at the last thing they did. The session cookie stays: the
- * lock screen asks only for the password, not a full sign-in.
+ * Stops the clock at the last thing they did; the page signs out right after.
+ * Done first, because signing out on its own ends the session "now".
  */
 export async function POST() {
   try {

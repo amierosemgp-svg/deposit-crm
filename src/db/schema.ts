@@ -1512,7 +1512,7 @@ export const leaderTransfers = pgTable("leader_transfers", {
 /**
  * Why a work session stopped.
  *   logout   — they signed out
- *   idle     — five minutes without touching the page; the screen locked
+ *   idle     — an hour without touching the page; they were signed out
  *   replaced — they signed in again somewhere else before this one closed
  */
 export const workSessionEndEnum = pgEnum("work_session_end", ["logout", "idle", "replaced"]);
@@ -1521,9 +1521,9 @@ export const workSessionEndEnum = pgEnum("work_session_end", ["logout", "idle", 
  * A stretch of time a CS agent was signed in and using the CRM — the clock
  * their salary is paid on.
  *
- * Nobody clocks in. Signing in opens one, signing out closes it, and five idle
- * minutes lock the screen and close it at the last moment they touched the
- * page; unlocking with their password opens the next. So the time counted is
+ * Nobody clocks in. Signing in opens one, signing out closes it, and an idle
+ * hour signs them out and closes it at the last moment they touched the page;
+ * signing back in opens the next. So the time counted is
  * `last_active_at − started_at`, never "until they remembered to clock out".
  *
  * `last_active_at` moves on the page's heartbeat, which only fires after real

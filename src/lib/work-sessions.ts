@@ -1,21 +1,19 @@
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { workSessions } from "@/db/schema";
+import { IDLE_MS } from "@/lib/idle";
 
 /**
  * The CS clock. See `workSessions` in the schema for the model; in short, time
- * counts from sign-in to the last moment they touched the page, and five idle
- * minutes lock the screen and stop it.
+ * counts from sign-in to the last moment they touched the page, and an idle
+ * hour signs them out and stops it.
  */
 
-/** Five minutes without input locks the page and stops the clock. */
-export const IDLE_LOCK_MS = 5 * 60_000;
-
 /**
- * Slack on the server's side of the idle check. The page locks itself at five
- * minutes; heartbeats are throttled, so the last one can land up to half a
+ * Slack on the server's side of the idle check. The page signs out at an idle
+ * hour; heartbeats are throttled, so the last one can land up to half a
  * minute before the last real input. Without slack a CS still typing could be
- * locked out by the server a moment before the page would have.
+ * signed out by the server a moment before the page would have.
  */
 const SERVER_GRACE_MS = 90_000;
 
@@ -38,7 +36,7 @@ async function openRow(q: Db | Txn, userId: number) {
 }
 
 /**
- * Start the clock — on sign-in, and on unlocking the idle screen.
+ * Start the clock — on sign-in.
  *
  * Anything still open is closed first, at its own last activity: a browser
  * closed without signing out, or a second sign-in on another machine. Either
@@ -67,14 +65,14 @@ export async function openWorkSession(userId: number): Promise<void> {
  *
  * Returns `locked: true` when there is no live session to extend — never
  * opened, closed by a sign-in elsewhere, or idle past the limit (closed here,
- * at its last activity). The page then shows the lock screen; nothing but the
- * password brings the clock back.
+ * at its last activity). The page then signs out; signing back in starts the
+ * next session.
  */
 export async function touchWorkSession(userId: number): Promise<{ locked: boolean }> {
   const open = await openRow(db, userId);
   if (!open) return { locked: true };
   const now = Date.now();
-  if (now - new Date(open.last_active_at).getTime() > IDLE_LOCK_MS + SERVER_GRACE_MS) {
+  if (now - new Date(open.last_active_at).getTime() > IDLE_MS + SERVER_GRACE_MS) {
     await db
       .update(workSessions)
       .set({ ended_at: open.last_active_at, end_reason: "idle" })
@@ -92,7 +90,7 @@ export async function touchWorkSession(userId: number): Promise<{ locked: boolea
 export async function workSessionLive(userId: number): Promise<boolean> {
   const open = await openRow(db, userId);
   return (
-    !!open && Date.now() - new Date(open.last_active_at).getTime() <= IDLE_LOCK_MS + SERVER_GRACE_MS
+    !!open && Date.now() - new Date(open.last_active_at).getTime() <= IDLE_MS + SERVER_GRACE_MS
   );
 }
 
@@ -100,16 +98,16 @@ export async function workSessionLive(userId: number): Promise<boolean> {
  * Stop the clock.
  *
  * Signing out is itself activity, so it ends now. Idling ends at the last
- * thing they did — the five minutes spent away are not work.
+ * thing they did — the hour spent away is not work.
  */
 export async function closeWorkSession(userId: number, reason: "logout" | "idle"): Promise<void> {
   const open = await openRow(db, userId);
   if (!open) return;
   const now = new Date().toISOString();
-  // A laptop lid closed for an hour pauses the page's own lock timer; signing
+  // A laptop lid closed for an hour pauses the page's own idle timer; signing
   // out after it must not count the hour.
   const stale =
-    Date.now() - new Date(open.last_active_at).getTime() > IDLE_LOCK_MS + SERVER_GRACE_MS;
+    Date.now() - new Date(open.last_active_at).getTime() > IDLE_MS + SERVER_GRACE_MS;
   await db
     .update(workSessions)
     .set(

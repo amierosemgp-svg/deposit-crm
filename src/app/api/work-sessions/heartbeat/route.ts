@@ -10,9 +10,9 @@ const bodySchema = z.object({
 });
 
 /**
- * POST /api/work-sessions/heartbeat — the idle lock's line to the clock.
+ * POST /api/work-sessions/heartbeat — the idle sign-out's line to the clock.
  *
- * `tracked: false` for anyone not on the clock: the page then never locks.
+ * `tracked: false` for anyone not on the clock: the page then never signs them out.
  */
 export async function POST(request: Request) {
   try {
