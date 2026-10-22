@@ -1707,6 +1707,12 @@ export const salaryPayments = pgTable(
     carried_forward: numeric("carried_forward", { precision: 12, scale: 2, mode: "number" })
       .notNull()
       .default(0),
+    // Days off over the allowance (−) or under it (+), and the month behind it
+    // (lib/salary `Attendance`). Null on salaries paid under the old tiers.
+    attendance_amount: numeric("attendance_amount", { precision: 12, scale: 2, mode: "number" })
+      .notNull()
+      .default(0),
+    attendance: jsonb("attendance"),
     paid_from_account_id: integer("paid_from_account_id").references(() => bankAccounts.account_id),
     paid_from_cash_entity_id: integer("paid_from_cash_entity_id").references(
       () => entities.entity_id,
@@ -1732,11 +1738,61 @@ export const salaryPayments = pgTable(
   ],
 );
 
+/**
+ * A CS's monthly base salary (22 Oct 2026 — replaced the tier ladder). One
+ * figure per person; the month's days off move it up or down (lib/salary).
+ */
+export const staffBaseSalaries = pgTable("staff_base_salaries", {
+  user_id: integer("user_id")
+    .primaryKey()
+    .references(() => users.user_id),
+  amount: numeric("amount", { precision: 12, scale: 2, mode: "number" }).notNull(),
+  updated_by_user_id: integer("updated_by_user_id").references(() => users.user_id),
+  updated_at: timestamp("updated_at", { withTimezone: true, mode: "string" })
+    .notNull()
+    .defaultNow(),
+});
+
+/** Whether a CS told their leader before a day off (MC, emergency, leave). */
+export const staffDayMarkEnum = pgEnum("staff_day_mark", ["notified", "not_notified"]);
+
+/**
+ * A leader's word on one CS day. There is no schedule: a day with time on the
+ * clock is worked, a day without it is a day off. A mark only says what the
+ * clock can't —
+ *
+ *   notified      the day off was told to the leader (charged 100, not 200,
+ *                 once the allowance is used); on a day with time on the
+ *                 clock it is emergency leave, and the day counts as off
+ *   not_notified  a day with time on the clock that still counts as off,
+ *                 untold (left without telling anyone)
+ *
+ * An unmarked day off is untold.
+ */
+export const staffDayMarks = pgTable(
+  "staff_day_marks",
+  {
+    user_id: integer("user_id")
+      .notNull()
+      .references(() => users.user_id),
+    // "YYYY-MM-DD", business time.
+    day: varchar("day", { length: 10 }).notNull(),
+    mark: staffDayMarkEnum("mark").notNull(),
+    note: varchar("note", { length: 200 }),
+    marked_by_user_id: integer("marked_by_user_id").references(() => users.user_id),
+    marked_at: timestamp("marked_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.user_id, t.day] })],
+);
+
 export const salaryAdjustmentKindEnum = pgEnum("salary_adjustment_kind", [
   "bonus",
   "deduction",
   "penalty",
   "carry",
+  "advance",
 ]);
 
 /**
@@ -1749,7 +1805,9 @@ export const salaryAdjustmentKindEnum = pgEnum("salary_adjustment_kind", [
  *
  *   bonus / deduction — keyed by hand
  *   penalty           — written by a staff penalty (`penalty_id`)
- *   carry             — what a salary could not cover (`carried_from_salary_id`)
+ *   advance           — salary paid early, keyed by hand; the only thing that
+ *                       can take a salary below zero
+ *   carry             — the advance a salary could not cover (`carried_from_salary_id`)
  */
 export const salaryAdjustments = pgTable("salary_adjustments", {
   adjustment_id: serial("adjustment_id").primaryKey(),

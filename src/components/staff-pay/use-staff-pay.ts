@@ -3,6 +3,22 @@
 import { useCallback, useEffect, useState } from "react";
 import { useStore } from "@/lib/store";
 
+/** A month's days worked and off, and what they do to the pay (lib/salary `Attendance`). */
+export type AttendanceSummary = {
+  counted: number;
+  worked: number;
+  off: number;
+  off_told: number;
+  off_untold: number;
+  free_used: number;
+  charged_told: number;
+  charged_untold: number;
+  deduction: number;
+  bonus: number;
+  amount: number;
+  complete: boolean;
+};
+
 /** GET /api/staff-pay, as the Salary and Staff Penalty sheets read it. */
 export type StaffRow = {
   user_id: number;
@@ -10,27 +26,14 @@ export type StaffRow = {
   full_name: string;
   status: "active" | "inactive";
   company_entity_id: number;
-  hours: number;
-  days: number;
-  tier_id: number | null;
-  tier_name: string | null;
   base: number;
+  base_set: boolean;
+  attendance: AttendanceSummary;
   pending_adjustments: number;
+  would_pay: number;
+  would_carry: number;
   paid_salary_id: number | null;
 };
-
-export type SalaryTier = {
-  tier_id: number;
-  company_entity_id: number;
-  name: string;
-  min_hours: number;
-  min_days: number;
-  basis: "monthly" | "hourly";
-  default_amount: number;
-  status: "active" | "inactive";
-};
-
-export type TierRate = { user_id: number; tier_id: number; amount: number };
 
 export type SalaryPayment = {
   salary_id: number;
@@ -44,6 +47,9 @@ export type SalaryPayment = {
   tier_basis: "monthly" | "hourly" | null;
   tier_rate: number | null;
   base_amount: number;
+  attendance_amount: number;
+  /** Null on salaries paid under the old tier ladder. */
+  attendance: AttendanceSummary | null;
   adjustments_total: number;
   net_amount: number;
   carried_forward: number;
@@ -57,7 +63,7 @@ export type SalaryPayment = {
   recorded_by_user_id: number;
 };
 
-export type AdjustmentKind = "bonus" | "deduction" | "penalty" | "carry";
+export type AdjustmentKind = "bonus" | "deduction" | "penalty" | "carry" | "advance";
 
 export type SalaryAdjustment = {
   adjustment_id: number;
@@ -98,8 +104,6 @@ export type StaffPenalty = {
 export type StaffPay = {
   month: string;
   staff: StaffRow[];
-  tiers: SalaryTier[];
-  rates: TierRate[];
   payments: SalaryPayment[];
   adjustments: SalaryAdjustment[];
   penalties: StaffPenalty[];
@@ -110,7 +114,8 @@ export const ADJUSTMENT_LABEL: Record<AdjustmentKind, string> = {
   bonus: "Bonus",
   deduction: "Deduction",
   penalty: "Staff penalty",
-  carry: "Carried over",
+  carry: "Advance carried over",
+  advance: "Advance",
 };
 
 export const PENALTY_SOURCE_LABEL: Record<PenaltySource, string> = {

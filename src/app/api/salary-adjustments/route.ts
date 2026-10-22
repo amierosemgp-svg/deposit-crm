@@ -8,7 +8,7 @@ import { canManagePay, csCasino, inCasinoScope } from "@/lib/salary";
 
 const createSchema = z.object({
   user_id: z.number().int().positive(),
-  kind: z.enum(["bonus", "deduction"]),
+  kind: z.enum(["bonus", "deduction", "advance"]),
   // Always positive here; the kind says which way it goes.
   amount: z.number().positive(),
   reason: z.string().trim().min(1).max(200),
@@ -16,7 +16,9 @@ const createSchema = z.object({
 });
 
 /**
- * POST /api/salary-adjustments — a bonus or a deduction on a CS's next salary.
+ * POST /api/salary-adjustments — a bonus, a deduction or an advance on a CS's
+ * next salary. An advance is salary already handed over: it comes off after
+ * everything else, and is the only thing that can take a salary below zero.
  *
  * Penalties and carries are not keyed here: a penalty comes from a staff
  * penalty record, a carry from a salary that couldn't cover its deductions.
@@ -24,7 +26,7 @@ const createSchema = z.object({
 export async function POST(request: Request) {
   try {
     const user = await requireWriteUser();
-    if (!canManagePay(user.role)) throw new AuthError(403, "Bonuses and deductions are set by a leader or the admin");
+    if (!canManagePay(user.role)) throw new AuthError(403, "Bonuses, deductions and advances are set by a leader or the admin");
     const parsed = createSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return jsonError("Invalid payload: " + parsed.error.issues[0]?.message);
     const body = parsed.data;
@@ -50,7 +52,7 @@ export async function POST(request: Request) {
     await logActivity({
       category: "payroll",
       action: `salary_adjustment.${body.kind}`,
-      summary: `${body.kind === "bonus" ? "Bonus" : "Deduction"} of RM ${body.amount.toFixed(2)} for ${cs.user.full_name}'s next salary — ${body.reason}`,
+      summary: `${{ bonus: "Bonus", deduction: "Deduction", advance: "Advance" }[body.kind]} of RM ${body.amount.toFixed(2)} for ${cs.user.full_name}'s next salary — ${body.reason}`,
       actor: user,
       companyEntityId: cs.casinoId,
       targetType: "salary_adjustment",

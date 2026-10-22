@@ -29,10 +29,10 @@ class Refusal extends Error {}
 /**
  * POST /api/salaries — pay a CS their month.
  *
- * Nothing about the amount is typed. Hours and days come from the work clock,
- * the rung and its pay from the casino's ladder and this person's rate, and
- * every pending adjustment — penalties included — is claimed by this salary
- * in the same transaction that takes the money out of the account.
+ * Nothing about the amount is typed. The base is this person's; days worked
+ * and off come from the work clock and the leader's day marks; and every
+ * pending adjustment — penalties and advances included — is claimed by this
+ * salary in the same transaction that takes the money out of the account.
  */
 export async function POST(request: Request) {
   try {
@@ -78,6 +78,11 @@ export async function POST(request: Request) {
 
       const p = await computeSalary(txn, body.user_id, body.month, { lock: true });
       if ("error" in p) throw new Refusal(p.error);
+      // Days off decide the month, so it can only be paid once it is over.
+      // Money needed before then is an advance.
+      if (!p.attendance.complete) {
+        throw new Refusal(`${body.month} isn't over yet — pay it from the 1st of next month, or record an advance`);
+      }
       if (!inCasinoScope(user, p.company_entity_id)) {
         throw new AuthError(403, "That CS is outside your organisation");
       }
@@ -98,11 +103,11 @@ export async function POST(request: Request) {
           period_month: p.month,
           hours_worked: p.worked.hours,
           days_worked: p.worked.days,
-          tier_id: p.tier?.tier_id ?? null,
-          tier_name: p.tier?.name ?? null,
-          tier_basis: p.tier?.basis ?? null,
-          tier_rate: p.tier?.rate ?? null,
           base_amount: p.base,
+          attendance_amount: p.attendance.amount,
+          // The summary, not the 31 day rows — those are rebuilt from the
+          // clock and the marks whenever someone asks.
+          attendance: { ...p.attendance, days: undefined, waived: p.waived },
           adjustments_total: p.adjustments_total,
           net_amount: p.net,
           carried_forward: p.carried,
@@ -126,7 +131,7 @@ export async function POST(request: Request) {
           company_entity_id: p.company_entity_id,
           kind: "carry",
           amount: -p.carried,
-          reason: `Not covered by the ${p.month} salary`,
+          reason: `Advance not covered by the ${p.month} salary`,
           occurred_at: new Date().toISOString(),
           carried_from_salary_id: salary.salary_id,
           created_by_user_id: user.user_id,
@@ -162,7 +167,7 @@ export async function POST(request: Request) {
       action: "salary.paid",
       summary:
         `Salary paid: ${preview.full_name}, ${preview.month} — RM ${salary.net_amount.toFixed(2)} ` +
-        `(${preview.worked.hours}h / ${preview.worked.days} days, ${preview.tier?.name ?? "no tier"}` +
+        `(${preview.attendance.worked} days worked, ${preview.attendance.off} off, attendance ${preview.attendance.amount >= 0 ? "+" : ""}${preview.attendance.amount}` +
         `${preview.adjustments_total ? `, adjustments ${preview.adjustments_total.toFixed(2)}` : ""})` +
         (salary.carried_forward ? `; RM ${salary.carried_forward.toFixed(2)} carried to next month` : ""),
       actor: user,
@@ -170,7 +175,12 @@ export async function POST(request: Request) {
       targetType: "salary",
       targetId: salary.salary_id,
       targetLabel: `${preview.full_name} ${preview.month}`,
-      context: { net: salary.net_amount, base: salary.base_amount, adjustments: salary.adjustments_total },
+      context: {
+        net: salary.net_amount,
+        base: salary.base_amount,
+        attendance: salary.attendance_amount,
+        adjustments: salary.adjustments_total,
+      },
     });
 
     return Response.json({ salary }, { status: 201 });

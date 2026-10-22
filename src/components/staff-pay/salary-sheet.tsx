@@ -4,17 +4,19 @@
  * The Salary worksheet tab, three views:
  *
  *   Payslips     — salaries paid; the NEW ENTRIES dock pays the next ones.
- *                  Type the month and the CS, and the hours, tier, pay and
- *                  pending adjustments fill themselves; pick what it's paid
- *                  from and ⌘S. Nothing about the amount is typed.
- *   Staff & hours — each CS's month so far: hours, days, tier reached.
- *   Adjustments  — bonuses, deductions, penalties and carries waiting on (or
- *                  taken by) a salary; the dock adds bonuses and deductions.
+ *                  Type the month and the CS, and the days, base, attendance,
+ *                  pay and pending adjustments fill themselves; pick what it's
+ *                  paid from and ⌘S. Nothing about the amount is typed.
+ *   Staff & attendance — each CS's month so far: base, days worked and off
+ *                  (told / not told, free / charged), what it would pay.
+ *   Adjustments  — bonuses, deductions, advances, penalties and carries
+ *                  waiting on (or taken by) a salary; the dock adds bonuses,
+ *                  deductions and advances.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Clock, Layers, Loader2, RefreshCw, Save, Trash2, Undo2, X } from "lucide-react";
+import { CalendarDays, Loader2, RefreshCw, Save, Trash2, Undo2, Wallet, X } from "lucide-react";
 import { SheetGrid, type SheetColumn, type SheetRow } from "@/components/sheet/sheet-grid";
 import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 import { Button } from "@/components/ui/button";
@@ -22,8 +24,8 @@ import { Input } from "@/components/ui/input";
 import { useStore } from "@/lib/store";
 import { formatRM, formatShortDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { HoursModal } from "./staff-pay-dialogs";
-import { TiersModal } from "./tiers-modal";
+import { AttendanceModal } from "./staff-pay-dialogs";
+import { BaseSalaryModal } from "./base-salary-modal";
 import {
   fmtAmount,
   parseAmount,
@@ -40,6 +42,7 @@ import {
   send,
   useStaffPay,
   type AdjustmentKind,
+  type AttendanceSummary,
   type SalaryAdjustment,
   type SalaryPayment,
   type StaffRow,
@@ -49,7 +52,7 @@ type View = "payslips" | "staff" | "adjustments";
 
 const VIEWS: Array<[View, string]> = [
   ["payslips", "Payslips"],
-  ["staff", "Staff & hours"],
+  ["staff", "Staff & attendance"],
   ["adjustments", "Adjustments"],
 ];
 
@@ -59,7 +62,7 @@ const noDraftStatus = () => ({ state: "empty" as const });
 const MOD_LABEL = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl+";
 
 // Payslip columns, saved rows and the dock alike.
-const P = { month: 0, cs: 1, casino: 2, hours: 3, days: 4, tier: 5, base: 6, adj: 7, net: 8, carry: 9, from: 10, status: 11, at: 12, by: 13, notes: 14 } as const;
+const P = { month: 0, cs: 1, casino: 2, worked: 3, off: 4, base: 5, att: 6, adj: 7, net: 8, carry: 9, from: 10, status: 11, at: 12, by: 13, notes: 14 } as const;
 const P_COLS = 15;
 // Adjustment columns.
 const A = { date: 0, cs: 1, kind: 2, reason: 3, amount: 4, status: 5, by: 6 } as const;
@@ -67,13 +70,15 @@ const A_COLS = 7;
 
 type Preview = {
   company_entity_id: number;
-  worked: { hours: number; days: number };
-  tier: { name: string; basis: "monthly" | "hourly"; rate: number } | null;
   base: number;
+  attendance: AttendanceSummary;
   adjustments_total: number;
   net: number;
   carried: number;
 };
+
+/** "6 (2 told, 4 not)" — days off, and how many were told. */
+const offCell = (a: AttendanceSummary) => (a.off === 0 ? "0" : `${a.off} (${a.off_told} told, ${a.off_untold} not)`);
 type PreviewEntry = { preview: Preview } | { error: string };
 
 /** The month before this one — the one usually being paid. */
@@ -99,8 +104,8 @@ export function SalarySheet() {
   const { data, loading, error, reload } = useStaffPay(month);
   const [selectedIds, setSelectedIds] = useState<(string | number)[]>([]);
   const [search, setSearch] = useState("");
-  const [hoursFor, setHoursFor] = useState<number | null>(null);
-  const [tiersOpen, setTiersOpen] = useState(false);
+  const [daysFor, setDaysFor] = useState<number | null>(null);
+  const [basesOpen, setBasesOpen] = useState(false);
   const [confirming, setConfirming] = useState<
     { kind: "reverse"; salary: SalaryPayment } | { kind: "remove"; adj: SalaryAdjustment } | null
   >(null);
@@ -197,7 +202,7 @@ export function SalarySheet() {
     (rows: string[][]) =>
       rows.map((row) => {
         const next = [...row];
-        for (const c of [P.casino, P.hours, P.days, P.tier, P.base, P.adj, P.net, P.carry, P.status, P.at, P.by]) next[c] = "";
+        for (const c of [P.casino, P.worked, P.off, P.base, P.att, P.adj, P.net, P.carry, P.status, P.at, P.by]) next[c] = "";
         const cs = resolveCs(row[P.cs] ?? "");
         const m = parseMonth(row[P.month] ?? "");
         if (!cs || !m) return next;
@@ -216,14 +221,14 @@ export function SalarySheet() {
           return next;
         }
         const p = entry.preview;
-        next[P.hours] = String(p.worked.hours);
-        next[P.days] = String(p.worked.days);
-        next[P.tier] = p.tier ? `${p.tier.name}${p.tier.basis === "hourly" ? ` @ ${fmtAmount(p.tier.rate)}/h` : ""}` : "No tier";
+        next[P.worked] = String(p.attendance.worked);
+        next[P.off] = offCell(p.attendance);
         next[P.base] = fmtAmount(p.base);
+        next[P.att] = signed(p.attendance.amount);
         next[P.adj] = signed(p.adjustments_total);
         next[P.net] = fmtAmount(p.net);
         next[P.carry] = p.carried ? fmtAmount(p.carried) : "—";
-        next[P.status] = "To pay";
+        next[P.status] = !p.attendance.complete ? "Month not over yet" : p.base === 0 ? "No base salary set" : "To pay";
         return next;
       }),
     [resolveCs, entityName, alreadyPaid, previews],
@@ -249,6 +254,7 @@ export function SalarySheet() {
       if (!entry) return null;
       if ("error" in entry) return { ok: false, error: entry.error };
       const p = entry.preview;
+      if (!p.attendance.complete) return { ok: false, error: `${monthLabel(m)} isn't over yet — pay it next month, or record an advance` };
       const fromCell = (row[P.from] ?? "").trim();
       const from = fromCell ? resolvePayFrom(fromCell) : null;
       if (p.net > 0 && !fromCell) return { ok: false, error: "Paid From — the account (or leader's cash) it comes out of" };
@@ -351,7 +357,7 @@ export function SalarySheet() {
       }),
     [resolveCs],
   );
-  type AdjBody = { user_id: number; kind: "bonus" | "deduction"; amount: number; reason: string; occurred_at: string };
+  type AdjBody = { user_id: number; kind: "bonus" | "deduction" | "advance"; amount: number; reason: string; occurred_at: string };
   const adjParse = useCallback(
     (row: string[]): Parsed<AdjBody> => {
       const date = parseSheetDate(row[A.date] ?? "");
@@ -359,8 +365,9 @@ export function SalarySheet() {
       const cs = resolveCs(row[A.cs] ?? "");
       if (!cs) return { ok: false, error: (row[A.cs] ?? "").trim() ? `No CS called "${row[A.cs].trim()}"` : "Who — pick the CS" };
       const k = (row[A.kind] ?? "").trim().toLowerCase();
-      const kind = k.startsWith("b") || k === "+" ? "bonus" : k.startsWith("d") || k === "-" ? "deduction" : null;
-      if (!kind) return { ok: false, error: `Type is Bonus or Deduction, not "${row[A.kind].trim()}"` };
+      const kind =
+        k.startsWith("b") || k === "+" ? "bonus" : k.startsWith("d") || k === "-" ? "deduction" : k.startsWith("a") ? "advance" : null;
+      if (!kind) return { ok: false, error: `Type is Bonus, Deduction or Advance, not "${row[A.kind].trim()}"` };
       const amount = parseAmount(row[A.amount] ?? "");
       if (amount === null || amount <= 0) return { ok: false, error: "Amount — a figure above 0" };
       const reason = (row[A.reason] ?? "").trim();
@@ -406,10 +413,10 @@ export function SalarySheet() {
         { key: "month", label: "Month", width: 92, entry: true, required: true, placeholder: monthLabel(lastMonth()) },
         { key: "cs", label: "CS", width: 170, entry: true, required: true, options: csOptions, placeholder: "who" },
         { key: "casino", label: "Casino", width: 120 },
-        { key: "hours", label: "Hours", width: 66, align: "right", numeric: true },
-        { key: "days", label: "Days", width: 52, align: "right", numeric: true },
-        { key: "tier", label: "Tier", width: 120 },
-        { key: "base", label: "Tier Pay", width: 92, align: "right", numeric: true },
+        { key: "worked", label: "Worked", width: 66, align: "right", numeric: true },
+        { key: "off", label: "Days Off", width: 140 },
+        { key: "base", label: "Base", width: 92, align: "right", numeric: true },
+        { key: "att", label: "Attendance", width: 92, align: "right", numeric: true },
         { key: "adj", label: "Adjustments", width: 98, align: "right", numeric: true },
         { key: "net", label: "Pay", width: 96, align: "right", numeric: true },
         { key: "carry", label: "Carried", width: 80, align: "right", numeric: true },
@@ -435,10 +442,11 @@ export function SalarySheet() {
           cells[P.month] = monthLabel(p.period_month);
           cells[P.cs] = nameOf(p.user_id);
           cells[P.casino] = entityName(p.company_entity_id);
-          cells[P.hours] = String(p.hours_worked);
-          cells[P.days] = String(p.days_worked);
-          cells[P.tier] = p.tier_name ? `${p.tier_name}${p.tier_basis === "hourly" ? ` @ ${fmtAmount(p.tier_rate ?? 0)}/h` : ""}` : "No tier";
+          // Salaries paid under the old tier ladder have no attendance.
+          cells[P.worked] = String(p.attendance?.worked ?? p.days_worked);
+          cells[P.off] = p.attendance ? offCell(p.attendance) : p.tier_name ? `— (tier: ${p.tier_name})` : "—";
           cells[P.base] = fmtAmount(p.base_amount);
+          cells[P.att] = p.attendance ? signed(p.attendance_amount) : "—";
           cells[P.adj] = signed(p.adjustments_total);
           cells[P.net] = fmtAmount(p.net_amount);
           cells[P.carry] = p.carried_forward ? fmtAmount(p.carried_forward) : "—";
@@ -455,13 +463,15 @@ export function SalarySheet() {
 
     if (view === "staff") {
       const columns: SheetColumn[] = [
-        { key: "cs", label: "CS", width: 180 },
-        { key: "casino", label: "Casino", width: 140 },
-        { key: "hours", label: "Hours", width: 80, align: "right", numeric: true },
-        { key: "days", label: "Days", width: 64, align: "right", numeric: true },
-        { key: "tier", label: "Tier Reached", width: 140 },
-        { key: "base", label: "Tier Pay", width: 100, align: "right", numeric: true },
-        { key: "pending", label: "Pending Adj.", width: 110, align: "right", numeric: true },
+        { key: "cs", label: "CS", width: 170 },
+        { key: "casino", label: "Casino", width: 120 },
+        { key: "base", label: "Base", width: 90, align: "right", numeric: true },
+        { key: "worked", label: "Worked", width: 70, align: "right", numeric: true },
+        { key: "off", label: "Days Off", width: 150 },
+        { key: "free", label: "Free Used", width: 80, align: "right", numeric: true },
+        { key: "charged", label: "Charged", width: 130 },
+        { key: "att", label: "Attendance", width: 96, align: "right", numeric: true },
+        { key: "pending", label: "Pending Adj.", width: 104, align: "right", numeric: true },
         { key: "net", label: "Would Pay", width: 150, align: "right", numeric: true },
         { key: "status", label: monthLabel(month), width: 100, align: "center" },
       ];
@@ -469,19 +479,28 @@ export function SalarySheet() {
         .slice()
         .sort((a, b) => a.full_name.localeCompare(b.full_name))
         .map((s): SheetRow => {
-          const net = s.base + s.pending_adjustments;
+          const a = s.attendance;
+          const charged = [a.charged_told && `${a.charged_told} told`, a.charged_untold && `${a.charged_untold} not told`]
+            .filter(Boolean)
+            .join(", ");
           return {
             id: s.user_id,
-            tone: s.paid_salary_id ? "success" : s.status === "inactive" ? "muted" : "default",
+            tone: s.paid_salary_id ? "success" : s.status === "inactive" ? "muted" : a.charged_untold ? "warning" : "default",
             cells: [
               s.full_name + (s.status === "inactive" ? " (inactive)" : ""),
               entityName(s.company_entity_id),
-              String(s.hours),
-              String(s.days),
-              s.tier_name ?? "No tier yet",
-              fmtAmount(s.base),
+              s.base_set ? fmtAmount(s.base) : "Not set",
+              String(a.worked),
+              offCell(a),
+              `${a.free_used}/4`,
+              charged || "—",
+              signed(a.amount) + (a.complete || a.amount === 0 ? "" : " so far"),
               signed(s.pending_adjustments),
-              s.paid_salary_id ? "" : net < 0 ? `0.00 (−${fmtAmount(-net)} carries)` : fmtAmount(net),
+              s.paid_salary_id
+                ? ""
+                : s.would_carry > 0
+                  ? `0.00 (advance −${fmtAmount(s.would_carry)} carries)`
+                  : fmtAmount(s.would_pay),
               s.paid_salary_id ? "Paid" : "Not paid",
             ],
           };
@@ -494,7 +513,7 @@ export function SalarySheet() {
     const columns: SheetColumn[] = [
       { key: "date", label: "Date", width: 92, align: "center", entry: true, required: true, placeholder: todaySheetDate() },
       { key: "cs", label: "CS", width: 170, entry: true, required: true, options: csOptions, placeholder: "who" },
-      { key: "kind", label: "Type", width: 120, entry: true, required: true, options: ["Bonus", "Deduction"] },
+      { key: "kind", label: "Type", width: 120, entry: true, required: true, options: ["Bonus", "Deduction", "Advance"] },
       { key: "reason", label: "Reason", width: 280, entry: true, required: true, placeholder: "what it's for" },
       { key: "amount", label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "100" },
       { key: "status", label: "Status", width: 170 },
@@ -578,7 +597,7 @@ export function SalarySheet() {
               value={month}
               onChange={(e) => e.target.value && setMonth(e.target.value)}
               className="h-8 w-[150px] text-[13px]"
-              title="Hours and tier for this month"
+              title="Days worked and off for this month"
             />
           )}
           <span className="text-xs text-muted-foreground">
@@ -587,9 +606,9 @@ export function SalarySheet() {
           {error && <span className="text-xs text-red-600 dark:text-red-400">{error}</span>}
 
           <div className="ml-auto flex items-center gap-2">
-            <Button size="sm" variant="outline" className="h-8 cursor-pointer gap-1.5" onClick={() => setTiersOpen(true)}>
-              <Layers className="h-3.5 w-3.5" />
-              Salary tiers
+            <Button size="sm" variant="outline" className="h-8 cursor-pointer gap-1.5" onClick={() => setBasesOpen(true)}>
+              <Wallet className="h-3.5 w-3.5" />
+              Base salaries
             </Button>
             <Button size="sm" variant="outline" className="h-8 cursor-pointer gap-1.5" onClick={() => void reload()}>
               <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
@@ -647,8 +666,8 @@ export function SalarySheet() {
               <X className="h-3.5 w-3.5" />
             </button>
             {selStaff && (
-              <Button size="xs" variant="outline" className="cursor-pointer gap-1" onClick={() => setHoursFor(selStaff.user_id)}>
-                <Clock className="h-3 w-3" /> Day by day
+              <Button size="xs" variant="outline" className="cursor-pointer gap-1" onClick={() => setDaysFor(selStaff.user_id)}>
+                <CalendarDays className="h-3 w-3" /> Day by day
               </Button>
             )}
             {selPay && canManage && selPay.status === "paid" && (
@@ -661,7 +680,7 @@ export function SalarySheet() {
                 <Undo2 className="h-3 w-3" /> Reverse
               </Button>
             )}
-            {selAdj && canManage && !selAdj.salary_id && (selAdj.kind === "bonus" || selAdj.kind === "deduction") && (
+            {selAdj && canManage && !selAdj.salary_id && (selAdj.kind === "bonus" || selAdj.kind === "deduction" || selAdj.kind === "advance") && (
               <Button
                 size="xs"
                 variant="outline"
@@ -676,13 +695,19 @@ export function SalarySheet() {
         </div>
       )}
 
-      <HoursModal open={hoursFor !== null} onOpenChange={(o) => !o && setHoursFor(null)} userId={hoursFor} month={month} />
-      <TiersModal
-        open={tiersOpen}
-        onOpenChange={setTiersOpen}
-        tiers={data?.tiers ?? []}
-        rates={data?.rates ?? []}
+      <AttendanceModal
+        open={daysFor !== null}
+        onOpenChange={(o) => !o && setDaysFor(null)}
+        userId={daysFor}
+        month={month}
+        canMark={canManage && !staff.find((s) => s.user_id === daysFor)?.paid_salary_id}
+        onChanged={() => void reload()}
+      />
+      <BaseSalaryModal
+        open={basesOpen}
+        onOpenChange={setBasesOpen}
         staff={staff}
+        canManage={canManage}
         onDone={() => void afterSave()}
       />
       {confirming && (

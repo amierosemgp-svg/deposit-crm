@@ -7,7 +7,7 @@ import { logActivity } from "@/lib/activity-log";
 import { canManagePay, inCasinoScope } from "@/lib/salary";
 
 /**
- * DELETE /api/salary-adjustments/:id — drop a pending bonus or deduction.
+ * DELETE /api/salary-adjustments/:id — drop a pending bonus, deduction or advance.
  * Once a salary has paid it, it is part of that payslip; reverse the salary.
  */
 export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string }> }) {
