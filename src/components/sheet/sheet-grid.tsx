@@ -907,6 +907,7 @@ export function SheetGrid({
   committedEditable,
   onCommittedEdit,
   onSelectedRowsChange,
+  onSelectedDraftsChange,
   draftSuggestions,
   committedSuggestions,
   onEditStart,
@@ -977,6 +978,11 @@ export function SheetGrid({
   onCommittedEdit?: (rowIndex: number, colIndex: number, value: string) => void;
   /** Committed row ids inside the current selection — drives the action bar. */
   onSelectedRowsChange?: (ids: (string | number)[]) => void;
+  /**
+   * Entry rows inside the selection, as draft indices — so a row still being
+   * typed can open what it names (the CS a salary is for) like a saved one.
+   */
+  onSelectedDraftsChange?: (indices: number[]) => void;
   /**
    * Per-cell typeahead for entry rows, overriding the column's static options
    * when it returns a list — e.g. the bonus plans this row's player actually
@@ -2370,6 +2376,23 @@ export function SheetGrid({
      
     onSelectedRowsChange(ids);
   }, [allRanges, rows, draftStart, onSelectedRowsChange]);
+
+  // Entry rows inside the selection, reported the same way.
+  const lastEmittedDraftsRef = useRef("");
+  useEffect(() => {
+    if (!onSelectedDraftsChange) return;
+    const seen = new Set<number>();
+    for (const b of allRanges) {
+      for (let r = Math.max(b.r1, draftStart); r <= b.r2; r++) {
+        if (r - draftStart < drafts.length) seen.add(r - draftStart);
+      }
+    }
+    const indices = [...seen].sort((a, b) => a - b);
+    const key = indices.join(",");
+    if (key === lastEmittedDraftsRef.current) return;
+    lastEmittedDraftsRef.current = key;
+    onSelectedDraftsChange(indices);
+  }, [allRanges, draftStart, drafts.length, onSelectedDraftsChange]);
 
   // ---- selection stats (the Excel status bar) ----
 

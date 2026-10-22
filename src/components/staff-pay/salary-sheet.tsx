@@ -16,7 +16,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { CalendarDays, Loader2, RefreshCw, Save, Trash2, Undo2, Wallet, X } from "lucide-react";
+import { Loader2, RefreshCw, Save, Trash2, Undo2, Wallet, X } from "lucide-react";
 import { SheetGrid, type SheetColumn, type SheetRow } from "@/components/sheet/sheet-grid";
 import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 import { Button } from "@/components/ui/button";
@@ -24,7 +24,7 @@ import { Input } from "@/components/ui/input";
 import { useStore } from "@/lib/store";
 import { formatRM, formatShortDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { AttendanceModal } from "./staff-pay-dialogs";
+import { CsProfileButton, CsProfileModal, useCsProfileShortcut, type CsSection } from "./cs-profile-modal";
 import { BaseSalaryModal } from "./base-salary-modal";
 import {
   fmtAmount,
@@ -95,7 +95,6 @@ export function SalarySheet() {
   const entityName = useStore((s) => s.entityName);
   const companyInScope = useStore((s) => s.companyInScope);
   const refreshStore = useStore((s) => s.refresh);
-  const isViewer = me?.role === "viewer";
   const isAdmin = me?.role === "super_admin";
   const canManage = isAdmin || me?.role === "company_leader";
 
@@ -104,7 +103,8 @@ export function SalarySheet() {
   const { data, loading, error, reload } = useStaffPay(month);
   const [selectedIds, setSelectedIds] = useState<(string | number)[]>([]);
   const [search, setSearch] = useState("");
-  const [daysFor, setDaysFor] = useState<number | null>(null);
+  const [selectedDrafts, setSelectedDrafts] = useState<number[]>([]);
+  const [profile, setProfile] = useState<{ userId: number; section?: CsSection } | null>(null);
   const [basesOpen, setBasesOpen] = useState(false);
   const [confirming, setConfirming] = useState<
     { kind: "reverse"; salary: SalaryPayment } | { kind: "remove"; adj: SalaryAdjustment } | null
@@ -113,6 +113,7 @@ export function SalarySheet() {
   const switchView = (v: View) => {
     setView(v);
     setSelectedIds([]);
+    setSelectedDrafts([]);
   };
 
   const staff = useMemo(
@@ -546,9 +547,36 @@ export function SalarySheet() {
   // ---- what the selection can do ----
   const selected = selectedIds.map(Number);
   const one = selected.length === 1 ? selected[0] : null;
-  const selStaff = view === "staff" && one != null ? staff.find((s) => s.user_id === one) : undefined;
   const selPay = view === "payslips" && one != null ? data?.payments.find((p) => p.salary_id === one) : undefined;
   const selAdj = view === "adjustments" && one != null ? data?.adjustments.find((a) => a.adjustment_id === one) : undefined;
+
+  // The CS behind the selection — saved rows or NEW ENTRIES rows whose CS cell
+  // names someone — set only when it's one person, so the profile is unambiguous.
+  const selectedCs = useMemo(() => {
+    const ids = new Set<number>();
+    for (const id of selectedIds.map(Number)) {
+      const uid =
+        view === "staff"
+          ? id
+          : view === "payslips"
+            ? data?.payments.find((p) => p.salary_id === id)?.user_id
+            : data?.adjustments.find((a) => a.adjustment_id === id)?.user_id;
+      if (uid) ids.add(uid);
+    }
+    if (dockOpen && dock) {
+      const col = view === "payslips" ? P.cs : A.cs;
+      for (const i of selectedDrafts) {
+        const cs = resolveCs(dock.drafts[i]?.[col] ?? "");
+        if (cs) ids.add(cs.user_id);
+      }
+    }
+    return ids.size === 1 ? [...ids][0] : null;
+  }, [selectedIds, selectedDrafts, view, data, dockOpen, dock, resolveCs]);
+  const openProfile = useCallback(
+    (userId: number) => setProfile({ userId, section: view === "staff" ? "attendance" : undefined }),
+    [view],
+  );
+  useCsProfileShortcut(profile ? null : selectedCs, openProfile);
 
   const doConfirm = async () => {
     if (!confirming) return;
@@ -647,29 +675,30 @@ export function SalarySheet() {
           flushRef={dockOpen && dock ? dock.flushRef : undefined}
           readOnly={!dockOpen}
           onSelectedRowsChange={setSelectedIds}
+          onSelectedDraftsChange={setSelectedDrafts}
           focusKey={`salary:${view}:${!!data}`}
         />
       )}
 
-      {!isViewer && selectedIds.length > 0 && (
+      {(selectedIds.length > 0 || selectedCs) && (
         <div className="pointer-events-none absolute inset-x-0 bottom-14 z-40 flex justify-center">
           <div className="pointer-events-auto flex max-w-[92%] flex-wrap items-center justify-center gap-1.5 rounded-lg border border-emerald-600/40 bg-background/95 px-3 py-1.5 shadow-xl backdrop-blur">
-            <span className="text-[11px] font-semibold text-emerald-800 dark:text-emerald-300">
-              {selectedIds.length} selected
-            </span>
-            <button
-              type="button"
-              onClick={() => setSelectedIds([])}
-              className="cursor-pointer text-muted-foreground hover:text-foreground"
-              title="Clear selection"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-            {selStaff && (
-              <Button size="xs" variant="outline" className="cursor-pointer gap-1" onClick={() => setDaysFor(selStaff.user_id)}>
-                <CalendarDays className="h-3 w-3" /> Day by day
-              </Button>
+            {selectedIds.length > 0 && (
+              <>
+                <span className="text-[11px] font-semibold text-emerald-800 dark:text-emerald-300">
+                  {selectedIds.length} selected
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setSelectedIds([])}
+                  className="cursor-pointer text-muted-foreground hover:text-foreground"
+                  title="Clear selection"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </>
             )}
+            {selectedCs && <CsProfileButton onClick={() => openProfile(selectedCs)} />}
             {selPay && canManage && selPay.status === "paid" && (
               <Button
                 size="xs"
@@ -690,17 +719,18 @@ export function SalarySheet() {
                 <Trash2 className="h-3 w-3" /> Remove
               </Button>
             )}
-            {selected.length > 1 && <span className="text-[11px] text-muted-foreground">Pick one row to act on it</span>}
+            {selected.length > 1 && !selectedCs && <span className="text-[11px] text-muted-foreground">Pick one row to act on it</span>}
           </div>
         </div>
       )}
 
-      <AttendanceModal
-        open={daysFor !== null}
-        onOpenChange={(o) => !o && setDaysFor(null)}
-        userId={daysFor}
-        month={month}
-        canMark={canManage && !staff.find((s) => s.user_id === daysFor)?.paid_salary_id}
+      <CsProfileModal
+        open={profile !== null}
+        onOpenChange={(o) => !o && setProfile(null)}
+        userId={profile?.userId ?? null}
+        initialMonth={view === "staff" ? month : undefined}
+        initialSection={profile?.section}
+        canManage={canManage}
         onChanged={() => void reload()}
       />
       <BaseSalaryModal

@@ -26,6 +26,7 @@ import {
   useEntryDock,
   type Parsed,
 } from "./entry-dock";
+import { CsProfileButton, CsProfileModal, useCsProfileShortcut } from "./cs-profile-modal";
 import {
   currentMonth,
   monthLabel,
@@ -108,6 +109,8 @@ export function PenaltySheet() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<Set<string>>(() => new Set());
   const [voiding, setVoiding] = useState<StaffPenalty | null>(null);
+  const [selectedDrafts, setSelectedDrafts] = useState<number[]>([]);
+  const [profileFor, setProfileFor] = useState<number | null>(null);
 
   const staff = useMemo(
     () => (data?.staff ?? []).filter((s) => companyInScope(s.company_entity_id)),
@@ -396,6 +399,24 @@ export function PenaltySheet() {
     [data, companyInScope, statusFilter, statusOf, nameOf, entityName, deductedIn, q],
   );
 
+  // The CS behind the selection, saved rows and NEW ENTRIES rows alike —
+  // only when it's one person.
+  const selectedCs = useMemo(() => {
+    const ids = new Set<number>();
+    for (const id of selectedIds) {
+      const uid = data?.penalties.find((p) => p.penalty_id === Number(id))?.user_id;
+      if (uid) ids.add(uid);
+    }
+    if (!isViewer) {
+      for (const i of selectedDrafts) {
+        const cs = resolveCs(dock.drafts[i]?.[C.cs] ?? "");
+        if (cs) ids.add(cs.user_id);
+      }
+    }
+    return ids.size === 1 ? [...ids][0] : null;
+  }, [selectedIds, selectedDrafts, data, isViewer, dock.drafts, resolveCs]);
+  useCsProfileShortcut(profileFor ? null : selectedCs, setProfileFor);
+
   const one = selectedIds.length === 1 ? Number(selectedIds[0]) : null;
   const sel = one != null ? data?.penalties.find((p) => p.penalty_id === one) : undefined;
 
@@ -479,24 +500,30 @@ export function PenaltySheet() {
           flushRef={isViewer ? undefined : dock.flushRef}
           readOnly={isViewer}
           onSelectedRowsChange={setSelectedIds}
+          onSelectedDraftsChange={setSelectedDrafts}
           focusKey={`penalty:${!!data}`}
         />
       )}
 
-      {!isViewer && selectedIds.length > 0 && (
+      {(selectedIds.length > 0 || selectedCs) && (
         <div className="pointer-events-none absolute inset-x-0 bottom-14 z-40 flex justify-center">
           <div className="pointer-events-auto flex max-w-[92%] flex-wrap items-center justify-center gap-1.5 rounded-lg border border-emerald-600/40 bg-background/95 px-3 py-1.5 shadow-xl backdrop-blur">
-            <span className="text-[11px] font-semibold text-emerald-800 dark:text-emerald-300">
-              {selectedIds.length} selected
-            </span>
-            <button
-              type="button"
-              onClick={() => setSelectedIds([])}
-              className="cursor-pointer text-muted-foreground hover:text-foreground"
-              title="Clear selection"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
+            {selectedIds.length > 0 && (
+              <>
+                <span className="text-[11px] font-semibold text-emerald-800 dark:text-emerald-300">
+                  {selectedIds.length} selected
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setSelectedIds([])}
+                  className="cursor-pointer text-muted-foreground hover:text-foreground"
+                  title="Clear selection"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </>
+            )}
+            {selectedCs && <CsProfileButton onClick={() => setProfileFor(selectedCs)} />}
             {sel && canVoid && statusOf(sel) === "pending" && (
               <Button
                 size="xs"
@@ -512,12 +539,21 @@ export function PenaltySheet() {
                 Already deducted — reverse that salary to change it
               </span>
             )}
-            {selectedIds.length > 1 && (
+            {selectedIds.length > 1 && !selectedCs && (
               <span className="text-[11px] text-muted-foreground">Pick one row to act on it</span>
             )}
           </div>
         </div>
       )}
+
+      <CsProfileModal
+        open={profileFor !== null}
+        onOpenChange={(o) => !o && setProfileFor(null)}
+        userId={profileFor}
+        initialSection="penalties"
+        canManage={canVoid}
+        onChanged={() => void reload()}
+      />
 
       {voiding && (
         <ConfirmActionDialog
