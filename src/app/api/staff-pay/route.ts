@@ -1,7 +1,7 @@
 import { and, desc, eq, isNull, or, sql, type SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { db } from "@/db";
-import { entities, salaryAdjustments, salaryPayments, staffPenalties, users } from "@/db/schema";
+import { entities, salaryAdjustments, salaryPayments, staffLeaves, staffPenalties, users } from "@/db/schema";
 import { authErrorResponse, requireUser } from "@/lib/auth";
 import { getSettingNumber, jsonError } from "@/lib/api-helpers";
 import {
@@ -27,7 +27,7 @@ import {
  * Per CS for the month: base salary, days worked and off (told / untold, free
  * or charged), what attendance does to the pay, what's pending against their
  * next salary, and what it would pay. Plus the payslips, adjustments and
- * penalties.
+ * penalties and leaves.
  */
 export async function GET(request: Request) {
   try {
@@ -56,7 +56,7 @@ export async function GET(request: Request) {
       .where(and(eq(users.role, "cs_agent"), eq(entities.entity_type, "cs"), scope(sql`${entities.parent_entity_id}`)));
     const staffIds = staffRows.map((s) => s.user_id);
 
-    const [bases, marks, firsts, payments, adjustments, penalties, sessions, sharePct] = await Promise.all([
+    const [bases, marks, firsts, payments, adjustments, penalties, leaves, sessions, sharePct] = await Promise.all([
       baseSalaries(db, staffIds),
       dayMarks(db, staffIds, month),
       firstDays(db, staffIds),
@@ -68,6 +68,7 @@ export async function GET(request: Request) {
         .where(and(scope(salaryAdjustments.company_entity_id), or(isNull(salaryAdjustments.salary_id), sql`${salaryAdjustments.created_at} > now() - interval '120 days'`)))
         .orderBy(desc(salaryAdjustments.occurred_at)),
       db.select().from(staffPenalties).where(scope(staffPenalties.company_entity_id)).orderBy(desc(staffPenalties.occurred_at)).limit(500),
+      db.select().from(staffLeaves).where(scope(staffLeaves.company_entity_id)).orderBy(desc(staffLeaves.from_day)).limit(500),
       sessionsFor(db, staffIds, month),
       getSettingNumber(STAFF_PENALTY_SHARE_KEY, 50),
     ]);
@@ -102,6 +103,7 @@ export async function GET(request: Request) {
       payments,
       adjustments,
       penalties,
+      leaves,
       share_pct: sharePct,
     });
   } catch (e) {

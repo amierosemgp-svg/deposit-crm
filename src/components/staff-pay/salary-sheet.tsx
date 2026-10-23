@@ -730,8 +730,6 @@ export function SalarySheet() {
         userId={profile?.userId ?? null}
         initialMonth={view === "staff" ? month : undefined}
         initialSection={profile?.section}
-        canManage={canManage}
-        onChanged={() => void reload()}
       />
       <BaseSalaryModal
         open={basesOpen}

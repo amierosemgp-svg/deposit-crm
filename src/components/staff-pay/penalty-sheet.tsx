@@ -551,8 +551,6 @@ export function PenaltySheet() {
         onOpenChange={(o) => !o && setProfileFor(null)}
         userId={profileFor}
         initialSection="penalties"
-        canManage={canVoid}
-        onChanged={() => void reload()}
       />
 
       {voiding && (

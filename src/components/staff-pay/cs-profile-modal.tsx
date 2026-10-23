@@ -1,10 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { toast } from "sonner";
 import {
   Ban,
   Calendar,
+  CalendarOff,
   CalendarDays,
   Clock,
   HandCoins,
@@ -28,10 +28,13 @@ import {
   currentMonth,
   monthLabel,
   PENALTY_SOURCE_LABEL,
-  send,
+  LEAVE_KIND_LABEL,
+  leaveDays,
+  sheetDay,
   type AttendanceSummary,
   type SalaryAdjustment,
   type SalaryPayment,
+  type StaffLeave,
   type StaffPenalty,
 } from "./use-staff-pay";
 
@@ -63,11 +66,13 @@ type Profile = {
   payments: SalaryPayment[];
   adjustments: SalaryAdjustment[];
   penalties: StaffPenalty[];
+  leaves: StaffLeave[];
 };
 
 const SECTIONS = [
   { id: "overview", label: "Overview", icon: LayoutDashboard },
   { id: "attendance", label: "Day by day", icon: CalendarDays },
+  { id: "leave", label: "Leave", icon: CalendarOff },
   { id: "penalties", label: "Penalties", icon: Ban },
   { id: "adjustments", label: "Adjustments & advances", icon: HandCoins },
   { id: "payslips", label: "Payslips", icon: Receipt },
@@ -110,8 +115,6 @@ export function CsProfileModal({
   userId,
   initialMonth,
   initialSection,
-  canManage,
-  onChanged,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
@@ -119,10 +122,6 @@ export function CsProfileModal({
   /** The month the sheet is on; defaults to this one. */
   initialMonth?: string;
   initialSection?: CsSection;
-  /** Leaders and the admin — they may mark days, on a month not yet paid. */
-  canManage: boolean;
-  /** A day mark moved the figures; the sheet should reload. */
-  onChanged?: () => void;
 }) {
   const entityName = useStore((s) => s.entityName);
   const users = useStore((s) => s.users);
@@ -130,7 +129,6 @@ export function CsProfileModal({
   const [section, setSection] = useState<CsSection>(initialSection ?? "overview");
   const [data, setData] = useState<Profile | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [busyDay, setBusyDay] = useState<string | null>(null);
 
   // Each opening starts where the caller asked.
   useEffect(() => {
@@ -164,16 +162,6 @@ export function CsProfileModal({
     [users],
   );
 
-  const mark = async (day: string, value: DayMark | null) => {
-    if (!userId) return;
-    setBusyDay(day);
-    const res = await send("/api/staff-pay/days", "PUT", { user_id: userId, day, mark: value });
-    setBusyDay(null);
-    if (!res.ok) return void toast.error(res.error);
-    await load();
-    onChanged?.();
-  };
-
   // Which salary took each adjustment / penalty.
   const payMonth = useMemo(() => new Map((data?.payments ?? []).map((p) => [p.salary_id, p.period_month])), [data]);
   const penaltyStatus = useCallback(
@@ -191,6 +179,7 @@ export function CsProfileModal({
   const cs = data && data.cs.user_id === userId ? data.cs : null;
   const pending = (data?.adjustments ?? []).filter((a) => a.salary_id === null);
   const counts = {
+    leave: data?.leaves.filter((l) => l.status === "active").length ?? 0,
     penalties: data?.penalties.filter((p) => p.status !== "void").length ?? 0,
     adjustments: data?.adjustments.length ?? 0,
     payslips: data?.payments.length ?? 0,
@@ -374,15 +363,14 @@ export function CsProfileModal({
                   ) : (
                     <div className="space-y-2">
                       <p className="text-xs text-muted-foreground">
-                        A day with time on the clock is worked; a day without is off, and not told unless marked. 4
-                        days off are free, then RM 100 each if told, RM 200 if not.
+                        A day with time on the clock is worked; a day without is off, and not told unless a leave on
+                        the Leave sheet says so. A leave makes its days off, worked or not. 4 days off are free, then
+                        RM 100 each if told, RM 200 if not.
                       </p>
                       <AttendanceLine a={loaded.attendance} />
                       <AttendanceDays
                         data={loaded}
-                        canMark={canManage && !loaded.paid_salary_id}
-                        busyDay={busyDay}
-                        onMark={mark}
+                        leaves={data.leaves}
                       />
                     </div>
                   ))}
@@ -436,6 +424,26 @@ export function CsProfileModal({
                             {a.salary_id ? `In ${monthLabel(payMonth.get(a.salary_id) ?? "")} salary` : "Pending — next salary"}
                           </Td>
                           <Td>{nameOf(a.created_by_user_id)}</Td>
+                        </tr>
+                      ))}
+                    </Table>
+                  ))}
+
+                {section === "leave" &&
+                  (data.leaves.length === 0 ? (
+                    <Empty>No leave on record. Record it on the Leave sheet.</Empty>
+                  ) : (
+                    <Table head={["From", "To", "Days", "Type", "Told?", "Reason", "Status", "By"]} right={[2]}>
+                      {data.leaves.map((l) => (
+                        <tr key={l.leave_id} className={cn("border-b last:border-0", l.status === "void" && "opacity-50")}>
+                          <Td>{sheetDay(l.from_day)}</Td>
+                          <Td>{sheetDay(l.to_day)}</Td>
+                          <Td right>{leaveDays(l)}</Td>
+                          <Td>{LEAVE_KIND_LABEL[l.kind]}</Td>
+                          <Td className={cn(!l.notified && "text-red-700 dark:text-red-400")}>{l.notified ? "Told" : "Not told"}</Td>
+                          <Td className="min-w-[200px] whitespace-normal">{l.reason}</Td>
+                          <Td>{l.status === "void" ? "Void" : "Active"}</Td>
+                          <Td>{nameOf(l.recorded_by_user_id)}</Td>
                         </tr>
                       ))}
                     </Table>
@@ -546,23 +554,14 @@ function AttendanceLine({ a }: { a: AttendanceSummary }) {
 }
 
 /**
- * The month day by day: worked or off, what each day off cost, and the
- * leader's marks. A leader can also mark a worked day as off: half a day then
- * emergency leave counts as a whole day off.
+ * The month day by day: worked or off, what each day off cost, and the leave
+ * behind it. A leave makes a worked day off too: half a day then emergency
+ * leave counts as a whole day off.
  */
-function AttendanceDays({
-  data,
-  canMark,
-  busyDay,
-  onMark,
-}: {
-  data: Pick<Profile, "attendance" | "sessions">;
-  canMark: boolean;
-  busyDay: string | null;
-  onMark: (day: string, mark: DayMark | null) => void;
-}) {
+function AttendanceDays({ data, leaves }: { data: Pick<Profile, "attendance" | "sessions">; leaves: StaffLeave[] }) {
   const sessionsOn = (day: string) =>
     data.sessions.filter((s) => new Date(new Date(s.started_at).getTime() + 8 * 3600_000).toISOString().slice(0, 10) === day);
+  const leaveOn = (day: string) => leaves.find((l) => l.status === "active" && l.from_day <= day && l.to_day >= day);
 
   return (
     <div className="rounded-md border">
@@ -570,7 +569,7 @@ function AttendanceDays({
         <tbody>
           {data.attendance.days.map((d) => {
             const counted = d.status !== "not_counted";
-            const worked = d.hours > 0;
+            const leave = leaveOn(d.day);
             return (
               <tr key={d.day} className={cn("border-b last:border-0", !counted && "opacity-50")}>
                 <td className="whitespace-nowrap px-3 py-1.5 tabular-nums">{dayLabel(d.day)}</td>
@@ -583,30 +582,8 @@ function AttendanceDays({
                   {STATUS_LABEL[d.status]}
                 </td>
                 <td className="px-2 py-1.5 text-right tabular-nums">{counted ? signed(d.amount) : ""}</td>
-                <td className="px-2 py-1 text-right">
-                  {counted && canMark ? (
-                    <select
-                      value={d.mark ?? ""}
-                      disabled={busyDay === d.day}
-                      onChange={(e) => onMark(d.day, (e.target.value || null) as DayMark | null)}
-                      className="h-7 cursor-pointer rounded-md border border-input bg-background px-1.5 text-xs"
-                    >
-                      {worked ? (
-                        <>
-                          <option value="">Worked</option>
-                          <option value="notified">Emergency leave (told)</option>
-                          <option value="not_notified">Left, not told</option>
-                        </>
-                      ) : (
-                        <>
-                          <option value="">Not told</option>
-                          <option value="notified">Told (MC / leave / emergency)</option>
-                        </>
-                      )}
-                    </select>
-                  ) : (
-                    d.mark && <span className="text-xs text-muted-foreground">{d.mark === "notified" ? "told" : "not told"}</span>
-                  )}
+                <td className="px-2 py-1.5 text-right text-xs text-muted-foreground" title={leave?.reason}>
+                  {leave && `${LEAVE_KIND_LABEL[leave.kind]} · ${leave.notified ? "told" : "not told"}`}
                 </td>
               </tr>
             );

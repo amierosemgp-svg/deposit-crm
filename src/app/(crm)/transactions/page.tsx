@@ -40,6 +40,7 @@ import {
 import { CompanyInfoPanel } from "@/components/sheet/company-info-panel";
 import { SalarySheet } from "@/components/staff-pay/salary-sheet";
 import { PenaltySheet } from "@/components/staff-pay/penalty-sheet";
+import { LeaveSheet } from "@/components/staff-pay/leave-sheet";
 import { CreatePlayerModal } from "@/components/create-player-modal";
 import {
   Select,
@@ -735,7 +736,7 @@ export default function TransactionsPage() {
    * typed entry rows, figures worked out rather than keyed — so they replace
    * the toolbar and grid below instead of joining TabKey.
    */
-  const [staffTab, setStaffTab] = useState<"salary" | "penalty" | null>(null);
+  const [staffTab, setStaffTab] = useState<"salary" | "penalty" | "leave" | null>(null);
   // Date range over the sheet: a quick preset, or custom from/to days.
   const [preset, setPreset] = useState<RangePreset | "custom">("this_month");
   const [range, setRange] = useState<DateRange>(() => presetRange("this_month"));
@@ -5180,7 +5181,7 @@ export default function TransactionsPage() {
             {label}
           </button>
         ))}
-        {([["salary", "Salary"], ["penalty", "Staff Penalty"]] as const).map(([key, label]) => (
+        {([["salary", "Salary"], ["penalty", "Staff Penalty"], ["leave", "Leave"]] as const).map(([key, label]) => (
           <button
             key={key}
             type="button"
@@ -5204,6 +5205,8 @@ export default function TransactionsPage() {
         <SalarySheet />
       ) : staffTab === "penalty" ? (
         <PenaltySheet />
+      ) : staffTab === "leave" ? (
+        <LeaveSheet />
       ) : (
       <>
       {/* Toolbar — two rows: search, dates and buttons; then the filter pills. */}

@@ -1,6 +1,6 @@
 import { desc, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { salaryAdjustments, salaryPayments, staffPenalties } from "@/db/schema";
+import { salaryAdjustments, salaryPayments, staffLeaves, staffPenalties } from "@/db/schema";
 import { authErrorResponse, AuthError, requireUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import {
@@ -24,7 +24,8 @@ import {
  * GET /api/staff-pay/profile?user_id=&month=YYYY-MM — one CS, everything the
  * recorder checks before paying or penalising them: base salary, the month
  * day by day, what's pending against the next salary and what it would pay,
- * and their whole history of payslips, adjustments, advances and penalties.
+ * and their whole history of leave, payslips, adjustments, advances and
+ * penalties.
  * A CS may read their own.
  */
 export async function GET(request: Request) {
@@ -42,7 +43,7 @@ export async function GET(request: Request) {
       throw new AuthError(403, "That CS is outside your organisation");
     }
 
-    const [bases, marks, firsts, sessions, payments, adjustments, penalties] = await Promise.all([
+    const [bases, marks, firsts, sessions, payments, adjustments, penalties, leaves] = await Promise.all([
       baseSalaries(db, [userId]),
       dayMarks(db, [userId], month),
       firstDays(db, [userId]),
@@ -50,6 +51,7 @@ export async function GET(request: Request) {
       db.select().from(salaryPayments).where(eq(salaryPayments.user_id, userId)).orderBy(desc(salaryPayments.period_month)),
       db.select().from(salaryAdjustments).where(eq(salaryAdjustments.user_id, userId)).orderBy(desc(salaryAdjustments.occurred_at)),
       db.select().from(staffPenalties).where(eq(staffPenalties.user_id, userId)).orderBy(desc(staffPenalties.occurred_at)),
+      db.select().from(staffLeaves).where(eq(staffLeaves.user_id, userId)).orderBy(desc(staffLeaves.from_day)),
     ]);
 
     const { startMs, endMs } = monthBounds(month);
@@ -83,6 +85,7 @@ export async function GET(request: Request) {
       payments,
       adjustments,
       penalties,
+      leaves,
     });
   } catch (e) {
     return authErrorResponse(e) ?? (console.error(e), jsonError("Server error", 500));

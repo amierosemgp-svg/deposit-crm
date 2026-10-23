@@ -16,7 +16,7 @@ import {
 
 /**
  * GET /api/staff-pay/hours?user_id=&month=YYYY-MM — one CS's month, day by
- * day: worked or off, the leader's marks, what each day off cost, and the
+ * day: worked or off, the leave behind it, what each day off cost, and the
  * sessions behind it. A CS may read their own.
  */
 export async function GET(request: Request) {

@@ -1,12 +1,13 @@
-import { and, asc, eq, gt, inArray, isNull, like, lt, min } from "drizzle-orm";
+import { and, asc, eq, gt, gte, inArray, isNull, lt, lte, min } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import {
   entities,
   salaryAdjustments,
+  salaryPayments,
   salaryTiers,
   staffBaseSalaries,
-  staffDayMarks,
+  staffLeaves,
   staffTierRates,
   users,
   workSessions,
@@ -18,9 +19,9 @@ import {
  *
  *   - Each CS has one monthly base salary.
  *   - No schedule. A day with time on the clock is worked; a day without is
- *     off. A leader can mark a day off as told ("notified" — MC, emergency,
- *     leave), or a worked day as off anyway (half a day then emergency leave
- *     is a whole day off).
+ *     off. A leave on the Leave sheet makes its days off told ("notified" —
+ *     MC, emergency, annual) or records them as untold; it counts a worked
+ *     day as off too (half a day then emergency leave is a whole day off).
  *   - FREE_DAYS_OFF a month cost nothing. Each one past that costs
  *     TOLD_DAY_OFF if it was told, UNTOLD_DAY_OFF if not, in date order.
  *   - Each unused free day pays EXTRA_DAY; a month with no day off at all
@@ -321,11 +322,54 @@ export async function baseSalaries(q: Q, userIds: number[]): Promise<Map<number,
 export async function dayMarks(q: Q, userIds: number[], month: string): Promise<Map<number, Record<string, DayMark>>> {
   const out = new Map<number, Record<string, DayMark>>();
   if (!userIds.length) return out;
+  const first = `${month}-01`;
+  const last = `${month}-31`;
+  // Every active leave touching the month, spread over the days it covers.
   const rows = await q
     .select()
-    .from(staffDayMarks)
-    .where(and(inArray(staffDayMarks.user_id, userIds), like(staffDayMarks.day, `${month}-%`)));
-  for (const r of rows) out.set(r.user_id, { ...(out.get(r.user_id) ?? {}), [r.day]: r.mark });
+    .from(staffLeaves)
+    .where(
+      and(
+        inArray(staffLeaves.user_id, userIds),
+        eq(staffLeaves.status, "active"),
+        lte(staffLeaves.from_day, last),
+        gte(staffLeaves.to_day, first),
+      ),
+    );
+  for (const r of rows) {
+    const marks = out.get(r.user_id) ?? {};
+    for (const day of daysBetween(r.from_day, r.to_day)) {
+      if (day.startsWith(month)) marks[day] = r.notified ? "notified" : "not_notified";
+    }
+    out.set(r.user_id, marks);
+  }
+  return out;
+}
+
+export const LEAVE_KIND_LABEL = { mc: "MC", annual: "Annual leave", emergency: "Emergency leave", other: "Other" } as const;
+
+/** The months a leave touches that are already paid for this CS. */
+export async function paidMonthsIn(q: Q, userId: number, fromDay: string, toDay: string): Promise<string[]> {
+  const months = [...new Set(daysBetween(fromDay, toDay).map((d) => d.slice(0, 7)))];
+  const rows = await q
+    .select({ month: salaryPayments.period_month })
+    .from(salaryPayments)
+    .where(
+      and(
+        eq(salaryPayments.user_id, userId),
+        inArray(salaryPayments.period_month, months),
+        eq(salaryPayments.status, "paid"),
+      ),
+    );
+  return rows.map((r) => r.month);
+}
+
+/** "2026-10-30".."2026-11-02" → each day, both ends included. */
+export function daysBetween(from: string, to: string): string[] {
+  const out: string[] = [];
+  for (let t = Date.parse(`${from}T00:00:00Z`); t <= Date.parse(`${to}T00:00:00Z`); t += 86_400_000) {
+    out.push(new Date(t).toISOString().slice(0, 10));
+  }
   return out;
 }
 
@@ -455,13 +499,20 @@ export const baseSalarySchema = z.object({
   amount: z.number().min(0).max(1_000_000),
 });
 
-/** A leader's mark on one day; null clears it. */
-export const dayMarkSchema = z.object({
-  user_id: z.number().int().positive(),
-  day: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/),
-  mark: z.enum(["notified", "not_notified"]).nullable(),
-  note: z.string().trim().max(200).optional(),
-});
+const DAY = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+
+/** A leave as the Leave sheet records it; at most a month long. */
+export const leaveSchema = z
+  .object({
+    user_id: z.number().int().positive(),
+    from_day: z.string().regex(DAY),
+    to_day: z.string().regex(DAY),
+    kind: z.enum(["mc", "annual", "emergency", "other"]),
+    notified: z.boolean(),
+    reason: z.string().trim().min(1).max(200),
+  })
+  .refine((v) => v.to_day >= v.from_day, { message: "To is before From", path: ["to_day"] })
+  .refine((v) => daysBetween(v.from_day, v.to_day).length <= 31, { message: "A leave is at most 31 days — split it", path: ["to_day"] });
 
 /**
  * Paying a salary, adding a bonus or deduction, and voiding a penalty change

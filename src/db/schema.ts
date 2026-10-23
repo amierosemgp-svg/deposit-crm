@@ -1,5 +1,6 @@
 import {
   boolean,
+  index,
   integer,
   jsonb,
   numeric,
@@ -1753,38 +1754,49 @@ export const staffBaseSalaries = pgTable("staff_base_salaries", {
     .defaultNow(),
 });
 
-/** Whether a CS told their leader before a day off (MC, emergency, leave). */
-export const staffDayMarkEnum = pgEnum("staff_day_mark", ["notified", "not_notified"]);
+export const staffLeaveKindEnum = pgEnum("staff_leave_kind", ["mc", "annual", "emergency", "other"]);
+export const staffLeaveStatusEnum = pgEnum("staff_leave_status", ["active", "void"]);
 
 /**
- * A leader's word on one CS day. There is no schedule: a day with time on the
- * clock is worked, a day without it is a day off. A mark only says what the
- * clock can't —
+ * A CS's leave, From–To, as the Leave sheet records it. There is no schedule:
+ * a day with time on the clock is worked, a day without it is a day off — a
+ * leave says what the clock can't:
  *
- *   notified      the day off was told to the leader (charged 100, not 200,
- *                 once the allowance is used); on a day with time on the
- *                 clock it is emergency leave, and the day counts as off
- *   not_notified  a day with time on the clock that still counts as off,
- *                 untold (left without telling anyone)
+ *   notified      the days off were told to the leader (charged 100, not 200,
+ *                 once the 4 free days are used)
+ *   not notified  recorded, but nobody was told — still 200
  *
- * An unmarked day off is untold.
+ * Every day a leave covers counts as off, even one with time on the clock
+ * (half a day then emergency leave is a whole day off). A day off with no
+ * leave is untold. Leaves for one CS never overlap.
  */
-export const staffDayMarks = pgTable(
-  "staff_day_marks",
+export const staffLeaves = pgTable(
+  "staff_leaves",
   {
+    leave_id: serial("leave_id").primaryKey(),
     user_id: integer("user_id")
       .notNull()
       .references(() => users.user_id),
-    // "YYYY-MM-DD", business time.
-    day: varchar("day", { length: 10 }).notNull(),
-    mark: staffDayMarkEnum("mark").notNull(),
-    note: varchar("note", { length: 200 }),
-    marked_by_user_id: integer("marked_by_user_id").references(() => users.user_id),
-    marked_at: timestamp("marked_at", { withTimezone: true, mode: "string" })
+    company_entity_id: integer("company_entity_id")
+      .notNull()
+      .references(() => entities.entity_id),
+    // "YYYY-MM-DD", business time, both ends included.
+    from_day: varchar("from_day", { length: 10 }).notNull(),
+    to_day: varchar("to_day", { length: 10 }).notNull(),
+    kind: staffLeaveKindEnum("kind").notNull(),
+    notified: boolean("notified").notNull(),
+    reason: varchar("reason", { length: 200 }).notNull(),
+    status: staffLeaveStatusEnum("status").notNull().default("active"),
+    voided_at: timestamp("voided_at", { withTimezone: true, mode: "string" }),
+    voided_by_user_id: integer("voided_by_user_id").references(() => users.user_id),
+    recorded_by_user_id: integer("recorded_by_user_id")
+      .notNull()
+      .references(() => users.user_id),
+    created_at: timestamp("created_at", { withTimezone: true, mode: "string" })
       .notNull()
       .defaultNow(),
   },
-  (t) => [primaryKey({ columns: [t.user_id, t.day] })],
+  (t) => [index("staff_leaves_user_days").on(t.user_id, t.from_day, t.to_day)],
 );
 
 export const salaryAdjustmentKindEnum = pgEnum("salary_adjustment_kind", [

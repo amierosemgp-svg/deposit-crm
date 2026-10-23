@@ -101,12 +101,31 @@ export type StaffPenalty = {
   recorded_by_user_id: number;
 };
 
+export type LeaveKind = "mc" | "annual" | "emergency" | "other";
+
+export type StaffLeave = {
+  leave_id: number;
+  user_id: number;
+  company_entity_id: number;
+  from_day: string;
+  to_day: string;
+  kind: LeaveKind;
+  notified: boolean;
+  reason: string;
+  status: "active" | "void";
+  voided_at: string | null;
+  voided_by_user_id: number | null;
+  recorded_by_user_id: number;
+  created_at: string;
+};
+
 export type StaffPay = {
   month: string;
   staff: StaffRow[];
   payments: SalaryPayment[];
   adjustments: SalaryAdjustment[];
   penalties: StaffPenalty[];
+  leaves: StaffLeave[];
   share_pct: number;
 };
 
@@ -117,6 +136,23 @@ export const ADJUSTMENT_LABEL: Record<AdjustmentKind, string> = {
   carry: "Advance carried over",
   advance: "Advance",
 };
+
+export const LEAVE_KIND_LABEL: Record<LeaveKind, string> = {
+  mc: "MC",
+  annual: "Annual leave",
+  emergency: "Emergency leave",
+  other: "Other",
+};
+
+/** "2026-10-30" → "30/10/2026", the sheet's way. */
+export const sheetDay = (day: string) => {
+  const [y, m, d] = day.split("-").map(Number);
+  return `${d}/${m}/${y}`;
+};
+
+/** Days a leave covers, both ends included. */
+export const leaveDays = (l: Pick<StaffLeave, "from_day" | "to_day">) =>
+  Math.round((Date.parse(`${l.to_day}T00:00:00Z`) - Date.parse(`${l.from_day}T00:00:00Z`)) / 86_400_000) + 1;
 
 export const PENALTY_SOURCE_LABEL: Record<PenaltySource, string> = {
   deposit: "Deposit",
