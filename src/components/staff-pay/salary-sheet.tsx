@@ -229,7 +229,13 @@ export function SalarySheet() {
         next[P.adj] = signed(p.adjustments_total);
         next[P.net] = fmtAmount(p.net);
         next[P.carry] = p.carried ? fmtAmount(p.carried) : "—";
-        next[P.status] = !p.attendance.complete ? "Month not over yet" : p.base === 0 ? "No base salary set" : "To pay";
+        next[P.status] = !p.attendance.started
+          ? "Not started yet"
+          : !p.attendance.complete
+            ? "Month not over yet"
+            : p.base === 0
+              ? "No base salary set"
+              : "To pay";
         return next;
       }),
     [resolveCs, entityName, alreadyPaid, previews],
@@ -255,6 +261,7 @@ export function SalarySheet() {
       if (!entry) return null;
       if ("error" in entry) return { ok: false, error: entry.error };
       const p = entry.preview;
+      if (!p.attendance.started) return { ok: false, error: `${cs.full_name} hadn't clocked in by the end of ${monthLabel(m)} — nothing to pay` };
       if (!p.attendance.complete) return { ok: false, error: `${monthLabel(m)} isn't over yet — pay it next month, or record an advance` };
       const fromCell = (row[P.from] ?? "").trim();
       const from = fromCell ? resolvePayFrom(fromCell) : null;
@@ -499,7 +506,9 @@ export function SalarySheet() {
               signed(s.pending_adjustments),
               s.paid_salary_id
                 ? ""
-                : s.would_carry > 0
+                : !a.started
+                  ? "— (not started)"
+                  : s.would_carry > 0
                   ? `0.00 (advance −${fmtAmount(s.would_carry)} carries)`
                   : fmtAmount(s.would_pay),
               s.paid_salary_id ? "Paid" : "Not paid",

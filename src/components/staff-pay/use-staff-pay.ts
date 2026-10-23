@@ -17,6 +17,8 @@ export type AttendanceSummary = {
   bonus: number;
   amount: number;
   complete: boolean;
+  /** Clocked in by the month's end; a month before that can't be paid. */
+  started: boolean;
 };
 
 /** GET /api/staff-pay, as the Salary and Staff Penalty sheets read it. */

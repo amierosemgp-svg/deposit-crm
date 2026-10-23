@@ -83,6 +83,9 @@ export async function POST(request: Request) {
       if (!p.attendance.complete) {
         throw new Refusal(`${body.month} isn't over yet — pay it from the 1st of next month, or record an advance`);
       }
+      if (!p.attendance.started) {
+        throw new Refusal(`${body.month} is before this CS first clocked in — nothing to pay`);
+      }
       if (!inCasinoScope(user, p.company_entity_id)) {
         throw new AuthError(403, "That CS is outside your organisation");
       }

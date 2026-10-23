@@ -136,7 +136,11 @@ export type AttendanceDay = {
 };
 
 export type Attendance = {
-  /** Days the month has counted so far (from the CS's first day, up to yesterday). */
+  /**
+   * Days the month has counted so far: from the CS's first day up to
+   * yesterday, plus any day a leave covers (today, ahead, or before the first
+   * day on the clock) — a recorded leave counts as soon as it is recorded.
+   */
   counted: number;
   worked: number;
   off: number;
@@ -153,6 +157,12 @@ export type Attendance = {
   amount: number;
   /** False while the month is still running: the bonus is "so far". */
   complete: boolean;
+  /**
+   * The CS had clocked in by the month's end. A month before their first day
+   * — or any month, for a CS who never clocked in — can't be paid: a base
+   * salary is for a month they worked in.
+   */
+  started: boolean;
   days: AttendanceDay[];
 };
 
@@ -179,13 +189,15 @@ export function attendanceFor(
   const [y, m] = month.split("-").map(Number);
   const nextMonth = new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10);
   const complete = nextMonth <= today;
+  const started = !!firstDay && firstDay < nextMonth;
   const days: AttendanceDay[] = [];
   let off = 0;
   const a = { worked: 0, off_told: 0, off_untold: 0, free_used: 0, charged_told: 0, charged_untold: 0, deduction: 0 };
   for (let d = start; d < nextMonth; d = addDay(d, 1)) {
     const hours = daily[d] ?? 0;
     const mark = marks[d] ?? null;
-    if (d >= today || !firstDay || d < firstDay) {
+    const onClock = d < today && !!firstDay && d >= firstDay;
+    if (!onClock && !mark) {
       days.push({ day: d, hours, mark, status: "not_counted", amount: 0 });
       continue;
     }
@@ -210,9 +222,9 @@ export function attendanceFor(
     days.push({ day: d, hours, mark, status: told ? "off_told" : "off_untold", amount: -cost });
   }
   const counted = a.worked + off;
-  // Nothing counted yet (a CS who hasn't started) earns no bonus either.
-  const bonus = counted === 0 ? 0 : off === 0 ? NO_DAY_OFF_BONUS : Math.max(0, FREE_DAYS_OFF - off) * EXTRA_DAY;
-  return { counted, off, ...a, bonus, amount: bonus - a.deduction, complete, days };
+  // A CS who hasn't started (nothing counted, or only leave so far) earns no bonus either.
+  const bonus = counted === 0 || !started ? 0 : off === 0 ? NO_DAY_OFF_BONUS : Math.max(0, FREE_DAYS_OFF - off) * EXTRA_DAY;
+  return { counted, off, ...a, bonus, amount: bonus - a.deduction, complete, started, days };
 }
 
 export type Tier = {

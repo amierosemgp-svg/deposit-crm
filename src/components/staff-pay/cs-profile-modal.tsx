@@ -266,7 +266,9 @@ export function CsProfileModal({
                       ? "…"
                       : loaded.paid_salary_id
                         ? "Paid"
-                        : loaded.would_carry > 0
+                        : !loaded.attendance.started
+                          ? "Not started"
+                          : loaded.would_carry > 0
                           ? "0.00"
                           : fmtAmount(loaded.would_pay)
                   }
