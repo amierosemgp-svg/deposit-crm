@@ -258,6 +258,29 @@ export async function GET() {
     const leaderCasinos = Object.fromEntries(
       await casinosOfLeaders(db, casinoLeaderIds),
     );
+    /**
+     * Names — names only — of the house's desks and leaders, for the rows they
+     * keyed. A settlement or a shared row can be keyed by a CS from another
+     * company, who is outside the reader's staff list, and the sheet showed
+     * "—" for them. No logins, roles or allowlists: the staff list proper
+     * stays scoped to the reader's own tree. An admin's list already has all.
+     */
+    const staffNames =
+      user.role === "super_admin" || user.role === "viewer"
+        ? {}
+        : Object.fromEntries(
+            (
+              await db
+                .select({ id: users.user_id, name: users.full_name })
+                .from(users)
+                .where(
+                  and(
+                    inArray(users.role, ["cs_agent", "company_leader"]),
+                    inArray(users.entity_id, (await organisationEntityIds(user)).concat(-1)),
+                  ),
+                )
+            ).map((u) => [u.id, u.name]),
+          );
     const transferAccounts = (
       transferIds
         ? await db
@@ -585,6 +608,7 @@ export async function GET() {
       transferAccounts,
       transferLeaders,
       leaderCasinos,
+      staffNames,
       bankTransfers: [...transferMap.values()].sort((a, b) =>
         b.created_at.localeCompare(a.created_at),
       ),

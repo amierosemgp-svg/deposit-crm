@@ -147,6 +147,8 @@ type StateResponse = {
   }[];
   /** Casinos each nameable leader runs, by user id — the sheet's From / To Casino cells. */
   leaderCasinos: Record<number, { id: number; name: string }[]>;
+  /** Names of house staff outside the reader's own tree, by user id (see /api/state). */
+  staffNames: Record<number, string>;
   bankTransfers: BankTransfer[];
   boAccounts: ProviderBoAccount[];
   boAdjustments: ProviderBoAdjustment[];
@@ -209,6 +211,8 @@ type Store = {
   }[];
   /** Casinos each nameable leader runs, by user id — the sheet's From / To Casino cells. */
   leaderCasinos: Record<number, { id: number; name: string }[]>;
+  /** Names of house staff outside the reader's own tree, by user id (see /api/state). */
+  staffNames: Record<number, string>;
   bankTransfers: BankTransfer[];
   boAccounts: ProviderBoAccount[];
   boAdjustments: ProviderBoAdjustment[];
@@ -712,6 +716,7 @@ export const useStore = create<Store>((set, get) => {
     transferAccounts: [],
     transferLeaders: [],
     leaderCasinos: {},
+    staffNames: {},
     bankTransfers: [],
     boAccounts: [],
     boAdjustments: [],
@@ -839,6 +844,7 @@ export const useStore = create<Store>((set, get) => {
     userName: (userId) =>
       get().users.find((u) => u.user_id === userId)?.full_name ??
       get().transferLeaders.find((u) => u.user_id === userId)?.full_name ??
+      (userId != null ? get().staffNames[userId] : undefined) ??
       "—",
 
     playerById: (playerId) =>

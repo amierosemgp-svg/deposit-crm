@@ -1741,10 +1741,23 @@ export default function TransactionsPage() {
     [search],
   );
 
-  /** The "Assign to me" cell of a saved row: Yes if mine, else the holder. */
+  /**
+   * The "Assign to me" cell of a saved row: Yes if mine, else the holder.
+   *
+   * A row nobody holds shows who keyed it instead of a blank. Rows pasted in
+   * from Excel overwrite the cell's "Yes" and save with no holder, and the
+   * desk read the blank as "nobody did this" when the keyer was on record.
+   * Who may approve or pull still goes by the holder, not this cell.
+   */
   const assignCell = useCallback(
-    (userId: number | null | undefined): string =>
-      !userId ? "" : userId === me?.user_id ? "Yes" : userName(userId),
+    (userId: number | null | undefined, keyedBy?: number | null): string =>
+      userId
+        ? userId === me?.user_id
+          ? "Yes"
+          : userName(userId)
+        : keyedBy
+          ? userName(keyedBy)
+          : "",
     [me?.user_id, userName],
   );
 
@@ -1762,7 +1775,7 @@ export default function TransactionsPage() {
           id: d.deposit_id,
           tone: depositTone(d.status),
           cells: toCells("deposit", {
-            assign: assignCell(d.assigned_to_user_id),
+            assign: assignCell(d.assigned_to_user_id, d.handled_by_user_id),
             member: d.player_username ?? p?.username ?? "",
             product: d.selected_game ?? "",
             username: d.selected_game_username || gameUsername(p, d.selected_game),
@@ -1811,7 +1824,7 @@ export default function TransactionsPage() {
           id: w.withdrawal_id,
           tone: withdrawalTone(w.status),
           cells: toCells("withdrawal", {
-            assign: assignCell(w.assigned_to_user_id),
+            assign: assignCell(w.assigned_to_user_id, w.handled_by_user_id),
             member: p?.username ?? "",
             product: w.game_name,
             username: gameUsername(p, w.game_name),
@@ -1908,7 +1921,7 @@ export default function TransactionsPage() {
           id: t.transfer_id,
           tone: transferTone(t.status),
           cells: toCells("transfer", {
-            assign: assignCell(t.assigned_to_user_id),
+            assign: assignCell(t.assigned_to_user_id, t.handled_by_user_id),
             member: p?.username ?? "",
             from: t.from_game,
             username: t.from_game_username ?? gameUsername(p, t.from_game),
