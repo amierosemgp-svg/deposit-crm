@@ -36,6 +36,7 @@ import {
   visibleEntityTree,
 } from "@/lib/api-helpers";
 import { poolStock } from "@/lib/game-account-pool";
+import { casinosOfLeaders } from "@/lib/leader-casinos";
 import { expireStaleBotCommands } from "@/lib/bot-commands";
 
 /**
@@ -239,6 +240,24 @@ export async function GET() {
           }));
         })()
       : [];
+
+    /**
+     * The casinos each nameable leader runs, for the Leader Transfer sheet's
+     * From / To Casino cells. A desk's own tree doesn't reach another group's
+     * casinos, so the names come from here. An admin names every leader.
+     */
+    const casinoLeaderIds =
+      user.role === "super_admin"
+        ? (
+            await db
+              .select({ id: users.user_id })
+              .from(users)
+              .where(eq(users.role, "company_leader"))
+          ).map((u) => u.id)
+        : transferLeaders.map((l) => l.user_id);
+    const leaderCasinos = Object.fromEntries(
+      await casinosOfLeaders(db, casinoLeaderIds),
+    );
     const transferAccounts = (
       transferIds
         ? await db
@@ -565,6 +584,7 @@ export async function GET() {
       bankAccounts: scopedAccounts,
       transferAccounts,
       transferLeaders,
+      leaderCasinos,
       bankTransfers: [...transferMap.values()].sort((a, b) =>
         b.created_at.localeCompare(a.created_at),
       ),

@@ -145,6 +145,8 @@ type StateResponse = {
     status: string;
     held_entity_ids: number[];
   }[];
+  /** Casinos each nameable leader runs, by user id — the sheet's From / To Casino cells. */
+  leaderCasinos: Record<number, { id: number; name: string }[]>;
   bankTransfers: BankTransfer[];
   boAccounts: ProviderBoAccount[];
   boAdjustments: ProviderBoAdjustment[];
@@ -205,6 +207,8 @@ type Store = {
     status: string;
     held_entity_ids: number[];
   }[];
+  /** Casinos each nameable leader runs, by user id — the sheet's From / To Casino cells. */
+  leaderCasinos: Record<number, { id: number; name: string }[]>;
   bankTransfers: BankTransfer[];
   boAccounts: ProviderBoAccount[];
   boAdjustments: ProviderBoAdjustment[];
@@ -707,6 +711,7 @@ export const useStore = create<Store>((set, get) => {
     bankAccounts: [],
     transferAccounts: [],
     transferLeaders: [],
+    leaderCasinos: {},
     bankTransfers: [],
     boAccounts: [],
     boAdjustments: [],

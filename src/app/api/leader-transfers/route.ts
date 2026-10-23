@@ -18,6 +18,7 @@ import {
 } from "@/lib/api-helpers";
 import { InsufficientBankBalanceError, moveBankBalance } from "@/lib/bank-balance";
 import { logActivity } from "@/lib/activity-log";
+import { casinosOfLeaders, resolveEndCasino } from "@/lib/leader-casinos";
 
 const createSchema = z
   .object({
@@ -35,6 +36,10 @@ const createSchema = z
     // Paid by bank from/into an account we don't keep — like cash, no balance.
     from_bank_transfer: z.boolean().optional(),
     to_bank_transfer: z.boolean().optional(),
+    // Which casino each end is for — see resolveEndCasino. Optional where it
+    // can be worked out: from the account named, or a leader's only casino.
+    from_company_entity_id: z.number().int().positive().nullable().optional(),
+    to_company_entity_id: z.number().int().positive().nullable().optional(),
   })
   .refine((v) => [v.from_cash, v.from_bank_transfer, v.from_account_id].filter(Boolean).length <= 1, {
     message: "The sending end is one of: a bank account, cash, or a bank transfer",
@@ -69,6 +74,8 @@ export async function GET() {
       from: sql`${leaderTransfers.from_leader_user_id}`,
       to: sql`${leaderTransfers.to_leader_user_id}`,
       createdBy: sql`${leaderTransfers.created_by_user_id}`,
+      fromCompany: sql`${leaderTransfers.from_company_entity_id}`,
+      toCompany: sql`${leaderTransfers.to_company_entity_id}`,
     });
     const rows = await db
       .select()
@@ -224,6 +231,24 @@ export async function POST(request: Request) {
       }
     }
 
+    // The casino each end is for, which decides who sees the row.
+    const casinos = await casinosOfLeaders(db, [from.user_id, to.user_id]);
+    const endCasino: Record<"from" | "to", number | null> = { from: null, to: null };
+    for (const [key, side, person, picked, accountId] of [
+      ["from", "From", from, body.from_company_entity_id, body.from_account_id],
+      ["to", "To", to, body.to_company_entity_id, body.to_account_id],
+    ] as const) {
+      const r = resolveEndCasino({
+        side,
+        personName: person.full_name,
+        casinos: casinos.get(person.user_id) ?? [],
+        picked,
+        accountEntityId: typeof accountId === "number" ? (accountById.get(accountId)?.entity_id ?? null) : null,
+      });
+      if (!r.ok) return jsonError(r.error);
+      endCasino[key] = r.id;
+    }
+
     /**
      * A named account moves; cash doesn't.
      *
@@ -251,6 +276,8 @@ export async function POST(request: Request) {
           to_cash: body.to_cash ?? false,
           from_bank_transfer: body.from_bank_transfer ?? false,
           to_bank_transfer: body.to_bank_transfer ?? false,
+          from_company_entity_id: endCasino.from,
+          to_company_entity_id: endCasino.to,
           note: body.note ?? null,
           created_by_user_id: user.user_id,
         })
@@ -294,6 +321,8 @@ export async function POST(request: Request) {
               ? "bank transfer"
               : (accountById.get(body.to_account_id ?? -1)?.label ?? null),
           note: body.note ?? null,
+          from_company_entity_id: endCasino.from,
+          to_company_entity_id: endCasino.to,
           ...balances,
         },
       });

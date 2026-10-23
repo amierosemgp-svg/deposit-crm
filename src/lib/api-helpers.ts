@@ -126,7 +126,7 @@ export async function leaderTransferEntityIds(user: AuthedUser): Promise<number[
  */
 export async function leaderTransferReadFilter(
   user: AuthedUser,
-  cols: { from: SQL; to: SQL; createdBy: SQL },
+  cols: { from: SQL; to: SQL; createdBy: SQL; fromCompany: SQL; toCompany: SQL },
 ): Promise<SQL> {
   const scope =
     user.role === "cs_agent" ? await transferEntityIds(user) : await leaderTransferEntityIds(user);
@@ -134,10 +134,18 @@ export async function leaderTransferReadFilter(
   const mine = user.role === "cs_agent" ? sql` OR ${cols.createdBy} = ${user.user_id}` : sql``;
   if (!scope.length) return user.role === "cs_agent" ? sql`(${cols.createdBy} = ${user.user_id})` : sql`false`;
   const ids = sql.join(scope.map((id) => sql`${id}`), sql`, `);
-  // The ends are people; their scope is the company they sit on or hold.
-  return sql`(EXISTS (
+  /**
+   * An end that names its casino is seen by that casino only. One person can
+   * hold many groups, and matching on the person put a Fishingstar payment to
+   * Jeffery on all seven of his groups' sheets.
+   *
+   * An end with no casino — every row keyed before the column existed — falls
+   * back to the person: the company they sit on or hold.
+   */
+  return sql`(${cols.fromCompany} IN (${ids}) OR ${cols.toCompany} IN (${ids}) OR EXISTS (
     SELECT 1 FROM users u
-     WHERE u.user_id IN (${cols.from}, ${cols.to})
+     WHERE ((u.user_id = ${cols.from} AND ${cols.fromCompany} IS NULL)
+            OR (u.user_id = ${cols.to} AND ${cols.toCompany} IS NULL))
        AND (u.entity_id IN (${ids})
             OR EXISTS (SELECT 1 FROM leader_memberships m
                         WHERE m.user_id = u.user_id AND m.leader_entity_id IN (${ids}))))${mine})`;

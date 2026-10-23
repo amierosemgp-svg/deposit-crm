@@ -143,7 +143,10 @@ const COLUMN_KEYS = {
     "withdrawals", "loss", "pct", "amount", "status", "paidby", "paidat",
   ],
   // Settlements between leaders (super-admin only).
-  leadertransfer: ["assign", "date", "time", "from", "fromaccount", "to", "toaccount", "amount", "note"],
+  leadertransfer: [
+    "assign", "date", "time", "from", "fromcasino", "fromaccount", "to", "tocasino", "toaccount",
+    "amount", "note",
+  ],
   // Money someone paid out of their own pocket that the company owes back.
   claim: ["assign", "date", "claimant", "company", "amount", "reason", "paidinto", "status", "notes"],
 } as const satisfies Record<TabKey, readonly string[]>;
@@ -221,6 +224,9 @@ type LeaderTransferRow = {
   to_cash: boolean;
   from_bank_transfer?: boolean;
   to_bank_transfer?: boolean;
+  /** The casino each end is for; null on rows keyed before it was asked. */
+  from_company_entity_id?: number | null;
+  to_company_entity_id?: number | null;
   note: string | null;
   created_by_user_id: number;
   created_at: string;
@@ -1111,6 +1117,13 @@ export default function TransactionsPage() {
   const leaderMemberships = useStore((s) => s.leaderMemberships);
   // For a CS desk or a leader: every leader in the house, beyond their own company's.
   const transferLeaders = useStore((s) => s.transferLeaders);
+  // The casinos each leader runs — the From / To Casino cells.
+  const leaderCasinos = useStore((s) => s.leaderCasinos);
+  const casinoNameById = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const list of Object.values(leaderCasinos)) for (const c of list) m.set(c.id, c.name);
+    return m;
+  }, [leaderCasinos]);
 
   const LEADER_SUGGESTIONS = useMemo<SheetSuggestion[]>(
     () =>
@@ -1363,8 +1376,10 @@ export default function TransactionsPage() {
         date,
         time,
         from: { label: "From Leader", width: 160, entry: true, required: true, options: SETTLEMENT_LEADER_SUGGESTIONS, placeholder: "from leader" },
+        fromcasino: { label: "From Casino", width: 140, entry: true, placeholder: "which casino" },
         fromaccount: { label: "From Account", width: 190, entry: true, options: END_SUGGESTIONS, placeholder: "account / Cash / Bank Transfer" },
         to: { label: "To Leader", width: 160, entry: true, required: true, options: SETTLEMENT_LEADER_SUGGESTIONS, placeholder: "to leader" },
+        tocasino: { label: "To Casino", width: 140, entry: true, placeholder: "which casino" },
         toaccount: { label: "To Account", width: 190, entry: true, options: END_SUGGESTIONS, placeholder: "account / Cash / Bank Transfer" },
         amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "1000" },
         note: { label: "Note", width: 260, entry: true, placeholder: "what it settles (optional)" },
@@ -2057,6 +2072,13 @@ export default function TransactionsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rebatePayouts, range, statusFilters, rebatePlanFilter, rebateWindowFilter, matchesSearch, userName, selectedCompanyId, selectedLeaderId]);
 
+  /** A saved end's casino, by name; blank on rows keyed before it was asked. */
+  const casinoCell = useCallback(
+    (id: number | null | undefined) =>
+      id == null ? "" : (casinoNameById.get(id) ?? entityName(id)),
+    [casinoNameById, entityName],
+  );
+
   const leaderTransferRows = useMemo<SheetRow[]>(() => {
     return inRangeOr<LeaderTransferRow>("leadertransfer", leaderTransfers)
       .filter((t) => inRange(t.created_at, range))
@@ -2069,15 +2091,17 @@ export default function TransactionsPage() {
           date: sheetDate(t.created_at),
           time: formatClock(t.created_at),
           from: userName(t.from_leader_user_id),
+          fromcasino: casinoCell(t.from_company_entity_id),
           fromaccount: transferEndLabel(t.from_account_id, t.from_cash, t.from_bank_transfer),
           to: userName(t.to_leader_user_id),
+          tocasino: casinoCell(t.to_company_entity_id),
           toaccount: transferEndLabel(t.to_account_id, t.to_cash, t.to_bank_transfer),
           amount: fmtAmount(t.amount),
           note: t.note ?? "",
         }),
       }))
       .filter((r) => matchesSearch(r.cells));
-  }, [leaderTransfers, range, matchesSearch, assignCell, userName, transferEndLabel, inRangeOr]);
+  }, [leaderTransfers, range, matchesSearch, assignCell, userName, transferEndLabel, casinoCell, inRangeOr]);
 
   const rowsByTab: Record<TabKey, SheetRow[]> = {
     deposit: depositRows,
@@ -2252,6 +2276,24 @@ export default function TransactionsPage() {
        * suggested rows it would then reject. The list narrows to the companies
        * on that side of the row — plus Cash, which belongs to nobody.
        */
+      // Casino cells: the casinos that row's leader runs.
+      if (
+        tab === "leadertransfer" &&
+        (colIndex === COL.leadertransfer.fromcasino || colIndex === COL.leadertransfer.tocasino)
+      ) {
+        const leaderCell =
+          d?.[
+            colIndex === COL.leadertransfer.fromcasino
+              ? COL.leadertransfer.from
+              : COL.leadertransfer.to
+          ]
+            ?.trim()
+            .toLowerCase() ?? "";
+        const leaderId = leaderCell ? leaderByName.get(leaderCell) : undefined;
+        if (!leaderId) return undefined;
+        return (leaderCasinos[leaderId] ?? []).map((c) => ({ value: c.name, hint: "casino" }));
+      }
+
       if (
         tab === "leadertransfer" &&
         (colIndex === COL.leadertransfer.fromaccount ||
@@ -2374,7 +2416,7 @@ export default function TransactionsPage() {
       );
     },
     [tab, drafts, playerByCode, bonusOptionsCache, buildBonusSuggestions, houseRates,
-     transferAccounts, heldByLeader, entityName, leaderByName],
+     transferAccounts, heldByLeader, entityName, leaderByName, leaderCasinos],
   );
 
   // ---- validation ----
@@ -2921,6 +2963,24 @@ export default function TransactionsPage() {
       const toEnd = resolveTransferEnd(toEndCell, toId);
       if (!toEnd.ok)
         return { ok: false, error: `Unknown account "${toEndCell}" — pick one from the list, Cash or Bank Transfer` };
+      /**
+       * The casino each end is for. Blank is allowed here: the server fills it
+       * from the account named or the leader's only casino, and says so when a
+       * leader with several needs one picked. Refusing blank on the sheet
+       * would make every row keyed before the column existed uneditable.
+       */
+      const casinoOf = (cell: string, leaderId: number, side: string) => {
+        const name = cell.trim().toLowerCase();
+        if (!name) return { ok: true as const, id: undefined };
+        const hit = (leaderCasinos[leaderId] ?? []).find((x) => x.name.trim().toLowerCase() === name);
+        return hit
+          ? { ok: true as const, id: hit.id }
+          : { ok: false as const, error: `${side} Casino "${cell.trim()}" is not one that leader runs — pick from the list` };
+      };
+      const fromCasino = casinoOf(d[c.fromcasino] ?? "", fromId, "From");
+      if (!fromCasino.ok) return { ok: false, error: fromCasino.error };
+      const toCasino = casinoOf(d[c.tocasino] ?? "", toId, "To");
+      if (!toCasino.ok) return { ok: false, error: toCasino.error };
       // One leader moving money to themselves is fine — bank to cash, cash to
       // bank, one account to another — as long as the two ends differ. Same
       // leader, same end moves nothing.
@@ -2948,11 +3008,13 @@ export default function TransactionsPage() {
           ...(toEnd.account_id ? { to_account_id: toEnd.account_id } : {}),
           ...(toEnd.cash ? { to_cash: true } : {}),
           ...(toEnd.bank ? { to_bank_transfer: true } : {}),
+          ...(fromCasino.id ? { from_company_entity_id: fromCasino.id } : {}),
+          ...(toCasino.id ? { to_company_entity_id: toCasino.id } : {}),
           ...(note ? { note } : {}),
         },
       };
     },
-    [leaderByName, resolveTransferEnd],
+    [leaderByName, resolveTransferEnd, leaderCasinos],
   );
 
   // Rebates aren't typed in — they're generated on the Rebates page.
@@ -3119,6 +3181,13 @@ export default function TransactionsPage() {
         // casinos, so re-reading an untouched account cell under a different
         // leader could quietly land on another casino's account.
         if (tab === "leadertransfer") {
+          // A casino is sent only from its own cell; the server re-reads it
+          // when that end's leader or account changes.
+          for (const end of ["from", "to"] as const) {
+            const key = `${end}_company_entity_id`;
+            if (colIndex !== cols[`${end}casino`]) delete patch[key];
+            else patch[key] = next.payload[key] ?? null;
+          }
           for (const end of ["from", "to"] as const) {
             const keys = [`${end}_account_id`, `${end}_cash`, `${end}_bank_transfer`];
             if (colIndex !== cols[`${end}account`]) {

@@ -82,6 +82,8 @@ export async function GET(request: Request) {
       from: sql`t.from_leader_user_id`,
       to: sql`t.to_leader_user_id`,
       createdBy: sql`t.created_by_user_id`,
+      fromCompany: sql`t.from_company_entity_id`,
+      toCompany: sql`t.to_company_entity_id`,
     });
 
     /**

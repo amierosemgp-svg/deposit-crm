@@ -1493,6 +1493,14 @@ export const leaderTransfers = pgTable("leader_transfers", {
   // Paid by bank, but not from/into one of our accounts — moves no balance.
   from_bank_transfer: boolean("from_bank_transfer").notNull().default(false),
   to_bank_transfer: boolean("to_bank_transfer").notNull().default(false),
+  /**
+   * The casino each end is for. A leader can hold many casinos, and the row is
+   * shown to the casinos named here rather than to every group the person
+   * belongs to. Null on rows keyed before the columns existed — those fall
+   * back to the person's groups (see leaderTransferReadFilter).
+   */
+  from_company_entity_id: integer("from_company_entity_id").references(() => entities.entity_id),
+  to_company_entity_id: integer("to_company_entity_id").references(() => entities.entity_id),
   // What the settlement is for — free text, shown in the list and report.
   note: text("note"),
   created_by_user_id: integer("created_by_user_id")

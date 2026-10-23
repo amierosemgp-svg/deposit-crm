@@ -13,6 +13,7 @@ import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError, leaderTransferEntityIds, transferEntityIds } from "@/lib/api-helpers";
 import { describeChanges, diffFields, logActivity } from "@/lib/activity-log";
 import { InsufficientBankBalanceError, moveBankBalance } from "@/lib/bank-balance";
+import { casinosOfLeaders, resolveEndCasino } from "@/lib/leader-casinos";
 
 /**
  * Every typed-in cell of a saved settlement, each optional.
@@ -37,6 +38,9 @@ const patchSchema = z
     to_cash: z.boolean().optional(),
     from_bank_transfer: z.boolean().optional(),
     to_bank_transfer: z.boolean().optional(),
+    // The From / To Casino cells — see resolveEndCasino.
+    from_company_entity_id: z.number().int().positive().nullable().optional(),
+    to_company_entity_id: z.number().int().positive().nullable().optional(),
     /** The Date and Time cells — the row's only timestamp is when it was keyed. */
     created_at: z.string().datetime({ offset: true }).optional(),
   })
@@ -259,6 +263,41 @@ export async function PATCH(
       }
 
       /**
+       * The casino each end is for. Re-read only where that end changed: a new
+       * leader starts from nothing, a new account says its own casino, and an
+       * end switched to cash or bank transfer keeps the casino it had. An old
+       * row nobody touches keeps its null and its old visibility.
+       */
+      const casinos = await casinosOfLeaders(txn, [next.from_leader_user_id, next.to_leader_user_id]);
+      const endCasino = {
+        from: row.from_company_entity_id,
+        to: row.to_company_entity_id,
+      };
+      for (const [key, side, picked, leaderId, oldLeaderId, accountId, oldAccountId] of [
+        ["from", "From", body.from_company_entity_id, next.from_leader_user_id, row.from_leader_user_id, next.from_account_id, row.from_account_id],
+        ["to", "To", body.to_company_entity_id, next.to_leader_user_id, row.to_leader_user_id, next.to_account_id, row.to_account_id],
+      ] as const) {
+        const leaderChanged = leaderId !== oldLeaderId;
+        const accountChanged = accountId !== oldAccountId;
+        if (picked === undefined && !leaderChanged && !accountChanged) continue;
+        const start =
+          picked !== undefined
+            ? picked
+            : leaderChanged || (accountChanged && accountId != null)
+              ? null
+              : row[`${key}_company_entity_id`];
+        const r = resolveEndCasino({
+          side,
+          personName: personById.get(leaderId)?.full_name ?? "That leader",
+          casinos: casinos.get(leaderId) ?? [],
+          picked: start,
+          accountEntityId: accountId != null ? (accountById.get(accountId)?.entity_id ?? null) : null,
+        });
+        if (!r.ok) throw new AuthError(400, r.error);
+        endCasino[key] = r.id;
+      }
+
+      /**
        * Re-book: take the old movements off, put the new ones on, netted per
        * account so only the difference touches a balance. Applied in account id
        * order, so two edits locking the same pair of accounts queue rather than
@@ -286,7 +325,11 @@ export async function PATCH(
 
       const [saved] = await txn
         .update(leaderTransfers)
-        .set(next)
+        .set({
+          ...next,
+          from_company_entity_id: endCasino.from,
+          to_company_entity_id: endCasino.to,
+        })
         .where(eq(leaderTransfers.transfer_id, transferId))
         .returning();
 
@@ -300,6 +343,8 @@ export async function PATCH(
         to_account_id: r.to_account_id,
         to_cash: r.to_cash,
         to_bank_transfer: r.to_bank_transfer,
+        from_company_entity_id: r.from_company_entity_id,
+        to_company_entity_id: r.to_company_entity_id,
         note: r.note,
         created_at: r.created_at,
       });
