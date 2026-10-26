@@ -31,6 +31,7 @@ import { formatRM } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import {
   EXPENSE_CATEGORIES,
+  NEW_EXPENSE_CATEGORIES,
   EXPENSE_CATEGORY_LABEL,
   type Expense,
   type ExpenseCategory,
@@ -570,7 +571,7 @@ function AddExpenseDialog({
                   <SelectValue placeholder="Select category" />
                 </SelectTrigger>
                 <SelectContent>
-                  {EXPENSE_CATEGORIES.map((c) => (
+                  {NEW_EXPENSE_CATEGORIES.map((c) => (
                     <SelectItem key={c} value={c} className="cursor-pointer">
                       {CATEGORY_META[c].label}
                     </SelectItem>

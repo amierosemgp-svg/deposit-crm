@@ -6,7 +6,7 @@ import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import { logActivity } from "@/lib/activity-log";
 import { InsufficientBankBalanceError, moveBankBalance } from "@/lib/bank-balance";
-import { EXPENSE_CATEGORIES } from "@/lib/types";
+import { EXPENSE_CATEGORIES, SALARY_MOVED } from "@/lib/types";
 
 const createSchema = z
   .object({
@@ -23,6 +23,7 @@ const createSchema = z
     paid_from_account_id: z.number().int().positive().nullable().optional(),
     paid_from_cash_entity_id: z.number().int().positive().nullable().optional(),
   })
+  .refine((v) => v.category !== "salary", { message: SALARY_MOVED, path: ["category"] })
   .refine((v) => !(v.paid_from_account_id && v.paid_from_cash_entity_id), {
     message: "An expense is paid from a bank account or from cash, not both",
     path: ["paid_from_account_id"],

@@ -505,6 +505,7 @@ export type BankMovementSource =
   | "deposit"
   | "withdrawal"
   | "expense"
+  | "salary"
   | "clear_bank"
   | "leader_transfer"
   | "bank_transfer";
@@ -512,6 +513,7 @@ export type BankMovementSource =
 export const BANK_MOVEMENT_LABEL: Record<BankMovementSource, string> = {
   deposit: "Deposits",
   withdrawal: "Withdrawals",
+  salary: "Salaries",
   expense: "Expenses",
   clear_bank: "Clear Bank",
   leader_transfer: "Leader transfers",
@@ -671,6 +673,16 @@ export type CompanyLeader = {
 };
 
 export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
+
+/**
+ * What a new expense may be filed under. Salary left the list when salaries got
+ * their own sheet — paid from the clock and the ladder, not typed as a figure.
+ * Old salary expenses keep their category, so filters still offer it.
+ */
+export const NEW_EXPENSE_CATEGORIES = EXPENSE_CATEGORIES.filter(
+  (c): c is Exclude<ExpenseCategory, "salary"> => c !== "salary",
+);
+export const SALARY_MOVED = "Salaries are paid from the Salary tab now";
 
 /**
  * What each expense category is called on screen.

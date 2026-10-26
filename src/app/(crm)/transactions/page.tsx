@@ -38,6 +38,9 @@ import {
   type SheetSuggestion,
 } from "@/components/sheet/sheet-grid";
 import { CompanyInfoPanel } from "@/components/sheet/company-info-panel";
+import { SalarySheet } from "@/components/staff-pay/salary-sheet";
+import { PenaltySheet } from "@/components/staff-pay/penalty-sheet";
+import { LeaveSheet } from "@/components/staff-pay/leave-sheet";
 import { CreatePlayerModal } from "@/components/create-player-modal";
 import {
   Select,
@@ -78,6 +81,8 @@ import {
   BONUS_TYPE_LABELS,
   EXPENSE_CATEGORIES,
   EXPENSE_CATEGORY_LABEL,
+  NEW_EXPENSE_CATEGORIES,
+  SALARY_MOVED,
   OPEN_BOT_COMMAND_STATUSES,
   type BankCashOut,
   type BonusOption,
@@ -732,6 +737,12 @@ export default function TransactionsPage() {
   }, [loadLedgers]);
 
   const [tab, setTab] = useState<TabKey>("deposit");
+  /**
+   * Salary and Staff Penalty sit in the tab row but are their own sheets — no
+   * typed entry rows, figures worked out rather than keyed — so they replace
+   * the toolbar and grid below instead of joining TabKey.
+   */
+  const [staffTab, setStaffTab] = useState<"salary" | "penalty" | "leave" | null>(null);
   // Date range over the sheet: a quick preset, or custom from/to days.
   const [preset, setPreset] = useState<RangePreset | "custom">("this_month");
   const [range, setRange] = useState<DateRange>(() => presetRange("this_month"));
@@ -959,6 +970,7 @@ export default function TransactionsPage() {
   // A status from one tab means nothing on the next — reset on switch.
   const switchTab = useCallback((next: TabKey) => {
     setTab(next);
+    setStaffTab(null);
     setStatusFilters(new Set());
     setSelectedIds([]);
   }, []);
@@ -1387,7 +1399,7 @@ export default function TransactionsPage() {
       expense: order("expense", {
         assign,
         date: { label: "Date", width: 92, align: "center", entry: true, required: true, placeholder: "31/8/2026" },
-        category: { label: "Category", width: 130, entry: true, required: true, options: EXPENSE_CATEGORIES.map((c) => EXPENSE_CATEGORY_LABEL[c]), placeholder: "category" },
+        category: { label: "Category", width: 130, entry: true, required: true, options: NEW_EXPENSE_CATEGORIES.map((c) => EXPENSE_CATEGORY_LABEL[c]), placeholder: "category" },
         description: { label: "Description", width: 260, entry: true, required: true, placeholder: "what it's for" },
         amount: { label: "Amount", width: 100, align: "right", numeric: true, entry: true, required: true, placeholder: "100" },
         // Key stays `company` — it is the column id the parser and the saved
@@ -2761,6 +2773,7 @@ export default function TransactionsPage() {
         : new Date().toISOString().slice(0, 10);
       if (!expense_date) return { ok: false, error: `Bad date "${date.trim()}" (use 31/8/2026)` };
       const cat = category.trim().toLowerCase().replace(/[\s-]+/g, "_");
+      if (cat === "salary") return { ok: false, error: SALARY_MOVED };
       if (!(EXPENSE_CATEGORIES as readonly string[]).includes(cat))
         return { ok: false, error: `Unknown category "${category.trim()}"` };
       if (!description.trim()) return { ok: false, error: "Description is required" };
@@ -4735,11 +4748,13 @@ export default function TransactionsPage() {
       if (e.key.toLowerCase() !== "s") return;
       e.preventDefault();
       e.stopPropagation();
-      if (!isViewer) void handleCommit();
+      // The entry rows aren't on screen under Salary / Staff Penalty; saving
+      // them from there would commit rows nobody is looking at.
+      if (!isViewer && !staffTab) void handleCommit();
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [isViewer, handleCommit]);
+  }, [isViewer, handleCommit, staffTab]);
 
   // ---- filters ----
 
@@ -5240,7 +5255,25 @@ export default function TransactionsPage() {
             onClick={() => switchTab(key)}
             className={cn(
               "cursor-pointer whitespace-nowrap rounded-t-md border border-b-0 border-border px-4 py-1.5 text-[13px]",
-              tab === key
+              tab === key && !staffTab
+                ? "-mb-px border-t-2 border-t-emerald-600 bg-background font-semibold text-emerald-700 dark:border-t-emerald-400 dark:text-emerald-400"
+                : "bg-muted text-muted-foreground hover:bg-muted/70",
+            )}
+          >
+            {label}
+          </button>
+        ))}
+        {([["salary", "Salary"], ["penalty", "Staff Penalty"], ["leave", "Leave"]] as const).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => {
+              setStaffTab(key);
+              setSelectedIds([]);
+            }}
+            className={cn(
+              "cursor-pointer whitespace-nowrap rounded-t-md border border-b-0 border-border px-4 py-1.5 text-[13px]",
+              staffTab === key
                 ? "-mb-px border-t-2 border-t-emerald-600 bg-background font-semibold text-emerald-700 dark:border-t-emerald-400 dark:text-emerald-400"
                 : "bg-muted text-muted-foreground hover:bg-muted/70",
             )}
@@ -5250,6 +5283,14 @@ export default function TransactionsPage() {
         ))}
       </div>
 
+      {staffTab === "salary" ? (
+        <SalarySheet />
+      ) : staffTab === "penalty" ? (
+        <PenaltySheet />
+      ) : staffTab === "leave" ? (
+        <LeaveSheet />
+      ) : (
+      <>
       {/* Toolbar — two rows: search, dates and buttons; then the filter pills. */}
       <div className="shrink-0 space-y-1.5 border-b border-border px-3 py-2">
         <div className="flex flex-wrap items-center gap-2">
@@ -5540,6 +5581,8 @@ export default function TransactionsPage() {
         // rows once the committed rows are actually there.
         focusKey={`${tab}:${hydrated}`}
       />
+      </>
+      )}
 
       {/* Floating action panel — pinned bottom-center over the sheet while
           saved rows are selected. Letters fire the actions; Esc clears. */}

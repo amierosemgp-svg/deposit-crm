@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { users } from "@/db/schema";
 import { createSession } from "@/lib/auth";
 import { logActivity, requestContext } from "@/lib/activity-log";
+import { isClocked, openWorkSession } from "@/lib/work-sessions";
 import { readDeviceId } from "@/lib/devices";
 import { verifyLoginCode } from "@/lib/two-factor";
 
@@ -71,6 +72,8 @@ export async function POST(request: Request) {
     role: user.role,
     entity_id: user.entity_id,
   });
+  // A CS agent's clock starts at sign-in (lib/work-sessions).
+  if (isClocked(user.role)) await openWorkSession(user.user_id);
 
   await logActivity({
     category: "auth",

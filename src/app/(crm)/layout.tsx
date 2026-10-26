@@ -7,6 +7,7 @@ import { ClientOnly } from "@/components/client-only";
 import { StoreHydrator } from "@/components/store-hydrator";
 import { BotLiveFeed } from "@/components/bot-live-feed";
 import { KillSwitchListener } from "@/components/kill-switch";
+import { IdleLogout } from "@/components/idle-logout";
 
 export default function CrmLayout({
   children,
@@ -47,6 +48,8 @@ export default function CrmLayout({
         <KillSwitchListener />
         {/* "/" jumps to whatever search box this page has. */}
         <PageSearchShortcut />
+        {/* CS only: an idle hour signs them out and stops the work clock. */}
+        <IdleLogout />
       </ClientOnly>
     </PlayerProfileProvider>
   );

@@ -317,6 +317,7 @@ export function CompanyInfoPanel({ range }: { range: DateRange }) {
       "withdrawal",
       "clear_bank",
       "expense",
+      "salary",
       "leader_transfer",
       "bank_transfer",
     ] as const) {
