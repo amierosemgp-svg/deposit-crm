@@ -1438,7 +1438,16 @@ export default function TransactionsPage() {
         total: { label: "Total", width: 100, align: "right", numeric: true },
         // Blank = a points-only correction: the kiosk and the player's game
         // move, no bank does. The Remark then has to say which mistake it fixes.
-        bank: { label: "Bank", width: 220, entry: true, options: OUR_ACCOUNTS, placeholder: "our account / blank = points only" },
+        bank: {
+          label: "Bank",
+          width: 220,
+          entry: true,
+          options: [
+            { value: POINTS_ONLY_BANK, hint: "no bank — points only; key the mistake in Remark" },
+            ...OUR_ACCOUNTS,
+          ],
+          placeholder: "our account / blank = points only",
+        },
         mode,
         status,
         date,
@@ -2640,7 +2649,10 @@ export default function TransactionsPage() {
       const remark = (d[c.remark] ?? "").trim();
       // No bank: a points-only correction for points keyed wrong. Nothing
       // lands in an account, so it must carry the code of the mistake it fixes.
-      const pointsOnly = !bank.trim();
+      // Typed out in full counts the same: it is what a saved row shows in
+      // this column, and the desk copies it.
+      const pointsOnly =
+        !bank.trim() || bank.trim().toLowerCase() === POINTS_ONLY_BANK.toLowerCase();
       if (pointsOnly && !remark)
         return { ok: false, error: "No bank = points-only adjustment — key the mistake's code in Remark" };
       // The cell names one of our accounts. Resolving it here is what lets the
