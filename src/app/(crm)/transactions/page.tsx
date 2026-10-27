@@ -629,6 +629,7 @@ export default function TransactionsPage() {
   const deleteDeposit = useStore((s) => s.deleteDeposit);
   const deleteWithdrawal = useStore((s) => s.deleteWithdrawal);
   const deleteFreeCredit = useStore((s) => s.deleteFreeCredit);
+  const deleteGameTransfer = useStore((s) => s.deleteGameTransfer);
   const deleteCashOut = useStore((s) => s.deleteCashOut);
   const deleteLeaderTransfer = useStore((s) => s.deleteLeaderTransfer);
   const fetchBonusOptions = useStore((s) => s.fetchBonusOptions);
@@ -959,6 +960,7 @@ export default function TransactionsPage() {
       | "delete-deposit"
       | "delete-withdrawal"
       | "delete-freecredit"
+      | "delete-transfer"
       | "delete-cashout"
       | "delete-leadertransfer"
       | "reverse-cashout"
@@ -4171,6 +4173,22 @@ export default function TransactionsPage() {
       (me.role === "super_admin" || me.role === "company_leader" || f.user_id === me.user_id),
     [me],
   );
+  /**
+   * A game transfer the server will delete: manual, finished, a real move (not
+   * a credit-in), and keyed by me — or I'm a leader or the admin.
+   */
+  const deletableTf = selectedTransfers.filter(
+    (t) =>
+      t.skip_bot === true &&
+      (t.status === "completed" || t.status === "failed") &&
+      t.from_game.toLowerCase() !== t.to_game.toLowerCase(),
+  );
+  const canDeleteTransfer = useCallback(
+    (t: GameTransfer) =>
+      !!me &&
+      (me.role === "super_admin" || me.role === "company_leader" || t.handled_by_user_id === me.user_id),
+    [me],
+  );
   const approvable = selectedDeposits.filter((d) => ["pending", "matched"].includes(d.status));
   const rejectableDep = selectedDeposits.filter((d) =>
     ["pending_match", "matched", "pending"].includes(d.status),
@@ -4224,6 +4242,8 @@ export default function TransactionsPage() {
       delLt: tab === "leadertransfer" && selectedLeaderTransfers.length > 0,
       delFcMine:
         selectedFreeCredits.length > 0 && selectedFreeCredits.every(canDeleteFreeCredit),
+      delTf: tab === "transfer" && deletableTf.length > 0,
+      delTfMine: deletableTf.length > 0 && deletableTf.every(canDeleteTransfer),
       // Reversing a cash-out is a leader's call; paying/skipping a rebate is CS work.
       revCash:
         tab === "leaderwithdrawal" &&
@@ -4400,6 +4420,14 @@ export default function TransactionsPage() {
       }),
     [selectedFreeCredits, canDeleteFreeCredit],
   );
+  const handleDeleteTransfers = useCallback(
+    () =>
+      setConfirming({
+        kind: "delete-transfer",
+        ids: deletableTf.filter(canDeleteTransfer).map((t) => t.transfer_id),
+      }),
+    [deletableTf, canDeleteTransfer],
+  );
   const handleDeleteCashOuts = useCallback(
     () =>
       setConfirming({
@@ -4531,6 +4559,7 @@ export default function TransactionsPage() {
         if (tab === "deposit" && can.delDep) run = handleDeleteDeposits;
         else if (tab === "withdrawal" && can.delWd) run = handleDeleteWithdrawals;
         else if (tab === "freecredit" && can.delFc) run = handleDeleteFreeCredits;
+        else if (tab === "transfer" && can.delTf && can.delTfMine) run = handleDeleteTransfers;
         else if (tab === "expense" && can.delExp) run = handleDeleteExpenses;
         else if (tab === "claim" && can.delClaim) run = handleDeleteClaims;
         else if (tab === "leaderwithdrawal" && can.delCash) run = handleDeleteCashOuts;
@@ -4549,7 +4578,7 @@ export default function TransactionsPage() {
     selectedPlayerId, handleViewPlayer,
     handleAssignToMe, handleApprove, handleComplete, handleRetryDeposits,
     handlePull, handleMarkPaid, handleRetryTransfers, handleDeleteExpenses, handleDeleteClaims,
-    handleDeleteDeposits, handleDeleteWithdrawals, handleDeleteFreeCredits,
+    handleDeleteDeposits, handleDeleteWithdrawals, handleDeleteFreeCredits, handleDeleteTransfers,
     handleDeleteCashOuts, handleDeleteLeaderTransfers,
   ]);
 
@@ -4931,6 +4960,34 @@ export default function TransactionsPage() {
         },
       };
     }
+    if (confirming.kind === "delete-transfer") {
+      const list = confirming.ids
+        .map((id) => transferByIdMap.get(id))
+        .filter((t): t is GameTransfer => !!t);
+      return {
+        title: `Delete ${list.length} game transfer${list.length === 1 ? "" : "s"}?`,
+        description:
+          "A completed transfer is undone: the points go back to the game they " +
+          "came from and both kiosks are put back. A failed one moved nothing, " +
+          "so it is just removed.",
+        confirmLabel: "Delete",
+        summary: [
+          { label: "Transfers", value: String(list.length) },
+          {
+            label: "Total amount",
+            value: fmtAmount(list.reduce((a, t) => a + t.transfer_amount, 0)),
+            emphasis: true,
+          },
+        ] as SummaryRow[],
+        items: list.map((t) => ({
+          key: t.transfer_id,
+          label: playerById.get(t.player_id)?.username ?? `#${t.player_id}`,
+          meta: `${t.from_game} → ${t.to_game} · ${t.status}`,
+          value: fmtAmount(t.transfer_amount),
+        })),
+        run: () => runBulk("Delete", list.map((t) => t.transfer_id), deleteGameTransfer),
+      };
+    }
     if (confirming.kind === "delete-cashout") {
       const list = confirming.ids
         .map((id) => cashOutById.get(id))
@@ -5150,9 +5207,9 @@ export default function TransactionsPage() {
   }, [
     confirming, depositById, withdrawalById, expenseById, claimById, playerById,
     setClaimStatus, deleteClaim,
-    cashOutById, rebateById, accountById, freeCreditById,
+    cashOutById, rebateById, accountById, freeCreditById, transferByIdMap,
     runBulk, rejectDeposit, rejectWithdrawal, deleteExpense, reverseBankCashOut,
-    deleteDeposit, deleteWithdrawal, deleteFreeCredit, deleteCashOut, deleteLeaderTransfer,
+    deleteDeposit, deleteWithdrawal, deleteFreeCredit, deleteGameTransfer, deleteCashOut, deleteLeaderTransfer,
     leaderTransfers, userName, transferEndLabel,
     loadCashOuts, loadRebatePayouts, loadFreeCredits, loadLeaderTransfers,
   ]);
@@ -5752,22 +5809,26 @@ export default function TransactionsPage() {
                 <Kbd k={`${DEL_LABEL}D`} />
               </Button>
             )}
-            {(can.delDep || can.delWd || can.delFc) && (
+            {(can.delDep || can.delWd || can.delFc || can.delTf) && (
               <Button
                 size="xs"
                 variant="outline"
-                disabled={acting || !(can.delDepMine || can.delWdMine || can.delFcMine)}
+                disabled={acting || !(can.delDepMine || can.delWdMine || can.delFcMine || can.delTfMine)}
                 onClick={
                   can.delDep
                     ? handleDeleteDeposits
                     : can.delWd
                       ? handleDeleteWithdrawals
-                      : handleDeleteFreeCredits
+                      : can.delTf
+                        ? handleDeleteTransfers
+                        : handleDeleteFreeCredits
                 }
                 title={
-                  can.delDepMine || can.delWdMine || can.delFcMine
+                  can.delDepMine || can.delWdMine || can.delFcMine || can.delTfMine
                     ? "Delete these rows and put back everything they moved"
-                    : "Assign to me first — actions run only on rows you've claimed"
+                    : can.delTf
+                      ? "Only the CS who keyed these, or a leader, can delete them"
+                      : "Assign to me first — actions run only on rows you've claimed"
                 }
                 className="cursor-pointer gap-1 border-red-300 text-red-700 hover:bg-red-50 dark:text-red-300"
               >

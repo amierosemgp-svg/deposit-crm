@@ -338,3 +338,163 @@ export async function PATCH(
     );
   }
 }
+
+/**
+ * DELETE /api/game-transfers/:id — remove a game transfer CS keyed by mistake.
+ *
+ * Who: the CS who keyed it (handled_by_user_id), a company leader in scope, or
+ * the admin — the same rule as a free credit. Unlike a deposit, a transfer's
+ * assignee is a queue marker, not ownership, so it is not what decides here.
+ *
+ * Manual rows only, for the reason PATCH gives: a transfer the agent ran is its
+ * record of a move at the provider. A credit-in belongs to the free credit or
+ * referral payout that queued it.
+ *
+ * A completed move booked four legs, so they come off first — the from-wallet
+ * gets the amount back, the to-wallet gives it up, the two kiosk floats swap
+ * back — exactly as marking it failed would. A failed move booked nothing, so
+ * deleting one only removes the row.
+ */
+export async function DELETE(
+  _request: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  try {
+    const user = await requireWriteUser();
+    const transferId = Number((await params).id);
+    if (!Number.isInteger(transferId) || transferId <= 0) {
+      return jsonError("Invalid transfer id");
+    }
+
+    const result = await db.transaction(async (txn) => {
+      const [row] = await txn
+        .select()
+        .from(gameTransfers)
+        .where(eq(gameTransfers.transfer_id, transferId))
+        .for("update");
+      if (!row) throw new AuthError(404, "Transfer not found");
+
+      const [player] = await txn
+        .select()
+        .from(players)
+        .where(eq(players.player_id, row.player_id));
+      if (!player) throw new AuthError(404, "Player not found");
+      if (user.companyIds !== null && !user.companyIds.includes(player.company_entity_id)) {
+        throw new AuthError(403, "Transfer is outside your company scope");
+      }
+
+      const overseer = user.role === "super_admin" || user.role === "company_leader";
+      if (!overseer && row.handled_by_user_id !== user.user_id) {
+        throw new AuthError(
+          409,
+          row.handled_by_user_id === null
+            ? "That transfer has no recorded keyer — a leader has to remove it"
+            : "That transfer was keyed by someone else — they or a leader have to remove it",
+        );
+      }
+      if (row.skip_bot !== true) {
+        throw new AuthError(
+          409,
+          row.skip_bot === false
+            ? "That transfer is the agent's — only manual rows can be deleted"
+            : "That transfer predates the manual flag — it can't be deleted here",
+        );
+      }
+      if (row.from_game.toLowerCase() === row.to_game.toLowerCase()) {
+        throw new AuthError(
+          409,
+          "That's a credit-in, not a transfer — remove it from the free credit or referral bonus it pays",
+        );
+      }
+      if (row.status !== "completed" && row.status !== "failed") {
+        throw new AuthError(409, `Transfer is ${row.status} — it can't be deleted until it finishes`);
+      }
+
+      const from = await canonicalise(row.from_game, txn);
+      const to = await canonicalise(row.to_game, txn);
+      const fromLogin = resolveGameLogin(player.game_accounts, from, row.from_game_username);
+      const toLogin = resolveGameLogin(player.game_accounts, to, row.to_game_username);
+      const nowIso = new Date().toISOString();
+
+      let negativeWallets: Array<{ game: string; login: string; balance: number }> = [];
+      const wasBooked = row.status === "completed";
+      if (wasBooked) {
+        const amt = row.transfer_amount;
+        const co = player.company_entity_id;
+        const pid = player.player_id;
+        ({ negativeWallets } = await applyCreditRebook(
+          txn,
+          [
+            { kind: "wallet", playerId: pid, gameName: from, login: fromLogin, delta: amt },
+            { kind: "wallet", playerId: pid, gameName: to, login: toLogin, delta: -amt },
+            { kind: "kiosk", companyEntityId: co, gameName: from, delta: -amt },
+            { kind: "kiosk", companyEntityId: co, gameName: to, delta: amt },
+          ],
+          nowIso,
+        ));
+      }
+
+      await txn.delete(gameTransfers).where(eq(gameTransfers.transfer_id, transferId));
+
+      await txn.insert(transactions).values({
+        player_id: player.player_id,
+        entity_id: player.company_entity_id,
+        type: "game_transfer",
+        amount: wasBooked ? -row.transfer_amount : 0,
+        game_name: `${from} → ${to}`,
+        reference_id: transferId,
+        user_id: user.user_id,
+        details: {
+          source: "manual",
+          action: "deleted_manually",
+          status_before: row.status,
+          reversed: wasBooked,
+          from,
+          to,
+          from_game_username: fromLogin,
+          to_game_username: toLogin,
+          amount: row.transfer_amount,
+          keyed_by_user_id: row.handled_by_user_id,
+          note: row.note,
+          created_at: row.created_at,
+        },
+      });
+
+      return { row, player, negativeWallets, wasBooked };
+    });
+
+    await logActivity({
+      category: "transaction",
+      action: "game_transfer.deleted",
+      summary:
+        `Game transfer #${transferId} deleted: ${result.player.username} ` +
+        `${result.row.from_game} → ${result.row.to_game} RM${result.row.transfer_amount.toFixed(2)}` +
+        (result.wasBooked ? " — wallets and kiosks put back" : " — it was failed, nothing to put back"),
+      actor: user,
+      companyEntityId: result.player.company_entity_id,
+      targetType: "game_transfer",
+      targetId: transferId,
+      targetLabel: `${result.row.from_game} → ${result.row.to_game}`,
+      context: { status_before: result.row.status, keyed_by_user_id: result.row.handled_by_user_id },
+    });
+
+    return Response.json({
+      ok: true,
+      ...(result.negativeWallets.length
+        ? {
+            warning:
+              `Deleted, but a wallet is now below zero — ` +
+              result.negativeWallets
+                .map((w) => `${w.game}${w.login ? ` ${w.login}` : ""} is now ${w.balance.toFixed(2)}`)
+                .join(", ") +
+              `. Sync the kiosk balance.`,
+          }
+        : {}),
+    });
+  } catch (e) {
+    if (e instanceof InsufficientKioskCreditError) return jsonError(e.message, 422);
+    return (
+      authErrorResponse(e) ?? (console.error(e), jsonError("Server error", 500))
+    );
+  }
+}

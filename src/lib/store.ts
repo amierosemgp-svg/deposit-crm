@@ -581,6 +581,7 @@ type Store = {
   deleteWithdrawal: (withdrawalId: number) => Promise<MutationResult>;
   /** Keyed on the ledger row's transaction_id — that row IS the sheet's row. */
   deleteFreeCredit: (transactionId: number) => Promise<MutationResult>;
+  deleteGameTransfer: (transferId: number) => Promise<MutationResult>;
   /** A clear-bank row that should not exist; the money goes back on the account. */
   deleteCashOut: (cashOutId: number) => Promise<MutationResult>;
   /** A settlement keyed wrong; both banks go back. */
@@ -1380,6 +1381,8 @@ export const useStore = create<Store>((set, get) => {
       mutate(`/api/withdrawals/${withdrawalId}`, { method: "DELETE" }),
     deleteFreeCredit: (transactionId) =>
       mutate(`/api/free-credits/${transactionId}`, { method: "DELETE" }),
+    deleteGameTransfer: (transferId) =>
+      mutate(`/api/game-transfers/${transferId}`, { method: "DELETE" }),
     deleteCashOut: (cashOutId) =>
       mutate(`/api/bank-accounts/cash-outs/${cashOutId}`, { method: "DELETE" }),
     deleteLeaderTransfer: (transferId) =>
