@@ -48,6 +48,8 @@ export async function GET(request: Request) {
 
     // Free credit has no table: it is a game_topup ledger row with no deposit
     // behind it. Money given away all the same, so it belongs in sales.
+    // Staff Error bonuses (a penalty's lost credit) stay out: the deposit the
+    // mistake was made on is failed, which already took it off sales.
     const fw: SQL[] = [IS_FREE_CREDIT];
     if (p.from) fw.push(sql`${businessDay(sql`t.created_at`)} >= ${p.from}::date`);
     if (p.to) fw.push(sql`${businessDay(sql`t.created_at`)} <= ${p.to}::date`);
