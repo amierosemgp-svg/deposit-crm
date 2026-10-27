@@ -241,7 +241,8 @@ export async function GET(request: Request) {
               'user_id', t.user_id,
               'reason', t.details->>'reason',
               'source', coalesce(t.details->>'source', 'manual'),
-              'game_transfer_id', (t.details->>'game_transfer_id')::int) AS row`
+              'game_transfer_id', (t.details->>'game_transfer_id')::int,
+              'failed', coalesce((t.details->>'failed')::boolean, false)) AS row`
         : asRow(cfg.alias, cfg.numerics);
 
     const other = await db.execute(sql`

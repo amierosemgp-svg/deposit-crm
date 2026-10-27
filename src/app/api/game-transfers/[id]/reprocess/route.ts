@@ -43,6 +43,15 @@ export async function POST(
       if (t.status !== "failed") {
         throw new AuthError(409, `Transfer is ${t.status}, not failed`);
       }
+      // A failed credit-in has already handed its bonus back to unpaid (or its
+      // free credit to failed). Re-queuing it would credit the member with
+      // nothing in the CRM saying so — pay it again from where it came from.
+      if (t.from_game.toLowerCase() === t.to_game.toLowerCase()) {
+        throw new AuthError(
+          409,
+          "That's a failed recommend bonus or free credit — pay the bonus again from Recommend Bonus, or key the free credit again",
+        );
+      }
 
       const [player] = await txn
         .select()

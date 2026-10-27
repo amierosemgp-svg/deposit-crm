@@ -265,4 +265,5 @@ export const RB_AT = sql`coalesce(rb.assigned_at, rb.created_at)`;
  * Paired with the row type, since `action` is a free-text marker and only
  * `game_topup` rows carry this one.
  */
-export const IS_FREE_CREDIT = sql`t.type = 'game_topup' AND t.details->>'action' = 'free_credit'`;
+// A free credit the agent gave up on is not given (see releaseFailedCreditIn).
+export const IS_FREE_CREDIT = sql`t.type = 'game_topup' AND t.details->>'action' = 'free_credit' AND coalesce(t.details->>'failed', 'false') <> 'true'`;

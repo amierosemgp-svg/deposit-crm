@@ -185,6 +185,7 @@ export async function freeCreditAllowance(
                       WHERE t.entity_id = c.id
                         AND t.type = 'game_topup'
                         AND t.details->>'action' = 'free_credit'
+                        AND coalesce(t.details->>'failed', 'false') <> 'true'
                         AND (t.created_at AT TIME ZONE 'Asia/Kuala_Lumpur')::date >= m.d), 0)::float8
              AS issued
       FROM (VALUES ${ids}) AS c(id)

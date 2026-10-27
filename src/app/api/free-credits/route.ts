@@ -126,6 +126,7 @@ export async function GET() {
         reason: (r.details?.reason as string | null) ?? null,
         source: (r.details?.source as string) ?? "manual",
         game_transfer_id: (r.details?.game_transfer_id as number | null) ?? null,
+        failed: r.details?.failed === true,
       })),
     });
   } catch (e) {

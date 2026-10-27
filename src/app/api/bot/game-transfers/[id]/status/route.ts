@@ -1,4 +1,5 @@
 import { and, eq, sql } from "drizzle-orm";
+import { releaseFailedCreditIn } from "@/lib/failed-credit-in";
 import { z } from "zod";
 import { db } from "@/db";
 import {
@@ -324,6 +325,12 @@ export async function PATCH(
         })
         .where(eq(gameTransfers.transfer_id, transferId))
         .returning();
+
+      // A credit-in that failed gave nobody anything: the bonus goes back to
+      // unpaid and the free credit stops counting (see releaseFailedCreditIn).
+      if (body.status === "failed") {
+        await releaseFailedCreditIn(txn, row, body.note?.trim() || "the agent reported a failure");
+      }
 
       const [player] = await txn
         .select({

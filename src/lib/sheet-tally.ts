@@ -398,6 +398,7 @@ export async function loadCrmFreeCredit(
       FROM transactions t
      WHERE t.entity_id = ${entityId}
        AND t.type = 'game_topup' AND t.details->>'action' = 'free_credit'
+       AND coalesce(t.details->>'failed', 'false') <> 'true'
        AND t.created_at >= (${from}::date)::timestamp AT TIME ZONE ${BUSINESS_TZ}
        AND t.created_at <  (${to}::date)::timestamp AT TIME ZONE ${BUSINESS_TZ}
      GROUP BY 1 ORDER BY 1

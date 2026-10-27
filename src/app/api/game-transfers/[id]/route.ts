@@ -13,6 +13,7 @@ import {
 } from "@/lib/game-credits";
 import { canonicalise } from "@/lib/game-name";
 import { InsufficientKioskCreditError } from "@/lib/kiosk-credit";
+import { releaseFailedCreditIn } from "@/lib/failed-credit-in";
 
 const patchSchema = z.object({
   // Member — moves the transfer to another player's wallets.
@@ -433,6 +434,12 @@ export async function DELETE(
           ],
           nowIso,
         ));
+      }
+
+      // A failed credit-in still marked as given — rows that failed before
+      // releaseFailedCreditIn existed — is put right as it goes.
+      if (!wasBooked) {
+        await releaseFailedCreditIn(txn, row, "deleted after the bot failed");
       }
 
       await txn.delete(gameTransfers).where(eq(gameTransfers.transfer_id, transferId));

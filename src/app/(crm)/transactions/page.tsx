@@ -278,6 +278,8 @@ type FreeCredit = {
   reason: string | null;
   source: string;
   game_transfer_id: number | null;
+  /** The agent gave up on it: shown as Failed, counted nowhere. */
+  failed?: boolean;
 };
 
 /** Sentinel for the member list's "New player" command row. */
@@ -1873,6 +1875,7 @@ export default function TransactionsPage() {
     // The status a row shows: credited by hand, or wherever its agent transfer is.
     const statusOf = (f: FreeCredit) => {
       if (f.source === "manual") return "credited";
+      if (f.failed) return "failed";
       const t = f.game_transfer_id != null ? transferById.get(f.game_transfer_id) : undefined;
       return t ? t.status : "queued";
     };
@@ -1895,9 +1898,11 @@ export default function TransactionsPage() {
           id: f.transaction_id,
           tone: manual
             ? ("success" as const)
-            : transfer
-              ? transferTone(transfer.status)
-              : ("warning" as const),
+            : f.failed
+              ? ("danger" as const)
+              : transfer
+                ? transferTone(transfer.status)
+                : ("warning" as const),
           cells: toCells("freecredit", {
             assign: assignCell(f.user_id),
             member: p?.username ?? "",
@@ -1908,9 +1913,11 @@ export default function TransactionsPage() {
             remark: f.reason ?? "",
             status: manual
               ? "Credited"
-              : transfer
-                ? TRANSFER_STATUS_LABEL[transfer.status]
-                : "Queued",
+              : f.failed
+                ? "Failed"
+                : transfer
+                  ? TRANSFER_STATUS_LABEL[transfer.status]
+                  : "Queued",
             date: sheetDate(f.created_at),
             time: formatClock(f.created_at),
           }),

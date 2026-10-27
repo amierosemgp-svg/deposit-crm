@@ -1,4 +1,5 @@
 import { and, eq, inArray, isNull, lt, or, sql, type SQL } from "drizzle-orm";
+import { releaseFailedCreditIn } from "@/lib/failed-credit-in";
 import { db } from "@/db";
 import {
   bankAccounts,
@@ -448,6 +449,7 @@ export async function retryStuckGameTransfers(): Promise<{
             attempts,
           },
         });
+        await releaseFailedCreditIn(txn, locked, "the agent never reported back");
         failed += 1;
         return;
       }
