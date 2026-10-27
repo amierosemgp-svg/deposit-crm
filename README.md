@@ -116,7 +116,9 @@ An existing database needs `migrations/2026-10-19-salary-staff-penalty.sql`.
 **Sheet indexes (27 Oct).** Every database needs
 `migrations/2026-10-27-sheet-indexes.sql` — run it with `psql -f` (it builds
 `CONCURRENTLY`, outside a transaction). Without it each Transactions sheet
-load read the whole deposits table.
+load read the whole deposits table. Then
+`migrations/2026-10-27b-casino-indexes.sql` (same way) for one casino's sheet
+and the bank cards.
 
 ## Crawl banks (on-demand agent commands)
 

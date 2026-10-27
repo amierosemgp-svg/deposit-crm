@@ -2,7 +2,7 @@ import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { authErrorResponse, requireUser } from "@/lib/auth";
 import { jsonError, visibleEntityIds } from "@/lib/api-helpers";
-import { all, businessDay, inList } from "@/lib/report-sql";
+import { all, inBusinessDays, inList } from "@/lib/report-sql";
 
 /**
  * GET /api/bank-movements?from=&to=&company= — what actually moved through each
@@ -52,22 +52,36 @@ export async function GET(request: Request) {
     // Which accounts this user may see at all.
     const visible = await visibleEntityIds(user);
     if (visible !== null && visible.length === 0) return Response.json({ accounts: [] });
+    const scopeWhere: SQL[] = [];
+    if (visible !== null) scopeWhere.push(inList(sql`a.entity_id`, visible));
+    // A casino's view carries its leader's own accounts too: that is the
+    // company the casino's float is topped up from and swept back to, and the
+    // desk wants both balances in front of it.
+    if (companyId !== null) {
+      scopeWhere.push(sql`(a.entity_id = ${companyId} OR a.entity_id = (
+        SELECT e.parent_entity_id FROM entities e
+         WHERE e.entity_id = ${companyId} AND e.entity_type = 'company'))`);
+    }
+
+    /**
+     * The accounts in view, first — a casino has a handful. Every source below
+     * reads only their rows: summing every account in the house and keeping a
+     * casino's at the end took 11s a card once the house reached 840k deposits.
+     */
+    const scoped = (
+      await db.execute(sql`SELECT a.account_id::int AS id FROM bank_accounts a WHERE ${all(scopeWhere)}`)
+    ).rows as unknown as { id: number }[];
+    if (!scoped.length) return Response.json({ accounts: [], totals: [] });
+    const ofAccounts = (column: SQL) => inList(column, scoped.map((r) => r.id));
+
     // Active accounts, plus any account that moved money in the period: one
     // switched off mid-day still took that day's deposits, and dropping it
     // left the cards short of what the sheet shows. Both queries below define
     // `movement`, so the subquery resolves in each.
     const accountWhere: SQL[] = [
+      ofAccounts(sql`a.account_id`),
       sql`(a.status = 'active' OR a.account_id IN (SELECT account_id FROM movement))`,
     ];
-    if (visible !== null) accountWhere.push(inList(sql`a.entity_id`, visible));
-    // A casino's view carries its leader's own accounts too: that is the
-    // company the casino's float is topped up from and swept back to, and the
-    // desk wants both balances in front of it.
-    if (companyId !== null) {
-      accountWhere.push(sql`(a.entity_id = ${companyId} OR a.entity_id = (
-        SELECT e.parent_entity_id FROM entities e
-         WHERE e.entity_id = ${companyId} AND e.entity_type = 'company'))`);
-    }
 
     /**
      * One window clause per source, on the column that dates that movement in
@@ -75,12 +89,7 @@ export async function GET(request: Request) {
      * thing else by when it happened. Read in Malaysia time so a row lands on
      * the same day here as it does on the sheet.
      */
-    const window = (column: SQL) => {
-      const parts: SQL[] = [];
-      if (from) parts.push(sql`${businessDay(column)} >= ${from}::date`);
-      if (to) parts.push(sql`${businessDay(column)} <= ${to}::date`);
-      return all(parts);
-    };
+    const window = (column: SQL) => all(inBusinessDays(column, from, to));
 
     /**
      * Every movement in the period, each tagged with where it came from, so
@@ -109,53 +118,56 @@ export async function GET(request: Request) {
              d.bonus_amount             AS bonus
         FROM deposits d
        WHERE d.status = 'completed'
-         AND d.received_into_account_id IS NOT NULL
+         AND ${ofAccounts(sql`d.received_into_account_id`)}
          AND ${window(sql`d.deposit_date`)}
 
       UNION ALL
       SELECT w.paid_from_account_id, -(${WITHDRAWN}), 'withdrawal', 0
         FROM withdrawals w
        WHERE w.status = 'paid'
-         AND w.paid_from_account_id IS NOT NULL
+         AND ${ofAccounts(sql`w.paid_from_account_id`)}
          AND ${window(sql`w.created_at`)}
 
       UNION ALL
       SELECT e.paid_from_account_id, -e.amount, 'expense', 0
         FROM expenses e
-       WHERE e.paid_from_account_id IS NOT NULL
+       WHERE ${ofAccounts(sql`e.paid_from_account_id`)}
          AND ${window(sql`e.created_at`)}
 
       UNION ALL
       SELECT s.paid_from_account_id, -s.net_amount, 'salary', 0
         FROM salary_payments s
        WHERE s.status = 'paid'
-         AND s.paid_from_account_id IS NOT NULL
+         AND ${ofAccounts(sql`s.paid_from_account_id`)}
          AND ${window(sql`s.paid_at`)}
 
       UNION ALL
       SELECT c.account_id, -c.amount, 'clear_bank', 0
         FROM bank_cash_outs c
        WHERE c.reversed_at IS NULL
+         AND ${ofAccounts(sql`c.account_id`)}
          AND ${window(sql`c.occurred_at`)}
 
       -- A settlement or an internal move is two movements, one per end.
       UNION ALL
       SELECT t.from_account_id, -t.amount, 'leader_transfer', 0
         FROM leader_transfers t
-       WHERE t.from_account_id IS NOT NULL AND ${window(sql`t.created_at`)}
+       WHERE ${ofAccounts(sql`t.from_account_id`)} AND ${window(sql`t.created_at`)}
       UNION ALL
       SELECT t.to_account_id, t.amount, 'leader_transfer', 0
         FROM leader_transfers t
-       WHERE t.to_account_id IS NOT NULL AND ${window(sql`t.created_at`)}
+       WHERE ${ofAccounts(sql`t.to_account_id`)} AND ${window(sql`t.created_at`)}
 
       UNION ALL
       SELECT b.from_account_id, -b.amount, 'bank_transfer', 0
         FROM bank_transfers b
-       WHERE b.status = 'confirmed' AND ${window(sql`b.created_at`)}
+       WHERE b.status = 'confirmed' AND ${ofAccounts(sql`b.from_account_id`)}
+         AND ${window(sql`b.created_at`)}
       UNION ALL
       SELECT b.to_account_id, b.amount, 'bank_transfer', 0
         FROM bank_transfers b
-       WHERE b.status = 'confirmed' AND ${window(sql`b.created_at`)}
+       WHERE b.status = 'confirmed' AND ${ofAccounts(sql`b.to_account_id`)}
+         AND ${window(sql`b.created_at`)}
     `;
 
     const movement = sql`
