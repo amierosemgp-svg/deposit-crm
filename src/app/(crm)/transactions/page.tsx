@@ -39,7 +39,7 @@ import {
 } from "@/components/sheet/sheet-grid";
 import { CompanyInfoPanel } from "@/components/sheet/company-info-panel";
 import { SalarySheet } from "@/components/staff-pay/salary-sheet";
-import { PenaltySheet } from "@/components/staff-pay/penalty-sheet";
+import { PenaltySheet, type PenaltyPrefill } from "@/components/staff-pay/penalty-sheet";
 import { LeaveSheet } from "@/components/staff-pay/leave-sheet";
 import { CreatePlayerModal } from "@/components/create-player-modal";
 import {
@@ -59,6 +59,7 @@ import {
 import {
   Ban,
   CheckCircle2,
+  CircleAlert,
   HandCoins,
   Loader2,
   Play,
@@ -124,36 +125,36 @@ type TabKey =
  */
 const COLUMN_KEYS = {
   deposit: [
-    "assign", "member", "product", "username", "amount", "bonuspct", "bonus",
+    "id", "assign", "member", "product", "username", "amount", "bonuspct", "bonus",
     "total", "bank", "mode", "status", "date", "time", "remark", "bankdesc",
   ],
   withdrawal: [
-    "assign", "member", "product", "username", "amount", "bank", "account",
+    "id", "assign", "member", "product", "username", "amount", "bank", "account",
     "holder", "paidfrom", "mode", "status", "date", "time", "remark2",
   ],
   freecredit: [
-    "assign", "member", "product", "username", "amount", "mode", "remark",
+    "id", "assign", "member", "product", "username", "amount", "mode", "remark",
     "status", "date", "time",
   ],
   transfer: [
-    "assign", "member", "from", "username", "to", "to_username", "amount",
+    "id", "assign", "member", "from", "username", "to", "to_username", "amount",
     "mode", "status", "date", "time", "note",
   ],
-  expense: ["assign", "date", "category", "description", "amount", "company", "paidfrom", "notes"],
+  expense: ["id", "assign", "date", "category", "description", "amount", "company", "paidfrom", "notes"],
   // Cash a leader took out of a company bank account (see Bank Accounts).
-  leaderwithdrawal: ["assign", "date", "time", "account", "amount", "takenby", "notes", "status"],
+  leaderwithdrawal: ["id", "assign", "date", "time", "account", "amount", "takenby", "notes", "status"],
   // Generated rebate payouts, every plan together — read-only, paid from here.
   rebate: [
-    "plan", "window", "member", "name", "product", "username", "deposits",
+    "id", "plan", "window", "member", "name", "product", "username", "deposits",
     "withdrawals", "loss", "pct", "amount", "status", "paidby", "paidat",
   ],
   // Settlements between leaders (super-admin only).
   leadertransfer: [
-    "assign", "date", "time", "from", "fromcasino", "fromaccount", "to", "tocasino", "toaccount",
+    "id", "assign", "date", "time", "from", "fromcasino", "fromaccount", "to", "tocasino", "toaccount",
     "amount", "note",
   ],
   // Money someone paid out of their own pocket that the company owes back.
-  claim: ["assign", "date", "claimant", "company", "amount", "reason", "paidinto", "status", "notes"],
+  claim: ["id", "assign", "date", "claimant", "company", "amount", "reason", "paidinto", "status", "notes"],
 } as const satisfies Record<TabKey, readonly string[]>;
 
 type ColKey<T extends TabKey> = (typeof COLUMN_KEYS)[T][number];
@@ -395,6 +396,33 @@ const EDITED_AT = "__edited_at";
 function rowKey(r: unknown): unknown {
   const o = r as Record<string, unknown>;
   return o.deposit_id ?? o.withdrawal_id ?? r;
+}
+
+/** Range rows per request, and the most one range will hold. */
+const PAGE_ROWS = 2000;
+const MAX_RANGE_ROWS = 20_000;
+/** The newest rows the 10s heartbeat re-reads. */
+const HEAD_ROWS = 300;
+/** Every 30th beat (5 minutes) re-reads the whole range instead. */
+const FULL_EVERY_BEATS = 30;
+
+/** A range row's id, whichever sheet it is from. */
+function sheetRowKey(r: unknown): unknown {
+  const o = r as Record<string, unknown>;
+  return (
+    o.deposit_id ?? o.withdrawal_id ?? o.transfer_id ?? o.transaction_id ?? o.cash_out_id ?? o.expense_id ?? r
+  );
+}
+
+/** The column each sheet is ordered by, newest first (see /api/worksheet/rows). */
+const SHEET_ORDER_COLUMN: Partial<Record<TabKey, string>> = {
+  deposit: "deposit_date",
+  leaderwithdrawal: "occurred_at",
+  expense: "expense_date",
+};
+function sheetRowAt(which: TabKey, r: unknown): number {
+  const v = (r as Record<string, unknown>)[SHEET_ORDER_COLUMN[which] ?? "created_at"];
+  return typeof v === "string" ? Date.parse(v) : 0;
 }
 
 function gameUsername(p: Player | undefined, game: string | null | undefined): string {
@@ -746,6 +774,8 @@ export default function TransactionsPage() {
    * the toolbar and grid below instead of joining TabKey.
    */
   const [staffTab, setStaffTab] = useState<"salary" | "penalty" | "leave" | null>(null);
+  // "Staff error" on a Deposit / Free Credit row opens Staff Penalty naming it.
+  const [penaltyPrefill, setPenaltyPrefill] = useState<PenaltyPrefill | null>(null);
   // Date range over the sheet: a quick preset, or custom from/to days.
   const [preset, setPreset] = useState<RangePreset | "custom">("this_month");
   const [range, setRange] = useState<DateRange>(() => presetRange("this_month"));
@@ -770,7 +800,19 @@ export default function TransactionsPage() {
    * sheet is never empty while it loads.
    */
   const [rangeRows, setRangeRows] = useState<
-    Partial<Record<TabKey, { rows: unknown[]; totals: { rows: number; amount: number } }>>
+    Partial<
+      Record<
+        TabKey,
+        {
+          rows: unknown[];
+          totals: { rows: number; amount: number };
+          /** Which range and company these rows are for. */
+          range?: string;
+          /** False while the later pages of a range are still coming. */
+          complete?: boolean;
+        }
+      >
+    >
   >({});
   /**
    * An in-place edit on a range row. The row is stamped with when, so a range
@@ -795,53 +837,114 @@ export default function TransactionsPage() {
     [],
   );
   const loadRangeRows = useCallback(
-    async (which: TabKey) => {
+    /** Resolves false when a full load could not fetch its range. */
+    async (which: TabKey, mode: "full" | "head" = "full", signal?: AbortSignal): Promise<boolean> => {
       const startedAt = Date.now();
-      /**
-       * Pages until the range is complete, not just the first page of it.
-       *
-       * One request returns at most 2,000 rows. A month here is ~2,600
-       * deposits, so a single page stopped three days into September and the
-       * sheet looked like the month began on the 4th — the same blind spot as
-       * the old 500-row cap, moved further back. The ceiling stops a year-wide
-       * filter from pulling everything ever recorded in one go.
-       */
-      const PAGE = 2000;
-      const MAX_PAGES = 10;
-      try {
-        let rows: unknown[] = [];
-        let totals: { rows: number; amount: number } | undefined;
-        for (let page = 0; page < MAX_PAGES; page++) {
-          const qs = new URLSearchParams({
-            sheet: which,
-            limit: String(PAGE),
-            offset: String(page * PAGE),
-          });
-          if (range.from) qs.set("from", range.from);
-          if (range.to) qs.set("to", range.to);
-          if (selectedCompanyId != null) qs.set("company", String(selectedCompanyId));
-          const res = await fetch(`/api/worksheet/rows?${qs}`);
-          if (!res.ok) return;
-          const data = await res.json();
-          rows = rows.concat(data.rows ?? []);
-          totals ??= data.totals;
-          if ((data.rows?.length ?? 0) < PAGE) break;
+      // Which range these rows are for. A load for a range no longer on
+      // screen is aborted by the effect that started it.
+      const rangeKey = `${range.from}|${range.to}|${selectedCompanyId}`;
+      const query = (limit: number, offset: number, totals: boolean) => {
+        const qs = new URLSearchParams({ sheet: which, limit: String(limit), offset: String(offset) });
+        if (!totals) qs.set("totals", "0");
+        if (range.from) qs.set("from", range.from);
+        if (range.to) qs.set("to", range.to);
+        if (selectedCompanyId != null) qs.set("company", String(selectedCompanyId));
+        return `/api/worksheet/rows?${qs}`;
+      };
+      type Page = { rows?: unknown[]; totals?: { rows: number; amount: number } };
+      const get = async (url: string): Promise<Page | null> => {
+        const res = await fetch(url, { signal });
+        return res.ok ? ((await res.json()) as Page) : null;
+      };
+      // Keep any row edited here while this fetch was in flight.
+      const keepEdits = (prevRows: unknown[], rows: unknown[]) => {
+        const edited = new Map<unknown, unknown>();
+        for (const r of prevRows) {
+          const at = (r as Record<string, unknown>)[EDITED_AT];
+          if (typeof at === "number" && at >= startedAt) edited.set(sheetRowKey(r), r);
         }
-        setRangeRows((prev) => {
-          // Keep any row edited here while this fetch was in flight.
-          const edited = new Map<unknown, unknown>();
-          for (const r of prev[which]?.rows ?? []) {
-            const at = (r as Record<string, unknown>)[EDITED_AT];
-            if (typeof at === "number" && at >= startedAt) edited.set(rowKey(r), r);
+        return edited.size ? rows.map((r) => edited.get(sheetRowKey(r)) ?? r) : rows;
+      };
+
+      try {
+        /**
+         * The heartbeat: only the newest rows, laid over what is on screen.
+         *
+         * It used to re-read the whole range every ten seconds — a month here
+         * is 16,000 deposits, 16 MB, eight requests one after another. What a
+         * colleague just keyed or touched is at the top; anything older is
+         * picked up by the next full load (a save, a delete, the range moving,
+         * or every few minutes).
+         */
+        if (mode === "head") {
+          const data = await get(query(HEAD_ROWS, 0, true));
+          if (!data) return true;
+          const head = data.rows ?? [];
+          setRangeRows((prev) => {
+            const sheet = prev[which];
+            if (!sheet || sheet.range !== rangeKey) return prev;
+            let rows = head;
+            if (head.length >= HEAD_ROWS) {
+              // Below the oldest row the head reached, the rows on screen stand.
+              const floor = sheetRowAt(which, head[head.length - 1]);
+              const inHead = new Set(head.map(sheetRowKey));
+              rows = head.concat(
+                sheet.rows.filter((r) => !inHead.has(sheetRowKey(r)) && sheetRowAt(which, r) <= floor),
+              );
+            }
+            return {
+              ...prev,
+              [which]: { ...sheet, rows: keepEdits(sheet.rows, rows), totals: data.totals ?? sheet.totals },
+            };
+          });
+          return true;
+        }
+
+        /**
+         * The whole range: the first page drawn as soon as it lands, the rest
+         * fetched side by side and drawn once. One request returns at most
+         * PAGE rows; the ceiling stops a year-wide filter from pulling
+         * everything ever recorded.
+         */
+        const first = await get(query(PAGE_ROWS, 0, true));
+        if (!first) return false;
+        const totals = first.totals ?? { rows: first.rows?.length ?? 0, amount: 0 };
+        const land = (rows: unknown[], partial: boolean) =>
+          setRangeRows((prev) => {
+            // A reload of the range already on screen draws once, at the end:
+            // the first page alone would shrink the sheet under the reader.
+            if (partial && prev[which]?.range === rangeKey) return prev;
+            return {
+              ...prev,
+              [which]: {
+                rows: keepEdits(prev[which]?.rows ?? [], rows),
+                totals,
+                range: rangeKey,
+                complete: !partial,
+              },
+            };
+          });
+        const firstRows = first.rows ?? [];
+        const complete = firstRows.length < PAGE_ROWS;
+        land(firstRows, !complete);
+        if (complete) return true;
+
+        const pages = Math.ceil(Math.min(totals.rows, MAX_RANGE_ROWS) / PAGE_ROWS);
+        const offsets = Array.from({ length: pages - 1 }, (_, i) => (i + 1) * PAGE_ROWS);
+        const rest: unknown[][] = [];
+        const worker = async () => {
+          for (let o = offsets.shift(); o !== undefined; o = offsets.shift()) {
+            const page = await get(query(PAGE_ROWS, o, false));
+            if (!page) throw new Error("page failed");
+            rest[o / PAGE_ROWS - 1] = page.rows ?? [];
           }
-          const merged = edited.size ? rows.map((r) => edited.get(rowKey(r)) ?? r) : rows;
-          return {
-            ...prev,
-            [which]: { rows: merged, totals: totals ?? { rows: rows.length, amount: 0 } },
-          };
-        });
+        };
+        await Promise.all(Array.from({ length: Math.min(4, offsets.length) }, worker));
+        land(firstRows.concat(...rest), false);
+        return true;
       } catch {
         // Keep whatever is on screen; the next refresh or poll retries.
+        return signal?.aborted ?? false;
       }
     },
     [range.from, range.to, selectedCompanyId],
@@ -874,13 +977,46 @@ export default function TransactionsPage() {
   );
   useEffect(() => {
     if (!RANGE_SHEETS.includes(tab)) return;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void loadRangeRows(tab);
+    const abort = new AbortController();
+    // Until a full load lands, every beat tries the full range again — a head
+    // read has nothing on screen to lay itself over.
+    let landed = false;
+    let fullRunning = false;
+    const full = () => {
+      if (fullRunning) return;
+      fullRunning = true;
+      void loadRangeRows(tab, "full", abort.signal).then((ok) => {
+        landed ||= ok;
+        fullRunning = false;
+      });
+    };
+    full();
     // The store polls /api/state every 10s; these rows no longer come from it,
     // so they need their own heartbeat or a colleague's entry never shows up.
-    const timer = setInterval(() => void loadRangeRows(tab), 10_000);
-    return () => clearInterval(timer);
+    // The newest rows every beat, the whole range every few minutes.
+    let beat = 0;
+    const timer = setInterval(() => {
+      beat++;
+      if (!landed || beat % FULL_EVERY_BEATS === 0) full();
+      else void loadRangeRows(tab, "head", abort.signal);
+    }, 10_000);
+    return () => {
+      clearInterval(timer);
+      abort.abort();
+    };
   }, [tab, loadRangeRows, RANGE_SHEETS]);
+
+  /**
+   * Whether the sheet on screen is still waiting for its rows — a new casino
+   * or period picked, or the rest of a long range still coming. Claims are in
+   * RANGE_SHEETS but not served by /api/worksheet/rows, so they never wait.
+   */
+  const shownRange = rangeRows[tab];
+  const rowsLoading =
+    RANGE_SHEETS.includes(tab) &&
+    tab !== "claim" &&
+    shownRange?.range !== `${range.from}|${range.to}|${selectedCompanyId}`;
+  const rowsLoadingMore = !rowsLoading && shownRange?.complete === false;
 
   /**
    * What each sheet draws: the range fetch once it lands, the store's slice
@@ -975,6 +1111,7 @@ export default function TransactionsPage() {
   const switchTab = useCallback((next: TabKey) => {
     setTab(next);
     setStaffTab(null);
+    setPenaltyPrefill(null);
     setStatusFilters(new Set());
     setSelectedIds([]);
   }, []);
@@ -1278,8 +1415,14 @@ export default function TransactionsPage() {
       options: ASSIGN_SUGGESTIONS,
       placeholder: "yes / no",
     };
-    const order = <T extends TabKey>(tab: T, defs: Record<ColKey<T>, Def>): SheetColumn[] =>
-      (COLUMN_KEYS[tab] as readonly ColKey<T>[]).map((key) => ({ key, ...defs[key] }));
+    // Every sheet opens with the row's own number — the Ref another sheet
+    // (Staff Penalty) looks it up by. Saved rows only; never typed.
+    const idCol: Def = { label: "ID", width: 76, align: "right" };
+    const order = <T extends TabKey>(tab: T, defs: Record<Exclude<ColKey<T>, "id">, Def>): SheetColumn[] =>
+      (COLUMN_KEYS[tab] as readonly ColKey<T>[]).map((key) => ({
+        key,
+        ...(key === "id" ? idCol : (defs as Record<string, Def>)[key]),
+      }));
     return {
       deposit: order("deposit", {
         assign,
@@ -1791,6 +1934,7 @@ export default function TransactionsPage() {
           id: d.deposit_id,
           tone: depositTone(d.status),
           cells: toCells("deposit", {
+            id: String(d.deposit_id),
             assign: assignCell(d.assigned_to_user_id, d.handled_by_user_id),
             member: d.player_username ?? p?.username ?? "",
             product: d.selected_game ?? "",
@@ -1840,6 +1984,7 @@ export default function TransactionsPage() {
           id: w.withdrawal_id,
           tone: withdrawalTone(w.status),
           cells: toCells("withdrawal", {
+            id: String(w.withdrawal_id),
             assign: assignCell(w.assigned_to_user_id, w.handled_by_user_id),
             member: p?.username ?? "",
             product: w.game_name,
@@ -1904,6 +2049,7 @@ export default function TransactionsPage() {
                 ? transferTone(transfer.status)
                 : ("warning" as const),
           cells: toCells("freecredit", {
+            id: String(f.transaction_id),
             assign: assignCell(f.user_id),
             member: p?.username ?? "",
             product: f.game_name ?? "",
@@ -1942,6 +2088,7 @@ export default function TransactionsPage() {
           id: t.transfer_id,
           tone: transferTone(t.status),
           cells: toCells("transfer", {
+            id: String(t.transfer_id),
             assign: assignCell(t.assigned_to_user_id, t.handled_by_user_id),
             member: p?.username ?? "",
             from: t.from_game,
@@ -1983,6 +2130,7 @@ export default function TransactionsPage() {
         id: e.expense_id,
         tone: "default" as const,
         cells: toCells("expense", {
+          id: String(e.expense_id),
           assign: assignCell(e.recorded_by_user_id),
           date: sheetDate(e.expense_date),
           category: EXPENSE_CATEGORY_LABEL[e.category] ?? e.category,
@@ -2014,6 +2162,7 @@ export default function TransactionsPage() {
         // the sheet should say so at a glance.
         tone: c.status === "settled" ? ("muted" as const) : ("default" as const),
         cells: toCells("claim", {
+          id: String(c.claim_id),
           assign: assignCell(c.recorded_by_user_id),
           date: sheetDate(c.occurred_at),
           claimant: userName(c.claimed_by_user_id),
@@ -2049,6 +2198,7 @@ export default function TransactionsPage() {
           id: c.cash_out_id,
           tone: c.reversed_at ? ("muted" as const) : ("default" as const),
           cells: toCells("leaderwithdrawal", {
+            id: String(c.cash_out_id),
             assign: assignCell(c.recorded_by_user_id),
             date: sheetDate(c.occurred_at),
             time: formatClock(c.occurred_at),
@@ -2086,6 +2236,7 @@ export default function TransactionsPage() {
         id: r.payout_id,
         tone: tone(r.live_status),
         cells: toCells("rebate", {
+          id: String(r.payout_id),
           plan: `${r.plan_name} · ${BONUS_PERIOD_LABELS[r.period]}`,
           window: `${sheetDate(r.window_start)} – ${sheetDate(r.window_end)}`,
           member: r.username,
@@ -2121,6 +2272,7 @@ export default function TransactionsPage() {
         id: t.transfer_id,
         tone: "default" as const,
         cells: toCells("leadertransfer", {
+          id: String(t.transfer_id),
           assign: assignCell(t.created_by_user_id),
           date: sheetDate(t.created_at),
           time: formatClock(t.created_at),
@@ -3370,6 +3522,7 @@ export default function TransactionsPage() {
   const committedEditable = useCallback(
     (rowIndex: number, colIndex: number): boolean => {
       if (isViewer) return false;
+      if (colIndex === COL[tab].id) return false;
 
       /**
        * Any manual row's cells edit in place, whoever holds it.
@@ -3963,6 +4116,23 @@ export default function TransactionsPage() {
         : [],
     [tab, selectedNumericIds, freeCreditById],
   );
+  // One deposit or free credit picked: it can be named as a staff mistake.
+  const staffErrorSource = useMemo<Omit<PenaltyPrefill, "nonce"> | null>(() => {
+    if (selectedDeposits.length === 1 && selectedIds.length === 1) {
+      return { source: "deposit", ref: selectedDeposits[0].deposit_id };
+    }
+    if (selectedFreeCredits.length === 1 && selectedIds.length === 1) {
+      return { source: "free_credit", ref: selectedFreeCredits[0].transaction_id };
+    }
+    return null;
+  }, [selectedDeposits, selectedFreeCredits, selectedIds.length]);
+  const handleStaffError = useCallback(() => {
+    if (!staffErrorSource) return;
+    setPenaltyPrefill({ ...staffErrorSource, nonce: Date.now() });
+    setStaffTab("penalty");
+    setSelectedIds([]);
+  }, [staffErrorSource]);
+
   const selectedClaims = useMemo(
     () =>
       tab === "claim"
@@ -5345,6 +5515,7 @@ export default function TransactionsPage() {
             type="button"
             onClick={() => {
               setStaffTab(key);
+              setPenaltyPrefill(null);
               setSelectedIds([]);
             }}
             className={cn(
@@ -5362,7 +5533,7 @@ export default function TransactionsPage() {
       {staffTab === "salary" ? (
         <SalarySheet />
       ) : staffTab === "penalty" ? (
-        <PenaltySheet />
+        <PenaltySheet prefill={penaltyPrefill} />
       ) : staffTab === "leave" ? (
         <LeaveSheet />
       ) : (
@@ -5422,7 +5593,19 @@ export default function TransactionsPage() {
         </div>
 
         <span className="text-xs text-muted-foreground">
-          {rows.length} row{rows.length === 1 ? "" : "s"}
+          {rowsLoading ? (
+            <span className="inline-flex items-center gap-1">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Loading…
+            </span>
+          ) : (
+            <>
+              {rows.length} row{rows.length === 1 ? "" : "s"}
+              {rowsLoadingMore && (
+                <Loader2 className="ml-1 inline h-3 w-3 animate-spin" aria-label="Loading more" />
+              )}
+            </>
+          )}
         </span>
 
         {/* How much free credit is still giveable this month. The cap has
@@ -5656,6 +5839,8 @@ export default function TransactionsPage() {
         // Re-fires after hydration so the initial jump lands on the entry
         // rows once the committed rows are actually there.
         focusKey={`${tab}:${hydrated}`}
+        loading={rowsLoading}
+        loadingMore={rowsLoadingMore}
       />
       </>
       )}
@@ -5687,6 +5872,18 @@ export default function TransactionsPage() {
                 <User className="h-3 w-3" />
                 Player
                 <ActionKbd action="viewPlayer" />
+              </Button>
+            )}
+            {staffErrorSource && (
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={handleStaffError}
+                title="Record a staff penalty for this row — the CS and credit fill in"
+                className="cursor-pointer gap-1"
+              >
+                <CircleAlert className="h-3 w-3" />
+                Staff error
               </Button>
             )}
             {can.assign && (

@@ -39,6 +39,13 @@ import { poolStock } from "@/lib/game-account-pool";
 import { casinosOfLeaders } from "@/lib/leader-casinos";
 import { expireStaleBotCommands } from "@/lib/bot-commands";
 
+/** Members per company, per scope, for MEMBER_COUNTS_TTL_MS — see the GET. */
+const MEMBER_COUNTS_TTL_MS = 60_000;
+const memberCounts = new Map<
+  string,
+  { at: number; rows: { company_entity_id: number | null; members: number }[] }
+>();
+
 /**
  * How often the lazy sweeps below actually run, regardless of poll rate.
  *
@@ -162,17 +169,25 @@ export async function GET() {
       user.companyIds === null ? undefined : inArray(column, scopedPlayerIds);
 
     // How many members each company holds — what the hierarchy pages were
-    // counting by walking the roster.
-    const playerCounts = canSeePlayers
-      ? await db
-          .select({
-            company_entity_id: players.company_entity_id,
-            members: sql<number>`count(*)::int`,
-          })
-          .from(players)
-          .where(playerScope)
-          .groupBy(players.company_entity_id)
-      : [];
+    // counting by walking the roster. Counting 288k players took 2.3s of every
+    // 10-second poll, for a figure nobody needs to the second: held a minute.
+    const countsKey = user.companyIds === null ? "all" : companyIds.join(",");
+    const cachedCounts = memberCounts.get(countsKey);
+    const playerCounts = !canSeePlayers
+      ? []
+      : cachedCounts && Date.now() - cachedCounts.at < MEMBER_COUNTS_TTL_MS
+        ? cachedCounts.rows
+        : await db
+            .select({
+              company_entity_id: players.company_entity_id,
+              members: sql<number>`count(*)::int`,
+            })
+            .from(players)
+            .where(playerScope)
+            .groupBy(players.company_entity_id);
+    if (canSeePlayers && playerCounts !== cachedCounts?.rows) {
+      memberCounts.set(countsKey, { at: Date.now(), rows: playerCounts });
+    }
 
     // CS agents' look-back window (see csCutoff). Leaders and admins see the
     // full window.

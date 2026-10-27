@@ -35,6 +35,18 @@ export const BUSINESS_TZ = "Asia/Kuala_Lumpur";
 export const businessDay = (column: SQL) =>
   sql`(${column} AT TIME ZONE ${BUSINESS_TZ})::date`;
 
+/**
+ * `column` falls on business days from..to (YYYY-MM-DD, inclusive), as bounds
+ * on the column itself. businessDay(column) >= from says the same thing, but
+ * wraps the column in an expression no index can serve, so every range read
+ * the whole table — 840k deposits for a month of 16k. Use this where the rows
+ * are many and the column is indexed.
+ */
+export const inBusinessDays = (column: SQL, from: string | null, to: string | null): SQL[] => [
+  ...(from ? [sql`${column} >= (${from}::date::timestamp AT TIME ZONE ${BUSINESS_TZ})`] : []),
+  ...(to ? [sql`${column} < ((${to}::date + 1)::timestamp AT TIME ZONE ${BUSINESS_TZ})`] : []),
+];
+
 /** AND a list of conditions; an empty list matches everything. */
 export const all = (parts: SQL[]) =>
   parts.length ? sql.join(parts, sql` AND `) : sql`true`;
@@ -267,3 +279,11 @@ export const RB_AT = sql`coalesce(rb.assigned_at, rb.created_at)`;
  */
 // A free credit the agent gave up on is not given (see releaseFailedCreditIn).
 export const IS_FREE_CREDIT = sql`t.type = 'game_topup' AND t.details->>'action' = 'free_credit' AND coalesce(t.details->>'failed', 'false') <> 'true'`;
+
+/**
+ * Credit a CS's mistake put in a player's game and nobody got back — the loss
+ * on a staff penalty, booked as a bonus the house gave away. A ledger line
+ * only: the credit is already in the player's account, so nothing moves.
+ * Written and voided with its penalty (details.penalty_id).
+ */
+export const IS_STAFF_ERROR = sql`t.type = 'game_topup' AND t.details->>'action' = 'staff_error'`;

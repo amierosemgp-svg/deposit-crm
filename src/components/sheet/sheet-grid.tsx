@@ -55,7 +55,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -916,6 +916,7 @@ export function SheetGrid({
   onLoadMore,
   hasMore = false,
   loadingMore = false,
+  loading = false,
 }: {
   columns: SheetColumn[];
   rows: SheetRow[];
@@ -1014,6 +1015,8 @@ export function SheetGrid({
   onLoadMore?: () => void;
   hasMore?: boolean;
   loadingMore?: boolean;
+  /** The rows for what the owner is showing haven't arrived yet. */
+  loading?: boolean;
   suggestionQuery?: (
     rowIndex: number,
     colIndex: number,
@@ -2580,6 +2583,19 @@ export function SheetGrid({
             />
           </thead>
           <tbody>
+            {loading && (
+              <tr className={rows.length ? "h-7" : "h-40"}>
+                <td
+                  colSpan={nCols + 2}
+                  className="select-none border-b border-border bg-muted/40 px-2 text-center text-[11px] text-muted-foreground"
+                >
+                  <span className="inline-flex items-center gap-1.5">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Loading rows…
+                  </span>
+                </td>
+              </tr>
+            )}
             {hiddenAbove > 0 && (
               <tr ref={topSentinelRef} className="h-7">
                 <td

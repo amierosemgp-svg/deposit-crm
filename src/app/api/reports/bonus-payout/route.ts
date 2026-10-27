@@ -4,6 +4,7 @@ import { authErrorResponse, requireUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import {
   IS_FREE_CREDIT,
+  IS_STAFF_ERROR,
   all,
   businessDay,
   parseReportParams,
@@ -30,7 +31,7 @@ import {
  * set as the rows, so a card can never disagree with the table beneath it.
  *
  * Query: from, to (YYYY-MM-DD, inclusive, Malaysian calendar days), company
- * (id or "all"), type (all|Deposit|Recommend), status (deposit status or
+ * (id or "all"), type (all|Deposit|Recommend|Free Credit|Staff Error), status (deposit status or
  * "all"), q (free text), game, limit, offset.
  */
 
@@ -56,6 +57,8 @@ export async function GET(request: Request) {
       (type === "all" && status === "all") || type === "Recommend";
     const wantFreeCredit =
       (type === "all" && status === "all") || type === "Free Credit";
+    const wantStaffError =
+      (type === "all" && status === "all") || type === "Staff Error";
 
     const branches: SQL[] = [];
 
@@ -198,6 +201,56 @@ export async function GET(request: Request) {
          WHERE ${all(w)}`);
     }
 
+    if (wantStaffError) {
+      /**
+       * Credit a CS's mistake left in a player's game — the loss on a staff
+       * penalty. The CS repays a share through their salary, but the whole
+       * loss left the house as credit the player kept, so all of it is here.
+       */
+      const w: SQL[] = [
+        IS_STAFF_ERROR,
+        ...(user.ownedEntityIds === null
+          ? []
+          : [
+              sql`t.entity_id IN (${sql.join(
+                user.ownedEntityIds.map((id) => sql`${id}`),
+                sql`, `,
+              )})`,
+            ]),
+      ];
+      if (from) w.push(sql`${businessDay(sql`t.created_at`)} >= ${from}::date`);
+      if (to) w.push(sql`${businessDay(sql`t.created_at`)} <= ${to}::date`);
+      if (companyId !== null) w.push(sql`t.entity_id = ${companyId}`);
+      if (q) {
+        w.push(
+          searchAcross(
+            sql`concat_ws(' ', 'pen-' || (t.details->>'penalty_id'), sp.full_name, sp.username,
+                t.game_name, t.details->>'reason')`,
+            q,
+          ),
+        );
+      }
+      if (game !== null) {
+        w.push(sql`coalesce(nullif(t.game_name, ''), ${NO_GAME}) = ${game}`);
+      }
+      branches.push(sql`
+        SELECT 'Staff Error'::text                                 AS kind,
+               'se-' || t.transaction_id                           AS key,
+               t.created_at                                        AS at,
+               'PEN-' || (t.details->>'penalty_id')                AS ref,
+               t.player_id                                         AS player_id,
+               coalesce(sp.full_name, sp.username, '—')            AS player,
+               t.entity_id                                         AS company_id,
+               coalesce(nullif(t.game_name, ''), ${NO_GAME})       AS game,
+               'completed'::text                                   AS status,
+               0::numeric                                          AS pct,
+               0::numeric                                          AS basis,
+               t.amount                                            AS bonus
+          FROM transactions t
+          LEFT JOIN players sp ON sp.player_id = t.player_id
+         WHERE ${all(w)}`);
+    }
+
     // Nothing wanted is a legitimate, empty answer — not an error.
     if (!branches.length) {
       return Response.json({
@@ -218,10 +271,12 @@ export async function GET(request: Request) {
         coalesce(sum(bonus) FILTER (WHERE kind = 'Deposit'), 0)::float8   AS deposit_bonus,
         coalesce(sum(bonus) FILTER (WHERE kind = 'Recommend'), 0)::float8 AS recommend_bonus,
         coalesce(sum(bonus) FILTER (WHERE kind = 'Free Credit'), 0)::float8 AS free_credit,
+        coalesce(sum(bonus) FILTER (WHERE kind = 'Staff Error'), 0)::float8 AS staff_error,
         coalesce(sum(basis), 0)::float8                                   AS basis,
         count(*) FILTER (WHERE kind = 'Deposit')::int                     AS deposit_count,
         count(*) FILTER (WHERE kind = 'Recommend')::int                   AS recommend_count,
         count(*) FILTER (WHERE kind = 'Free Credit')::int                  AS free_credit_count,
+        count(*) FILTER (WHERE kind = 'Staff Error')::int                  AS staff_error_count,
         count(DISTINCT player_id)::int                                    AS unique_players
       FROM payout`);
 
@@ -235,6 +290,7 @@ export async function GET(request: Request) {
                  count(*) FILTER (WHERE kind = 'Deposit')::int         AS deposit_count,
                  count(*) FILTER (WHERE kind = 'Recommend')::int       AS recommend_count,
                  count(*) FILTER (WHERE kind = 'Free Credit')::int     AS free_credit_count,
+                 count(*) FILTER (WHERE kind = 'Staff Error')::int     AS staff_error_count,
                  coalesce(sum(basis), 0)::float8                       AS basis,
                  coalesce(sum(bonus), 0)::float8                       AS bonus
             FROM payout
@@ -266,6 +322,8 @@ export async function GET(request: Request) {
       recommend_bonus: s.recommend_bonus ?? 0,
       free_credit: s.free_credit ?? 0,
       free_credit_count: s.free_credit_count ?? 0,
+      staff_error: s.staff_error ?? 0,
+      staff_error_count: s.staff_error_count ?? 0,
       basis: s.basis ?? 0,
       deposit_count: s.deposit_count ?? 0,
       recommend_count: s.recommend_count ?? 0,
@@ -280,7 +338,8 @@ export async function GET(request: Request) {
       total:
         summary.deposit_count +
         summary.recommend_count +
-        summary.free_credit_count,
+        summary.free_credit_count +
+        summary.staff_error_count,
       limit,
       offset,
     });
@@ -297,6 +356,8 @@ const EMPTY_SUMMARY = {
   recommend_bonus: 0,
   free_credit: 0,
   free_credit_count: 0,
+  staff_error: 0,
+  staff_error_count: 0,
   basis: 0,
   deposit_count: 0,
   recommend_count: 0,

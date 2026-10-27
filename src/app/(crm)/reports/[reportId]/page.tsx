@@ -94,6 +94,7 @@ type ReportApi = {
     deposit_count: number;
     recommend_count: number;
     free_credit_count: number;
+    staff_error_count: number;
     basis: number;
     bonus: number;
   }[];
@@ -213,7 +214,7 @@ type ReconRow = {
 
 type PayoutRow = {
   key: string;
-  kind: "Deposit" | "Recommend" | "Free Credit";
+  kind: "Deposit" | "Recommend" | "Free Credit" | "Staff Error";
   at: string;
   ref: string;
   player_id: number | null;
@@ -376,7 +377,7 @@ export default function ReportDetailPage() {
   }, []);
   /** Bonus Payout only: deposit bonuses, recommend bonuses, or both. */
   const [payoutKind, setPayoutKind] = useState<
-    "all" | "Deposit" | "Recommend" | "Free Credit"
+    "all" | "Deposit" | "Recommend" | "Free Credit" | "Staff Error"
   >(
     "all",
   );
@@ -888,6 +889,7 @@ export default function ReportDetailPage() {
               { label: "Deposit bonuses", align: "right" },
               { label: "Recommend bonuses", align: "right" },
               { label: "Free credits", align: "right" },
+              { label: "Staff errors", align: "right" },
               { label: "Deposit Volume", align: "right" },
               { label: "Bonus Paid", align: "right" },
             ],
@@ -908,6 +910,7 @@ export default function ReportDetailPage() {
                 { node: g.deposit_count, csv: g.deposit_count },
                 { node: g.recommend_count, csv: g.recommend_count },
                 { node: g.free_credit_count, csv: g.free_credit_count },
+                { node: g.staff_error_count, csv: g.staff_error_count },
                 { node: formatRM(g.basis), csv: g.basis },
                 { node: formatRM(g.bonus), csv: g.bonus },
               ],
@@ -916,19 +919,22 @@ export default function ReportDetailPage() {
               "Totals",
               report.summary.deposit_count +
                 report.summary.recommend_count +
-                report.summary.free_credit_count,
+                report.summary.free_credit_count +
+                report.summary.staff_error_count,
               report.summary.deposit_count,
               report.summary.recommend_count,
               report.summary.free_credit_count,
+              report.summary.staff_error_count,
               formatRM(report.summary.basis),
               formatRM(
                 report.summary.deposit_bonus +
                   report.summary.recommend_bonus +
-                  report.summary.free_credit,
+                  report.summary.free_credit +
+                  report.summary.staff_error,
               ),
             ],
             summary:
-              "Everything the house gave away: bonus on a deposit, recommend bonus paid to an upline, and free credit issued with no deposit behind it. " +
+              "Everything the house gave away: bonus on a deposit, recommend bonus paid to an upline, free credit issued with no deposit behind it, and credit a CS's mistake left with a player (staff error). " +
               "Click a game to see its payouts. Deposits with no bonus are excluded; cancelled recommend bonuses are written off and excluded.",
           };
         }
@@ -961,7 +967,9 @@ export default function ReportDetailPage() {
                         ? "bg-purple-500/10 text-purple-700 dark:text-purple-300"
                         : p.kind === "Free Credit"
                           ? "bg-sky-500/10 text-sky-700 dark:text-sky-300"
-                          : "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+                          : p.kind === "Staff Error"
+                            ? "bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                            : "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
                     )}
                   >
                     {p.kind}
@@ -992,7 +1000,8 @@ export default function ReportDetailPage() {
             formatRM(
               report.summary.deposit_bonus +
                 report.summary.recommend_bonus +
-                report.summary.free_credit,
+                report.summary.free_credit +
+                report.summary.staff_error,
             ),
           ],
           summary:
@@ -1201,17 +1210,21 @@ export default function ReportDetailPage() {
         if (!report) return [];
         const { summary } = report;
         const total =
-          summary.deposit_bonus + summary.recommend_bonus + summary.free_credit;
+          summary.deposit_bonus +
+          summary.recommend_bonus +
+          summary.free_credit +
+          summary.staff_error;
         const count =
           summary.deposit_count +
           summary.recommend_count +
-          summary.free_credit_count;
+          summary.free_credit_count +
+          summary.staff_error_count;
         const scope = drillLabel ? ` · ${drillLabel}` : "";
         return [
           {
             title: "Total Bonus Amount",
             value: formatRM(total),
-            sub: `${formatRM(summary.deposit_bonus)} deposit · ${formatRM(summary.recommend_bonus)} recommend · ${formatRM(summary.free_credit)} free credit${scope}`,
+            sub: `${formatRM(summary.deposit_bonus)} deposit · ${formatRM(summary.recommend_bonus)} recommend · ${formatRM(summary.free_credit)} free credit · ${formatRM(summary.staff_error)} staff error${scope}`,
             icon: Gift,
           },
           {
@@ -1223,7 +1236,7 @@ export default function ReportDetailPage() {
           {
             title: drill ? "Payouts" : "Bonus Transactions",
             value: count.toLocaleString(),
-            sub: `${summary.deposit_count.toLocaleString()} deposit · ${summary.recommend_count.toLocaleString()} recommend · ${summary.free_credit_count.toLocaleString()} free credit`,
+            sub: `${summary.deposit_count.toLocaleString()} deposit · ${summary.recommend_count.toLocaleString()} recommend · ${summary.free_credit_count.toLocaleString()} free credit · ${summary.staff_error_count.toLocaleString()} staff error`,
             icon: Hash,
           },
         ];
@@ -1470,6 +1483,7 @@ export default function ReportDetailPage() {
                   { value: "Deposit", label: "Deposit bonus" },
                   { value: "Recommend", label: "Recommend bonus" },
                   { value: "Free Credit", label: "Free credit" },
+                  { value: "Staff Error", label: "Staff error" },
                 ]}
               >
                 <SelectTrigger className="h-8 w-[170px] cursor-pointer">
@@ -1488,6 +1502,9 @@ export default function ReportDetailPage() {
                   <SelectItem value="Recommend" className="cursor-pointer">
                     Recommend bonus
                   </SelectItem>
+                  <SelectItem value="Staff Error" className="cursor-pointer">
+                    Staff error
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -1497,7 +1514,8 @@ export default function ReportDetailPage() {
               recommend bonus has its own (pending/assigned/cancelled). */}
           {statusOptions &&
             payoutKind !== "Recommend" &&
-            payoutKind !== "Free Credit" && (
+            payoutKind !== "Free Credit" &&
+            payoutKind !== "Staff Error" && (
             <div className="space-y-1">
               <span className="block text-[11px] font-medium text-muted-foreground">
                 Status

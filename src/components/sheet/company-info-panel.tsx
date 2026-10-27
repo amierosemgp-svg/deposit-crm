@@ -28,7 +28,7 @@ import { formatRM, isBotOnline } from "@/lib/format";
 import { botForName } from "@/lib/bot-category";
 import { byBankOrder } from "@/lib/bank-order";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Banknote, Coins, Landmark, Wallet } from "lucide-react";
+import { Banknote, Coins, Landmark, Loader2, Wallet } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   BANK_MOVEMENT_LABEL,
@@ -89,6 +89,7 @@ function InfoCard({
   total,
   rows,
   totalClassName,
+  loading = false,
 }: {
   title: string;
   /** Small note beside the title — what period the row counts cover. */
@@ -112,6 +113,8 @@ function InfoCard({
     note?: string;
   }[];
   totalClassName?: string;
+  /** Figures for a new casino or period are on their way. */
+  loading?: boolean;
 }) {
   return (
     <Card size="sm" className="gap-1.5">
@@ -124,15 +127,19 @@ function InfoCard({
             </span>
           )}
         </CardTitle>
-        <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        {loading ? (
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+        ) : (
+          <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        )}
       </CardHeader>
-      <CardContent className="px-3">
+      <CardContent className={cn("px-3 transition-opacity", loading && "opacity-50")}>
         <div className={cn("text-sm font-semibold tabular-nums", totalClassName)}>
           {formatRM(total)}
         </div>
         <div className="mt-1.5 max-h-20 space-y-0.5 overflow-y-auto border-t pt-1.5">
           {rows.length === 0 && (
-            <p className="text-[11px] text-muted-foreground">Nothing yet.</p>
+            <p className="text-[11px] text-muted-foreground">{loading ? "Loading…" : "Nothing yet."}</p>
           )}
           {rows.map((r, i) => (
             <div
@@ -201,10 +208,15 @@ export function CompanyInfoPanel({ range }: { range: DateRange }) {
    * figure was 1,393. Anything totalled across a period has to be totalled
    * where every row is.
    */
-  const [movements, setMovements] = useState<BankMovements>({
-    accounts: [],
-    totals: [],
+  // Which casino and period the figures on screen are for: anything else
+  // and the cards say they are loading rather than showing the last ones.
+  const movementsKey = `${range.from}|${range.to}|${selectedCompanyId}`;
+  const [loaded, setLoaded] = useState<{ key: string | null; data: BankMovements }>({
+    key: null,
+    data: { accounts: [], totals: [] },
   });
+  const movements = loaded.data;
+  const movementsLoading = loaded.key !== movementsKey;
   useEffect(() => {
     let live = true;
     void loadBankMovements({
@@ -212,7 +224,7 @@ export function CompanyInfoPanel({ range }: { range: DateRange }) {
       to: range.to,
       companyId: selectedCompanyId,
     }).then((m) => {
-      if (live) setMovements(m);
+      if (live) setLoaded({ key: `${range.from}|${range.to}|${selectedCompanyId}`, data: m });
     });
     return () => {
       live = false;
@@ -375,6 +387,7 @@ export function CompanyInfoPanel({ range }: { range: DateRange }) {
         icon={Landmark}
         total={scope.totalIn}
         rows={scope.banksIn}
+        loading={movementsLoading}
       />
       <InfoCard
         title="Bank · Money Out"
@@ -382,6 +395,7 @@ export function CompanyInfoPanel({ range }: { range: DateRange }) {
         icon={Banknote}
         total={scope.totalOut}
         rows={scope.banksOut}
+        loading={movementsLoading}
       />
       <InfoCard
         title="Game · Kiosk Credit"
@@ -395,6 +409,7 @@ export function CompanyInfoPanel({ range }: { range: DateRange }) {
         total={net}
         totalClassName={net < 0 ? "text-red-600 dark:text-red-400" : undefined}
         rows={scope.netRows}
+        loading={movementsLoading}
       />
     </div>
   );

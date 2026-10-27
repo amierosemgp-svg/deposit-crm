@@ -8,7 +8,7 @@
  * without anyone ticking it — the Status column says which salary took it.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Ban, Loader2, RefreshCw, Save, X } from "lucide-react";
 import { SheetGrid, type SheetColumn, type SheetRow } from "@/components/sheet/sheet-grid";
@@ -62,6 +62,8 @@ type SourceLookup = {
   player_id: number | null;
   player_label: string | null;
   occurred_at: string;
+  /** The deposit's status; null for a free credit. */
+  status: string | null;
 };
 type LookupEntry = { source: SourceLookup } | { error: string };
 
@@ -93,7 +95,10 @@ function sheetDateOf(iso: string): string {
   return `${d.getUTCDate()}/${d.getUTCMonth() + 1}/${d.getUTCFullYear()}`;
 }
 
-export function PenaltySheet() {
+/** A row on another sheet to record a penalty against — pre-fills the dock. */
+export type PenaltyPrefill = { source: "deposit" | "free_credit"; ref: number; nonce: number };
+
+export function PenaltySheet({ prefill = null }: { prefill?: PenaltyPrefill | null } = {}) {
   const me = useStore((s) => s.me);
   const users = useStore((s) => s.users);
   const entityName = useStore((s) => s.entityName);
@@ -211,7 +216,9 @@ export function PenaltySheet() {
         const l = lookupOf(row);
         if (l.wanted && !l.entry) next[C.status] = "Looking it up…";
         else if (l.wanted && l.entry && "source" in l.entry && l.entry.source.player_label) {
-          next[C.status] = `Player ${l.entry.source.player_label}`;
+          // Saving fails a completed deposit (the money never came) — say so first.
+          const fails = l.source === "deposit" && l.entry.source.status === "completed";
+          next[C.status] = `Player ${l.entry.source.player_label}${fails ? " · deposit will be failed" : ""}`;
         } else if (cs) next[C.status] = "Pending — next salary";
         return next;
       }),
@@ -294,8 +301,25 @@ export function PenaltySheet() {
     enabled: !isViewer,
   });
 
+  // Sent here by "Staff error" on a Deposit / Free Credit row: start a row
+  // naming it, and the lookup below fills in the CS, the credit and the date.
+  const { drafts, patchRow, addRow } = dock;
+  const prefilled = useRef<number | null>(null);
+  useEffect(() => {
+    if (!prefill || isViewer || prefilled.current === prefill.nonce) return;
+    prefilled.current = prefill.nonce;
+    const named = drafts.some(
+      (row) => parseSource(row[C.source] ?? "") === prefill.source && parseRef(row[C.ref] ?? "") === prefill.ref,
+    );
+    if (!named) {
+      addRow([
+        [C.source, PENALTY_SOURCE_LABEL[prefill.source]],
+        [C.ref, String(prefill.ref)],
+      ]);
+    }
+  }, [prefill, isViewer, drafts, addRow]);
+
   // Look up every ref the dock names that we haven't; fill the blanks it can.
-  const { drafts, patchRow } = dock;
   useEffect(() => {
     const wanted = new Map<string, { source: PenaltySource; ref: number }>();
     for (const row of drafts) {
@@ -324,7 +348,6 @@ export function PenaltySheet() {
       for (const [key, entry] of entries) {
         if (!("source" in entry)) continue;
         const src = entry.source;
-        const handler = src.user_id != null ? pickable.find((s) => s.user_id === src.user_id) : undefined;
         patchRow(
           (row) => {
             const source = parseSource(row[C.source] ?? "");
@@ -333,7 +356,6 @@ export function PenaltySheet() {
           },
           (row) => {
             const next = [...row];
-            if (!next[C.cs].trim() && handler) next[C.cs] = handler.full_name;
             if (!next[C.injected].trim()) next[C.injected] = String(src.credit_injected);
             if (next[C.date] === todaySheetDate()) next[C.date] = sheetDateOf(src.occurred_at);
             return next;
@@ -344,6 +366,32 @@ export function PenaltySheet() {
     return () => {
       live = false;
     };
+  }, [drafts, lookupOf, patchRow]);
+
+  /**
+   * The CS who keyed the row, once both the lookup and the staff list are in.
+   * Apart from the lookup above because they race: opened from "Staff error",
+   * the lookup usually lands before the staff list does. Once per row, so a
+   * CS cleared on purpose stays cleared.
+   */
+  const csFilled = useRef(new Set<string>());
+  useEffect(() => {
+    for (const row of drafts) {
+      const l = lookupOf(row);
+      if (!l.wanted || !l.entry || !("source" in l.entry) || csFilled.current.has(l.key)) continue;
+      const userId = l.entry.source.user_id;
+      const handler = userId != null ? pickable.find((s) => s.user_id === userId) : undefined;
+      if (!handler) continue;
+      csFilled.current.add(l.key);
+      const key = l.key;
+      patchRow(
+        (r) => {
+          const lr = lookupOf(r);
+          return lr.wanted && lr.key === key;
+        },
+        (r) => (r[C.cs].trim() ? r : r.map((v, c) => (c === C.cs ? handler.full_name : v))),
+      );
+    }
   }, [drafts, lookupOf, patchRow, pickable]);
 
   // ---- the sheet ----

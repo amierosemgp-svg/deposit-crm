@@ -131,7 +131,7 @@ export type FreeCreditAllowance = {
   month: string;
   /** Deposits taken this month — the base the cap is a share of. */
   deposits: number;
-  /** Free credit already issued this month, rebates and promos included. */
+  /** Free credit already issued this month, rebates, promos and staff-error losses included. */
   issued: number;
   /** deposits × pct. */
   allowance: number;
@@ -184,7 +184,9 @@ export async function freeCreditAllowance(
            coalesce((SELECT sum(t.amount) FROM transactions t
                       WHERE t.entity_id = c.id
                         AND t.type = 'game_topup'
-                        AND t.details->>'action' = 'free_credit'
+                        -- A staff mistake's lost credit spends the same
+                        -- allowance; it is never refused for it.
+                        AND t.details->>'action' IN ('free_credit', 'staff_error')
                         AND coalesce(t.details->>'failed', 'false') <> 'true'
                         AND (t.created_at AT TIME ZONE 'Asia/Kuala_Lumpur')::date >= m.d), 0)::float8
              AS issued
