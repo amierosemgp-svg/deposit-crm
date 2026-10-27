@@ -348,7 +348,6 @@ export function PenaltySheet({ prefill = null }: { prefill?: PenaltyPrefill | nu
       for (const [key, entry] of entries) {
         if (!("source" in entry)) continue;
         const src = entry.source;
-        const handler = src.user_id != null ? pickable.find((s) => s.user_id === src.user_id) : undefined;
         patchRow(
           (row) => {
             const source = parseSource(row[C.source] ?? "");
@@ -357,7 +356,6 @@ export function PenaltySheet({ prefill = null }: { prefill?: PenaltyPrefill | nu
           },
           (row) => {
             const next = [...row];
-            if (!next[C.cs].trim() && handler) next[C.cs] = handler.full_name;
             if (!next[C.injected].trim()) next[C.injected] = String(src.credit_injected);
             if (next[C.date] === todaySheetDate()) next[C.date] = sheetDateOf(src.occurred_at);
             return next;
@@ -368,6 +366,32 @@ export function PenaltySheet({ prefill = null }: { prefill?: PenaltyPrefill | nu
     return () => {
       live = false;
     };
+  }, [drafts, lookupOf, patchRow]);
+
+  /**
+   * The CS who keyed the row, once both the lookup and the staff list are in.
+   * Apart from the lookup above because they race: opened from "Staff error",
+   * the lookup usually lands before the staff list does. Once per row, so a
+   * CS cleared on purpose stays cleared.
+   */
+  const csFilled = useRef(new Set<string>());
+  useEffect(() => {
+    for (const row of drafts) {
+      const l = lookupOf(row);
+      if (!l.wanted || !l.entry || !("source" in l.entry) || csFilled.current.has(l.key)) continue;
+      const userId = l.entry.source.user_id;
+      const handler = userId != null ? pickable.find((s) => s.user_id === userId) : undefined;
+      if (!handler) continue;
+      csFilled.current.add(l.key);
+      const key = l.key;
+      patchRow(
+        (r) => {
+          const lr = lookupOf(r);
+          return lr.wanted && lr.key === key;
+        },
+        (r) => (r[C.cs].trim() ? r : r.map((v, c) => (c === C.cs ? handler.full_name : v))),
+      );
+    }
   }, [drafts, lookupOf, patchRow, pickable]);
 
   // ---- the sheet ----
