@@ -62,6 +62,8 @@ type SourceLookup = {
   player_id: number | null;
   player_label: string | null;
   occurred_at: string;
+  /** The deposit's status; null for a free credit. */
+  status: string | null;
 };
 type LookupEntry = { source: SourceLookup } | { error: string };
 
@@ -214,7 +216,9 @@ export function PenaltySheet({ prefill = null }: { prefill?: PenaltyPrefill | nu
         const l = lookupOf(row);
         if (l.wanted && !l.entry) next[C.status] = "Looking it up…";
         else if (l.wanted && l.entry && "source" in l.entry && l.entry.source.player_label) {
-          next[C.status] = `Player ${l.entry.source.player_label}`;
+          // Saving fails a completed deposit (the money never came) — say so first.
+          const fails = l.source === "deposit" && l.entry.source.status === "completed";
+          next[C.status] = `Player ${l.entry.source.player_label}${fails ? " · deposit will be failed" : ""}`;
         } else if (cs) next[C.status] = "Pending — next salary";
         return next;
       }),

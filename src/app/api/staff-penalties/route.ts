@@ -6,6 +6,9 @@ import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { getSettingNumber, jsonError } from "@/lib/api-helpers";
 import { logActivity } from "@/lib/activity-log";
 import { csCasino, inCasinoScope, penaltyFigures, STAFF_PENALTY_SHARE_KEY } from "@/lib/salary";
+import { failDepositForStaffError, type StaffErrorDepositEffect } from "@/lib/staff-error";
+import { InsufficientBankBalanceError } from "@/lib/bank-balance";
+import { InsufficientKioskCreditError } from "@/lib/kiosk-credit";
 
 const createSchema = z
   .object({
@@ -31,6 +34,8 @@ const createSchema = z
  * their mistake. Writes the pending deduction their next salary will take,
  * and books the whole loss (credited − retrieved, not just the CS's share) as
  * a Staff Error bonus: the player kept that credit, so the house gave it away.
+ * On a deposit it also fails the deposit — the money never came — handing
+ * the kiosk back only what was retrieved (see failDepositForStaffError).
  *
  * Any desk user can record one; voiding is a leader's or the admin's call.
  */
@@ -54,6 +59,17 @@ export async function POST(request: Request) {
       const [player] = await db.select().from(players).where(eq(players.player_id, body.player_id));
       if (!player) return jsonError("Player not found", 404);
       if (!inCasinoScope(user, player.company_entity_id)) throw new AuthError(403, "That player is outside your organisation");
+    }
+
+    if (body.source_type === "deposit" && body.source_id != null) {
+      const [dep] = await db
+        .select({ company_entity_id: deposits.company_entity_id })
+        .from(deposits)
+        .where(eq(deposits.deposit_id, body.source_id));
+      if (!dep) return jsonError(`No deposit #${body.source_id}`, 404);
+      if (dep.company_entity_id !== null && !inCasinoScope(user, dep.company_entity_id)) {
+        throw new AuthError(403, "That deposit is outside your organisation");
+      }
     }
 
     const share = body.share_pct ?? (await getSettingNumber(STAFF_PENALTY_SHARE_KEY, 50));
@@ -90,9 +106,21 @@ export async function POST(request: Request) {
         penalty_id: row.penalty_id,
         created_by_user_id: user.user_id,
       });
-      // Ledger only — the credit is already in the player's game, so no
-      // balance or BO pool moves. Dated when the mistake happened, so it lands
-      // in that month's bonus figures and that month's free-credit allowance.
+      // The deposit it was made on fails; what that moved rides on the ledger
+      // row below so a void can put it back.
+      let effect: StaffErrorDepositEffect | null = null;
+      if (row.source_type === "deposit" && row.source_id != null) {
+        effect = await failDepositForStaffError(txn, {
+          depositId: row.source_id,
+          loss: row.loss_amount,
+          penaltyId: row.penalty_id,
+          userId: user.user_id,
+          nowIso: new Date().toISOString(),
+        });
+      }
+      // This row itself moves no balance — the credit is already in the
+      // player's game. Dated when the mistake happened, so it lands in that
+      // month's bonus figures and that month's free-credit allowance.
       await txn.insert(transactions).values({
         player_id: row.player_id,
         entity_id: row.company_entity_id,
@@ -110,6 +138,7 @@ export async function POST(request: Request) {
           credit_injected: row.credit_injected,
           credit_retrieved: row.credit_retrieved,
           reason: row.reason,
+          ...(effect ?? {}),
         },
         created_at: row.occurred_at,
       });
@@ -132,6 +161,8 @@ export async function POST(request: Request) {
     });
     return Response.json({ penalty }, { status: 201 });
   } catch (e) {
+    if (e instanceof InsufficientKioskCreditError) return jsonError(e.message, 422);
+    if (e instanceof InsufficientBankBalanceError) return jsonError(e.message, 422);
     return authErrorResponse(e) ?? (console.error(e), jsonError("Server error", 500));
   }
 }
