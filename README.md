@@ -103,7 +103,20 @@ salary takes automatically. Look up a deposit or free credit by ID to fill in
 the CS, the amount credited and the player. Voiding (leaders and the admin)
 only works while it is still pending.
 
+The whole loss (credited − retrieved, not just the CS's share) is also booked
+as a **Staff Error** bonus: a `game_topup` ledger row with `action =
+staff_error`, dated when the mistake happened. Ledger only — the credit is
+already in the player's game. It shows in Bonus Payout as its own type and
+counts toward the month's free-credit allowance (never refused for it). It
+stays out of the Daily Report's sales: the deposit the mistake was made on is
+failed, which already took it off. Voiding the penalty removes it.
+
 An existing database needs `migrations/2026-10-19-salary-staff-penalty.sql`.
+
+**Sheet indexes (27 Oct).** Every database needs
+`migrations/2026-10-27-sheet-indexes.sql` — run it with `psql -f` (it builds
+`CONCURRENTLY`, outside a transaction). Without it each Transactions sheet
+load read the whole deposits table.
 
 ## Crawl banks (on-demand agent commands)
 

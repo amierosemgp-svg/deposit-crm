@@ -35,6 +35,18 @@ export const BUSINESS_TZ = "Asia/Kuala_Lumpur";
 export const businessDay = (column: SQL) =>
   sql`(${column} AT TIME ZONE ${BUSINESS_TZ})::date`;
 
+/**
+ * `column` falls on business days from..to (YYYY-MM-DD, inclusive), as bounds
+ * on the column itself. businessDay(column) >= from says the same thing, but
+ * wraps the column in an expression no index can serve, so every range read
+ * the whole table — 840k deposits for a month of 16k. Use this where the rows
+ * are many and the column is indexed.
+ */
+export const inBusinessDays = (column: SQL, from: string | null, to: string | null): SQL[] => [
+  ...(from ? [sql`${column} >= (${from}::date::timestamp AT TIME ZONE ${BUSINESS_TZ})`] : []),
+  ...(to ? [sql`${column} < ((${to}::date + 1)::timestamp AT TIME ZONE ${BUSINESS_TZ})`] : []),
+];
+
 /** AND a list of conditions; an empty list matches everything. */
 export const all = (parts: SQL[]) =>
   parts.length ? sql.join(parts, sql` AND `) : sql`true`;

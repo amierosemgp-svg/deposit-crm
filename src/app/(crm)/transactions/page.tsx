@@ -395,6 +395,33 @@ function rowKey(r: unknown): unknown {
   return o.deposit_id ?? o.withdrawal_id ?? r;
 }
 
+/** Range rows per request, and the most one range will hold. */
+const PAGE_ROWS = 2000;
+const MAX_RANGE_ROWS = 20_000;
+/** The newest rows the 10s heartbeat re-reads. */
+const HEAD_ROWS = 300;
+/** Every 30th beat (5 minutes) re-reads the whole range instead. */
+const FULL_EVERY_BEATS = 30;
+
+/** A range row's id, whichever sheet it is from. */
+function sheetRowKey(r: unknown): unknown {
+  const o = r as Record<string, unknown>;
+  return (
+    o.deposit_id ?? o.withdrawal_id ?? o.transfer_id ?? o.transaction_id ?? o.cash_out_id ?? o.expense_id ?? r
+  );
+}
+
+/** The column each sheet is ordered by, newest first (see /api/worksheet/rows). */
+const SHEET_ORDER_COLUMN: Partial<Record<TabKey, string>> = {
+  deposit: "deposit_date",
+  leaderwithdrawal: "occurred_at",
+  expense: "expense_date",
+};
+function sheetRowAt(which: TabKey, r: unknown): number {
+  const v = (r as Record<string, unknown>)[SHEET_ORDER_COLUMN[which] ?? "created_at"];
+  return typeof v === "string" ? Date.parse(v) : 0;
+}
+
 function gameUsername(p: Player | undefined, game: string | null | undefined): string {
   if (!p?.game_accounts?.length) return "";
   if (game) {
@@ -767,7 +794,9 @@ export default function TransactionsPage() {
    * sheet is never empty while it loads.
    */
   const [rangeRows, setRangeRows] = useState<
-    Partial<Record<TabKey, { rows: unknown[]; totals: { rows: number; amount: number } }>>
+    Partial<
+      Record<TabKey, { rows: unknown[]; totals: { rows: number; amount: number }; range?: string }>
+    >
   >({});
   /**
    * An in-place edit on a range row. The row is stamped with when, so a range
@@ -792,51 +821,104 @@ export default function TransactionsPage() {
     [],
   );
   const loadRangeRows = useCallback(
-    async (which: TabKey) => {
+    async (which: TabKey, mode: "full" | "head" = "full", signal?: AbortSignal) => {
       const startedAt = Date.now();
-      /**
-       * Pages until the range is complete, not just the first page of it.
-       *
-       * One request returns at most 2,000 rows. A month here is ~2,600
-       * deposits, so a single page stopped three days into September and the
-       * sheet looked like the month began on the 4th — the same blind spot as
-       * the old 500-row cap, moved further back. The ceiling stops a year-wide
-       * filter from pulling everything ever recorded in one go.
-       */
-      const PAGE = 2000;
-      const MAX_PAGES = 10;
-      try {
-        let rows: unknown[] = [];
-        let totals: { rows: number; amount: number } | undefined;
-        for (let page = 0; page < MAX_PAGES; page++) {
-          const qs = new URLSearchParams({
-            sheet: which,
-            limit: String(PAGE),
-            offset: String(page * PAGE),
-          });
-          if (range.from) qs.set("from", range.from);
-          if (range.to) qs.set("to", range.to);
-          if (selectedCompanyId != null) qs.set("company", String(selectedCompanyId));
-          const res = await fetch(`/api/worksheet/rows?${qs}`);
-          if (!res.ok) return;
-          const data = await res.json();
-          rows = rows.concat(data.rows ?? []);
-          totals ??= data.totals;
-          if ((data.rows?.length ?? 0) < PAGE) break;
+      // Which range these rows are for. A load for a range no longer on
+      // screen is aborted by the effect that started it.
+      const rangeKey = `${range.from}|${range.to}|${selectedCompanyId}`;
+      const query = (limit: number, offset: number, totals: boolean) => {
+        const qs = new URLSearchParams({ sheet: which, limit: String(limit), offset: String(offset) });
+        if (!totals) qs.set("totals", "0");
+        if (range.from) qs.set("from", range.from);
+        if (range.to) qs.set("to", range.to);
+        if (selectedCompanyId != null) qs.set("company", String(selectedCompanyId));
+        return `/api/worksheet/rows?${qs}`;
+      };
+      type Page = { rows?: unknown[]; totals?: { rows: number; amount: number } };
+      const get = async (url: string): Promise<Page | null> => {
+        const res = await fetch(url, { signal });
+        return res.ok ? ((await res.json()) as Page) : null;
+      };
+      // Keep any row edited here while this fetch was in flight.
+      const keepEdits = (prevRows: unknown[], rows: unknown[]) => {
+        const edited = new Map<unknown, unknown>();
+        for (const r of prevRows) {
+          const at = (r as Record<string, unknown>)[EDITED_AT];
+          if (typeof at === "number" && at >= startedAt) edited.set(sheetRowKey(r), r);
         }
-        setRangeRows((prev) => {
-          // Keep any row edited here while this fetch was in flight.
-          const edited = new Map<unknown, unknown>();
-          for (const r of prev[which]?.rows ?? []) {
-            const at = (r as Record<string, unknown>)[EDITED_AT];
-            if (typeof at === "number" && at >= startedAt) edited.set(rowKey(r), r);
+        return edited.size ? rows.map((r) => edited.get(sheetRowKey(r)) ?? r) : rows;
+      };
+
+      try {
+        /**
+         * The heartbeat: only the newest rows, laid over what is on screen.
+         *
+         * It used to re-read the whole range every ten seconds — a month here
+         * is 16,000 deposits, 16 MB, eight requests one after another. What a
+         * colleague just keyed or touched is at the top; anything older is
+         * picked up by the next full load (a save, a delete, the range moving,
+         * or every few minutes).
+         */
+        if (mode === "head") {
+          const data = await get(query(HEAD_ROWS, 0, true));
+          if (!data) return;
+          const head = data.rows ?? [];
+          setRangeRows((prev) => {
+            const sheet = prev[which];
+            if (!sheet || sheet.range !== rangeKey) return prev;
+            let rows = head;
+            if (head.length >= HEAD_ROWS) {
+              // Below the oldest row the head reached, the rows on screen stand.
+              const floor = sheetRowAt(which, head[head.length - 1]);
+              const inHead = new Set(head.map(sheetRowKey));
+              rows = head.concat(
+                sheet.rows.filter((r) => !inHead.has(sheetRowKey(r)) && sheetRowAt(which, r) <= floor),
+              );
+            }
+            return {
+              ...prev,
+              [which]: { ...sheet, rows: keepEdits(sheet.rows, rows), totals: data.totals ?? sheet.totals },
+            };
+          });
+          return;
+        }
+
+        /**
+         * The whole range: the first page drawn as soon as it lands, the rest
+         * fetched side by side and drawn once. One request returns at most
+         * PAGE rows; the ceiling stops a year-wide filter from pulling
+         * everything ever recorded.
+         */
+        const first = await get(query(PAGE_ROWS, 0, true));
+        if (!first) return;
+        const totals = first.totals ?? { rows: first.rows?.length ?? 0, amount: 0 };
+        const land = (rows: unknown[], partial: boolean) =>
+          setRangeRows((prev) => {
+            // A reload of the range already on screen draws once, at the end:
+            // the first page alone would shrink the sheet under the reader.
+            if (partial && prev[which]?.range === rangeKey) return prev;
+            return {
+              ...prev,
+              [which]: { rows: keepEdits(prev[which]?.rows ?? [], rows), totals, range: rangeKey },
+            };
+          });
+        const firstRows = first.rows ?? [];
+        const complete = firstRows.length < PAGE_ROWS;
+        land(firstRows, !complete);
+        if (complete) return;
+
+        const pages = Math.ceil(Math.min(totals.rows, MAX_RANGE_ROWS) / PAGE_ROWS);
+        const offsets = Array.from({ length: pages - 1 }, (_, i) => (i + 1) * PAGE_ROWS);
+        const rest: unknown[][] = [];
+        const worker = async () => {
+          for (let o = offsets.shift(); o !== undefined; o = offsets.shift()) {
+            const page = await get(query(PAGE_ROWS, o, false));
+            if (!page) throw new Error("page failed");
+            rest[o / PAGE_ROWS - 1] = page.rows ?? [];
           }
-          const merged = edited.size ? rows.map((r) => edited.get(rowKey(r)) ?? r) : rows;
-          return {
-            ...prev,
-            [which]: { rows: merged, totals: totals ?? { rows: rows.length, amount: 0 } },
-          };
-        });
+        };
+        await Promise.all(Array.from({ length: Math.min(4, offsets.length) }, worker));
+        land(firstRows.concat(...rest), false);
       } catch {
         // Keep whatever is on screen; the next refresh or poll retries.
       }
@@ -871,12 +953,21 @@ export default function TransactionsPage() {
   );
   useEffect(() => {
     if (!RANGE_SHEETS.includes(tab)) return;
+    const abort = new AbortController();
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    void loadRangeRows(tab);
+    void loadRangeRows(tab, "full", abort.signal);
     // The store polls /api/state every 10s; these rows no longer come from it,
     // so they need their own heartbeat or a colleague's entry never shows up.
-    const timer = setInterval(() => void loadRangeRows(tab), 10_000);
-    return () => clearInterval(timer);
+    // The newest rows every beat, the whole range every few minutes.
+    let beat = 0;
+    const timer = setInterval(() => {
+      beat++;
+      void loadRangeRows(tab, beat % FULL_EVERY_BEATS === 0 ? "full" : "head", abort.signal);
+    }, 10_000);
+    return () => {
+      clearInterval(timer);
+      abort.abort();
+    };
   }, [tab, loadRangeRows, RANGE_SHEETS]);
 
   /**

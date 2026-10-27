@@ -668,6 +668,9 @@ type Store = {
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let knownDepositIds: Set<number> | null = null;
 
+/** Player ids hydratePlayers has asked for and not heard back on. */
+const hydrating = new Set<number>();
+
 /**
  * Fold freshly fetched members into the cache, newest copy winning.
  *
@@ -1315,15 +1318,26 @@ export const useStore = create<Store>((set, get) => {
       const want = [...new Set(ids.filter((id): id is number => typeof id === "number" && id > 0))];
       if (!want.length) return;
       const have = new Set(get().players.map((p) => p.player_id));
-      const missing = want.filter((id) => !have.has(id));
+      // Ids already on their way count as had: a sheet loading a month in
+      // pages asks again with every page that lands.
+      const missing = want.filter((id) => !have.has(id) && !hydrating.has(id));
       if (!missing.length) return;
-      // One request per 500, the server's cap.
-      for (let i = 0; i < missing.length; i += 500) {
-        const chunk = missing.slice(i, i + 500);
-        const res = await api<{ players: Player[] }>(`/api/players?ids=${chunk.join(",")}`);
-        if (!res.ok || !res.data) return;
-        mergePlayers(set, get, res.data.players);
-      }
+      for (const id of missing) hydrating.add(id);
+      // One request per 500, the server's cap; a few at a time rather than
+      // one after another — a month of deposits is ~20 of them.
+      const chunks: number[][] = [];
+      for (let i = 0; i < missing.length; i += 500) chunks.push(missing.slice(i, i + 500));
+      const worker = async () => {
+        for (let chunk = chunks.shift(); chunk; chunk = chunks.shift()) {
+          try {
+            const res = await api<{ players: Player[] }>(`/api/players?ids=${chunk.join(",")}`);
+            if (res.ok && res.data) mergePlayers(set, get, res.data.players);
+          } finally {
+            for (const id of chunk) hydrating.delete(id);
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(4, chunks.length) }, worker));
     },
 
     searchPlayers: async (q, opts) => {

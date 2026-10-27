@@ -4,15 +4,15 @@ import { authErrorResponse, requireUser } from "@/lib/auth";
 import { jsonError, leaderTransferReadFilter, visibleEntityIds } from "@/lib/api-helpers";
 import {
   all,
-  businessDay,
   csCutoff,
+  inBusinessDays,
   parseReportParams,
   scopeDeposits,
   scopeByPlayer,
 } from "@/lib/report-sql";
 
 /**
- * GET /api/worksheet/rows?sheet=deposit|withdrawal&from=&to=&limit=&offset=
+ * GET /api/worksheet/rows?sheet=deposit|withdrawal&from=&to=&limit=&offset=&totals=0
  *
  * The worksheet's own rows, for the range it is showing.
  *
@@ -24,7 +24,8 @@ import {
  *
  * So the sheet asks for what it is displaying instead. Same shape as the reports:
  * a page of rows plus the totals for the *whole* range, so the figures above the
- * sheet describe the period rather than the page.
+ * sheet describe the period rather than the page. `totals=0` skips them — the
+ * later pages of one range need them only once.
  */
 
 /**
@@ -66,6 +67,7 @@ export async function GET(request: Request) {
     // request cannot ask for a year of a busy house in one go.
     const limit = Math.min(Number(sp.get("limit") ?? 2000) || 2000, 5000);
     const offset = Math.max(Number(sp.get("offset") ?? 0) || 0, 0);
+    const wantTotals = sp.get("totals") !== "0";
 
     /**
      * A CS agent sees their look-back window, whatever range they ask for.
@@ -100,8 +102,7 @@ export async function GET(request: Request) {
      */
     if (sheet === "deposit") {
       const w = [...scopeDeposits(user)];
-      if (p.from) w.push(sql`${businessDay(sql`d.deposit_date`)} >= ${p.from}::date`);
-      if (p.to) w.push(sql`${businessDay(sql`d.deposit_date`)} <= ${p.to}::date`);
+      w.push(...inBusinessDays(sql`d.deposit_date`, p.from, p.to));
       if (p.companyId !== null) w.push(sql`d.company_entity_id = ${p.companyId}`);
       if (cutoff) w.push(sql`d.created_at >= ${cutoff}::timestamptz`);
 
@@ -119,13 +120,14 @@ export async function GET(request: Request) {
          ORDER BY d.deposit_date DESC, d.deposit_id DESC
          LIMIT ${limit} OFFSET ${offset}`);
 
-      const [totals] = (await db.execute(sql`
-        SELECT count(*)::int AS rows,
-               coalesce(sum(d.deposit_amount), 0)::float8 AS amount,
-               coalesce(sum(d.bonus_amount), 0)::float8   AS bonus
-          FROM deposits d
-          LEFT JOIN players pl ON pl.player_id = d.player_id
-         WHERE ${all(w)}`)).rows as unknown as Record<string, number>[];
+      const [totals] = wantTotals
+        ? ((await db.execute(sql`
+            SELECT count(*)::int AS rows,
+                   coalesce(sum(d.deposit_amount), 0)::float8 AS amount,
+                   coalesce(sum(d.bonus_amount), 0)::float8   AS bonus
+              FROM deposits d
+             WHERE ${all(w)}`)).rows as unknown as Record<string, number>[])
+        : [undefined];
 
       return Response.json({
         rows: rows.rows.map((r) => (r as { row: unknown }).row),
@@ -135,28 +137,29 @@ export async function GET(request: Request) {
       });
     }
 
-    const w = [...scopeByPlayer(user)];
-    if (p.from) w.push(sql`${businessDay(sql`wd.created_at`)} >= ${p.from}::date`);
-    if (p.to) w.push(sql`${businessDay(sql`wd.created_at`)} <= ${p.to}::date`);
-    if (p.companyId !== null) w.push(sql`pl.company_entity_id = ${p.companyId}`);
-    if (cutoff) w.push(sql`wd.created_at >= ${cutoff}::timestamptz`);
-
-    const rows = await db.execute(sql`
-      SELECT ${asRow("wd", ["requested_amount", "credit_pulled_amount"])}
-        FROM withdrawals wd
-        JOIN players pl ON pl.player_id = wd.player_id
-       WHERE ${all(w)}
-       ORDER BY wd.created_at DESC, wd.withdrawal_id DESC
-       LIMIT ${limit} OFFSET ${offset}`);
-
-    const [totals] = (await db.execute(sql`
-      SELECT count(*)::int AS rows,
-             coalesce(sum(wd.credit_pulled_amount), 0)::float8 AS amount
-        FROM withdrawals wd
-        JOIN players pl ON pl.player_id = wd.player_id
-       WHERE ${all(w)}`)).rows as unknown as Record<string, number>[];
-
     if (sheet === "withdrawal") {
+      const w = [...scopeByPlayer(user)];
+      w.push(...inBusinessDays(sql`wd.created_at`, p.from, p.to));
+      if (p.companyId !== null) w.push(sql`pl.company_entity_id = ${p.companyId}`);
+      if (cutoff) w.push(sql`wd.created_at >= ${cutoff}::timestamptz`);
+
+      const rows = await db.execute(sql`
+        SELECT ${asRow("wd", ["requested_amount", "credit_pulled_amount"])}
+          FROM withdrawals wd
+          JOIN players pl ON pl.player_id = wd.player_id
+         WHERE ${all(w)}
+         ORDER BY wd.created_at DESC, wd.withdrawal_id DESC
+         LIMIT ${limit} OFFSET ${offset}`);
+
+      const [totals] = wantTotals
+        ? ((await db.execute(sql`
+            SELECT count(*)::int AS rows,
+                   coalesce(sum(wd.credit_pulled_amount), 0)::float8 AS amount
+              FROM withdrawals wd
+              JOIN players pl ON pl.player_id = wd.player_id
+             WHERE ${all(w)}`)).rows as unknown as Record<string, number>[])
+        : [undefined];
+
       return Response.json({
         rows: rows.rows.map((r) => (r as { row: unknown }).row),
         totals,
@@ -225,8 +228,7 @@ export async function GET(request: Request) {
     const cfg = spec[sheet];
     const where: SQL[] = [cfg.scope];
     if (cutoff) where.push(sql`${cfg.date} >= ${cutoff}::timestamptz`);
-    if (p.from) where.push(sql`${businessDay(cfg.date)} >= ${p.from}::date`);
-    if (p.to) where.push(sql`${businessDay(cfg.date)} <= ${p.to}::date`);
+    where.push(...inBusinessDays(cfg.date, p.from, p.to));
 
     // The Free Credit sheet reads a flattened row — reason, source and the
     // transfer it queued — which live inside `details` on the ledger. Raw rows
@@ -250,11 +252,13 @@ export async function GET(request: Request) {
        WHERE ${all(where)}
        ORDER BY ${cfg.date} DESC
        LIMIT ${limit} OFFSET ${offset}`);
-    const [otherTotals] = (await db.execute(sql`
-      SELECT count(*)::int AS rows,
-             coalesce(sum(${sql.raw(`${cfg.alias}.${cfg.numerics[0]}`)}), 0)::float8 AS amount
-        FROM ${cfg.from}
-       WHERE ${all(where)}`)).rows as unknown as Record<string, number>[];
+    const [otherTotals] = wantTotals
+      ? ((await db.execute(sql`
+          SELECT count(*)::int AS rows,
+                 coalesce(sum(${sql.raw(`${cfg.alias}.${cfg.numerics[0]}`)}), 0)::float8 AS amount
+            FROM ${cfg.from}
+           WHERE ${all(where)}`)).rows as unknown as Record<string, number>[])
+      : [undefined];
 
     return Response.json({
       rows: other.rows.map((r) => (r as { row: unknown }).row),
