@@ -1,7 +1,7 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { players, salaryAdjustments, staffPenalties } from "@/db/schema";
+import { deposits, players, salaryAdjustments, staffPenalties, transactions } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { getSettingNumber, jsonError } from "@/lib/api-helpers";
 import { logActivity } from "@/lib/activity-log";
@@ -28,7 +28,9 @@ const createSchema = z
 
 /**
  * POST /api/staff-penalties — a CS's share of credit the house lost through
- * their mistake. Writes the pending deduction their next salary will take.
+ * their mistake. Writes the pending deduction their next salary will take,
+ * and books the whole loss (credited − retrieved, not just the CS's share) as
+ * a Staff Error bonus: the player kept that credit, so the house gave it away.
  *
  * Any desk user can record one; voiding is a leader's or the admin's call.
  */
@@ -88,6 +90,29 @@ export async function POST(request: Request) {
         penalty_id: row.penalty_id,
         created_by_user_id: user.user_id,
       });
+      // Ledger only — the credit is already in the player's game, so no
+      // balance or BO pool moves. Dated when the mistake happened, so it lands
+      // in that month's bonus figures and that month's free-credit allowance.
+      await txn.insert(transactions).values({
+        player_id: row.player_id,
+        entity_id: row.company_entity_id,
+        type: "game_topup",
+        amount: row.loss_amount,
+        game_name: await sourceGame(txn, row.source_type, row.source_id),
+        reference_id: row.penalty_id,
+        user_id: user.user_id,
+        details: {
+          action: "staff_error",
+          penalty_id: row.penalty_id,
+          cs_user_id: row.user_id,
+          source_type: row.source_type,
+          source_id: row.source_id,
+          credit_injected: row.credit_injected,
+          credit_retrieved: row.credit_retrieved,
+          reason: row.reason,
+        },
+        created_at: row.occurred_at,
+      });
       return row;
     });
 
@@ -109,4 +134,30 @@ export async function POST(request: Request) {
   } catch (e) {
     return authErrorResponse(e) ?? (console.error(e), jsonError("Server error", 500));
   }
+}
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/** The game the mistaken credit went into, when the source row says. */
+async function sourceGame(
+  txn: Tx,
+  type: (typeof staffPenalties.$inferSelect)["source_type"],
+  id: number | null,
+): Promise<string | null> {
+  if (id == null) return null;
+  if (type === "deposit") {
+    const [d] = await txn
+      .select({ game: deposits.selected_game })
+      .from(deposits)
+      .where(eq(deposits.deposit_id, id));
+    return d?.game || null;
+  }
+  if (type === "free_credit") {
+    const [t] = await txn
+      .select({ game: transactions.game_name })
+      .from(transactions)
+      .where(and(eq(transactions.transaction_id, id), eq(transactions.type, "game_topup")));
+    return t?.game || null;
+  }
+  return null;
 }

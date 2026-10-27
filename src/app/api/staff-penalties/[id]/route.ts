@@ -1,6 +1,6 @@
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { salaryAdjustments, staffPenalties, users } from "@/db/schema";
+import { salaryAdjustments, staffPenalties, transactions, users } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import { logActivity } from "@/lib/activity-log";
@@ -34,6 +34,16 @@ export async function DELETE(_request: Request, { params }: { params: Promise<{ 
         throw new Refusal("Already deducted from a salary — reverse that salary first");
       }
       if (adj) await txn.delete(salaryAdjustments).where(eq(salaryAdjustments.adjustment_id, adj.adjustment_id));
+      // Its Staff Error bonus goes with it: a void penalty lost nothing.
+      await txn
+        .delete(transactions)
+        .where(
+          and(
+            eq(transactions.type, "game_topup"),
+            sql`${transactions.details}->>'action' = 'staff_error'`,
+            sql`(${transactions.details}->>'penalty_id')::int = ${row.penalty_id}`,
+          ),
+        );
       const [updated] = await txn
         .update(staffPenalties)
         .set({ status: "void", voided_at: new Date().toISOString(), voided_by_user_id: user.user_id })

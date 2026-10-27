@@ -266,3 +266,11 @@ export const RB_AT = sql`coalesce(rb.assigned_at, rb.created_at)`;
  * `game_topup` rows carry this one.
  */
 export const IS_FREE_CREDIT = sql`t.type = 'game_topup' AND t.details->>'action' = 'free_credit'`;
+
+/**
+ * Credit a CS's mistake put in a player's game and nobody got back — the loss
+ * on a staff penalty, booked as a bonus the house gave away. A ledger line
+ * only: the credit is already in the player's account, so nothing moves.
+ * Written and voided with its penalty (details.penalty_id).
+ */
+export const IS_STAFF_ERROR = sql`t.type = 'game_topup' AND t.details->>'action' = 'staff_error'`;
