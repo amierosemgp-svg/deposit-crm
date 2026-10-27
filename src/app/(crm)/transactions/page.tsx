@@ -795,7 +795,17 @@ export default function TransactionsPage() {
    */
   const [rangeRows, setRangeRows] = useState<
     Partial<
-      Record<TabKey, { rows: unknown[]; totals: { rows: number; amount: number }; range?: string }>
+      Record<
+        TabKey,
+        {
+          rows: unknown[];
+          totals: { rows: number; amount: number };
+          /** Which range and company these rows are for. */
+          range?: string;
+          /** False while the later pages of a range are still coming. */
+          complete?: boolean;
+        }
+      >
     >
   >({});
   /**
@@ -821,7 +831,8 @@ export default function TransactionsPage() {
     [],
   );
   const loadRangeRows = useCallback(
-    async (which: TabKey, mode: "full" | "head" = "full", signal?: AbortSignal) => {
+    /** Resolves false when a full load could not fetch its range. */
+    async (which: TabKey, mode: "full" | "head" = "full", signal?: AbortSignal): Promise<boolean> => {
       const startedAt = Date.now();
       // Which range these rows are for. A load for a range no longer on
       // screen is aborted by the effect that started it.
@@ -861,7 +872,7 @@ export default function TransactionsPage() {
          */
         if (mode === "head") {
           const data = await get(query(HEAD_ROWS, 0, true));
-          if (!data) return;
+          if (!data) return true;
           const head = data.rows ?? [];
           setRangeRows((prev) => {
             const sheet = prev[which];
@@ -880,7 +891,7 @@ export default function TransactionsPage() {
               [which]: { ...sheet, rows: keepEdits(sheet.rows, rows), totals: data.totals ?? sheet.totals },
             };
           });
-          return;
+          return true;
         }
 
         /**
@@ -890,7 +901,7 @@ export default function TransactionsPage() {
          * everything ever recorded.
          */
         const first = await get(query(PAGE_ROWS, 0, true));
-        if (!first) return;
+        if (!first) return false;
         const totals = first.totals ?? { rows: first.rows?.length ?? 0, amount: 0 };
         const land = (rows: unknown[], partial: boolean) =>
           setRangeRows((prev) => {
@@ -899,13 +910,18 @@ export default function TransactionsPage() {
             if (partial && prev[which]?.range === rangeKey) return prev;
             return {
               ...prev,
-              [which]: { rows: keepEdits(prev[which]?.rows ?? [], rows), totals, range: rangeKey },
+              [which]: {
+                rows: keepEdits(prev[which]?.rows ?? [], rows),
+                totals,
+                range: rangeKey,
+                complete: !partial,
+              },
             };
           });
         const firstRows = first.rows ?? [];
         const complete = firstRows.length < PAGE_ROWS;
         land(firstRows, !complete);
-        if (complete) return;
+        if (complete) return true;
 
         const pages = Math.ceil(Math.min(totals.rows, MAX_RANGE_ROWS) / PAGE_ROWS);
         const offsets = Array.from({ length: pages - 1 }, (_, i) => (i + 1) * PAGE_ROWS);
@@ -919,8 +935,10 @@ export default function TransactionsPage() {
         };
         await Promise.all(Array.from({ length: Math.min(4, offsets.length) }, worker));
         land(firstRows.concat(...rest), false);
+        return true;
       } catch {
         // Keep whatever is on screen; the next refresh or poll retries.
+        return signal?.aborted ?? false;
       }
     },
     [range.from, range.to, selectedCompanyId],
@@ -954,21 +972,45 @@ export default function TransactionsPage() {
   useEffect(() => {
     if (!RANGE_SHEETS.includes(tab)) return;
     const abort = new AbortController();
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void loadRangeRows(tab, "full", abort.signal);
+    // Until a full load lands, every beat tries the full range again — a head
+    // read has nothing on screen to lay itself over.
+    let landed = false;
+    let fullRunning = false;
+    const full = () => {
+      if (fullRunning) return;
+      fullRunning = true;
+      void loadRangeRows(tab, "full", abort.signal).then((ok) => {
+        landed ||= ok;
+        fullRunning = false;
+      });
+    };
+    full();
     // The store polls /api/state every 10s; these rows no longer come from it,
     // so they need their own heartbeat or a colleague's entry never shows up.
     // The newest rows every beat, the whole range every few minutes.
     let beat = 0;
     const timer = setInterval(() => {
       beat++;
-      void loadRangeRows(tab, beat % FULL_EVERY_BEATS === 0 ? "full" : "head", abort.signal);
+      if (!landed || beat % FULL_EVERY_BEATS === 0) full();
+      else void loadRangeRows(tab, "head", abort.signal);
     }, 10_000);
     return () => {
       clearInterval(timer);
       abort.abort();
     };
   }, [tab, loadRangeRows, RANGE_SHEETS]);
+
+  /**
+   * Whether the sheet on screen is still waiting for its rows — a new casino
+   * or period picked, or the rest of a long range still coming. Claims are in
+   * RANGE_SHEETS but not served by /api/worksheet/rows, so they never wait.
+   */
+  const shownRange = rangeRows[tab];
+  const rowsLoading =
+    RANGE_SHEETS.includes(tab) &&
+    tab !== "claim" &&
+    shownRange?.range !== `${range.from}|${range.to}|${selectedCompanyId}`;
+  const rowsLoadingMore = !rowsLoading && shownRange?.complete === false;
 
   /**
    * What each sheet draws: the range fetch once it lands, the store's slice
@@ -5437,7 +5479,19 @@ export default function TransactionsPage() {
         </div>
 
         <span className="text-xs text-muted-foreground">
-          {rows.length} row{rows.length === 1 ? "" : "s"}
+          {rowsLoading ? (
+            <span className="inline-flex items-center gap-1">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Loading…
+            </span>
+          ) : (
+            <>
+              {rows.length} row{rows.length === 1 ? "" : "s"}
+              {rowsLoadingMore && (
+                <Loader2 className="ml-1 inline h-3 w-3 animate-spin" aria-label="Loading more" />
+              )}
+            </>
+          )}
         </span>
 
         {/* How much free credit is still giveable this month. The cap has
@@ -5671,6 +5725,8 @@ export default function TransactionsPage() {
         // Re-fires after hydration so the initial jump lands on the entry
         // rows once the committed rows are actually there.
         focusKey={`${tab}:${hydrated}`}
+        loading={rowsLoading}
+        loadingMore={rowsLoadingMore}
       />
       </>
       )}
