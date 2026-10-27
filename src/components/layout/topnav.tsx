@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeftRight, Bell, LogOut, Menu } from "lucide-react";
+import { ArrowLeftRight, Bell, LogOut, Menu, Search } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -48,6 +48,58 @@ const SCOPE_CONTENT_PROPS = {
   alignItemWithTrigger: false,
   className: "w-auto",
 } as const;
+
+/**
+ * Filter box pinned to the top of a scope dropdown — with seventy-odd casinos
+ * the list no longer fits on screen. Keys typed here stay here: the dropdown's
+ * own typeahead would otherwise jump the highlight on every letter. Arrow keys
+ * and Escape still reach the list; Enter picks the first match.
+ */
+function ScopeSearch({
+  value,
+  onChange,
+  onPickFirst,
+  inputRef,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onPickFirst: () => void;
+  inputRef: React.RefObject<HTMLInputElement | null>;
+}) {
+  return (
+    <div className="sticky top-0 z-10 -mx-1 -mt-1 mb-1 border-b border-border bg-popover px-2 py-1.5">
+      <div className="flex items-center gap-1.5">
+        <Search className="size-3.5 shrink-0 text-muted-foreground" />
+        <input
+          ref={inputRef}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              e.stopPropagation();
+              onPickFirst();
+            } else if (!["ArrowDown", "ArrowUp", "Escape", "Tab"].includes(e.key)) {
+              e.stopPropagation();
+            }
+          }}
+          placeholder="Search…"
+          className="h-6 w-full min-w-40 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+        />
+      </div>
+    </div>
+  );
+}
+
+const matches = (q: string, ...texts: Array<string | null | undefined>) => {
+  const v = q.trim().toLowerCase();
+  return !v || texts.some((t) => t?.toLowerCase().includes(v));
+};
+
+/** Focus the search box once the dropdown has opened and placed its own focus. */
+function focusSoon(ref: React.RefObject<HTMLInputElement | null>) {
+  requestAnimationFrame(() => requestAnimationFrame(() => ref.current?.focus()));
+}
 
 /** Hairline between the borderless header controls. */
 function ScopeDivider() {
@@ -185,6 +237,24 @@ export function TopNav() {
     );
   }, [bankAccounts, bankTransfers]);
 
+  const [leaderOpen, setLeaderOpen] = useState(false);
+  const [companyOpen, setCompanyOpen] = useState(false);
+  const [leaderQuery, setLeaderQuery] = useState("");
+  const [companyQuery, setCompanyQuery] = useState("");
+  const leaderSearchRef = useRef<HTMLInputElement>(null);
+  const companySearchRef = useRef<HTMLInputElement>(null);
+  const shownLeaders = useMemo(
+    () => leaders.filter((l) => matches(leaderQuery, l.name)),
+    [leaders, leaderQuery],
+  );
+  const shownCompanies = useMemo(
+    () =>
+      visibleCompanies.filter((c) =>
+        matches(companyQuery, c.company_name, c.leader_name),
+      ),
+    [visibleCompanies, companyQuery],
+  );
+
   const companyValue =
     selectedCompanyId === null ? "all" : String(selectedCompanyId);
   const companyLabel =
@@ -252,6 +322,12 @@ export function TopNav() {
                 onValueChange={(v) =>
                   setSelectedLeaderId(!v || v === "all" ? null : Number(v))
                 }
+                open={leaderOpen}
+                onOpenChange={(open) => {
+                  setLeaderOpen(open);
+                  setLeaderQuery("");
+                  if (open) focusSoon(leaderSearchRef);
+                }}
                 items={[
                   { value: "all", label: "All Companies" },
                   ...leaders.map((l) => ({
@@ -264,8 +340,20 @@ export function TopNav() {
                   <SelectValue placeholder="All Companies" />
                 </SelectTrigger>
                 <SelectContent {...SCOPE_CONTENT_PROPS}>
-                  <SelectItem value="all">All Companies</SelectItem>
-                  {leaders.map((l) => (
+                  <ScopeSearch
+                    value={leaderQuery}
+                    onChange={setLeaderQuery}
+                    inputRef={leaderSearchRef}
+                    onPickFirst={() => {
+                      if (shownLeaders[0]) setSelectedLeaderId(shownLeaders[0].entity_id);
+                      else if (!leaderQuery.trim()) setSelectedLeaderId(null);
+                      setLeaderOpen(false);
+                    }}
+                  />
+                  {matches(leaderQuery, "All Companies") && (
+                    <SelectItem value="all">All Companies</SelectItem>
+                  )}
+                  {shownLeaders.map((l) => (
                     <SelectItem key={l.entity_id} value={String(l.entity_id)}>
                       {l.name}
                     </SelectItem>
@@ -283,6 +371,12 @@ export function TopNav() {
                 onValueChange={(v) =>
                   setSelectedCompanyId(!v || v === "all" ? null : Number(v))
                 }
+                open={companyOpen}
+                onOpenChange={(open) => {
+                  setCompanyOpen(open);
+                  setCompanyQuery("");
+                  if (open) focusSoon(companySearchRef);
+                }}
               >
                 <SelectTrigger className={SCOPE_TRIGGER}>
                   <SelectValue placeholder="All Casinos">
@@ -290,10 +384,25 @@ export function TopNav() {
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent {...SCOPE_CONTENT_PROPS}>
-                  <SelectItem value="all">
-                    {selectedLeaderId === null ? "All Casinos" : "All (this company)"}
-                  </SelectItem>
-                  {visibleCompanies.map((c) => (
+                  <ScopeSearch
+                    value={companyQuery}
+                    onChange={setCompanyQuery}
+                    inputRef={companySearchRef}
+                    onPickFirst={() => {
+                      if (shownCompanies[0]) setSelectedCompanyId(shownCompanies[0].company_id);
+                      else if (!companyQuery.trim()) setSelectedCompanyId(null);
+                      setCompanyOpen(false);
+                    }}
+                  />
+                  {!companyQuery.trim() && (
+                    <SelectItem value="all">
+                      {selectedLeaderId === null ? "All Casinos" : "All (this company)"}
+                    </SelectItem>
+                  )}
+                  {shownCompanies.length === 0 && (
+                    <p className="px-1.5 py-1 text-sm text-muted-foreground">No casino matches</p>
+                  )}
+                  {shownCompanies.map((c) => (
                     <SelectItem key={c.company_id} value={String(c.company_id)}>
                       {c.company_name}
                       {/* Whose company it is. Earns its place most in the
