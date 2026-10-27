@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { apiKeys } from "@/db/schema";
-import { KILL_RESPONSE_BODY, getKillSwitch } from "@/lib/kill-switch";
+import { KILL_RESPONSE_BODY, getCasinoKills, getKillSwitch } from "@/lib/kill-switch";
 
 export type BotAuthResult =
   | {
@@ -65,6 +65,21 @@ export async function requireBotKey(request: Request): Promise<BotAuthResult> {
         response: Response.json(
           { error: `IP ${ip || "unknown"} not allowed for this key` },
           { status: 403 },
+        ),
+      };
+    }
+  }
+
+  // This key's casino has its own switch thrown: the same wipe order, for
+  // this casino's agents only. A full-access key answers to the global one.
+  if (key.company_entity_id != null) {
+    const casino = (await getCasinoKills())[String(key.company_entity_id)];
+    if (casino?.active) {
+      return {
+        ok: false,
+        response: Response.json(
+          { ...KILL_RESPONSE_BODY, casino_id: key.company_entity_id },
+          { status: 410 },
         ),
       };
     }

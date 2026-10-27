@@ -10,7 +10,7 @@ import {
   verifySessionToken,
   type SessionPayload,
 } from "./session";
-import { getSessionEpoch } from "@/lib/kill-switch";
+import { getCasinoEpochs, getSessionEpoch } from "@/lib/kill-switch";
 
 export type { SessionPayload };
 
@@ -201,15 +201,20 @@ export async function requireUser(): Promise<AuthedUser> {
   // Kill-switch epoch: a token minted before the last emergency sign-out is
   // dead, whatever its own expiry says. `iat` rides in the JWT via
   // setIssuedAt(), in seconds.
+  const iatMs = ((session as unknown as { iat?: number }).iat ?? 0) * 1000;
   const epoch = await getSessionEpoch();
-  if (epoch) {
-    const iatMs =
-      ((session as unknown as { iat?: number }).iat ?? 0) * 1000;
-    if (iatMs < epoch) {
-      throw new AuthError(401, "Signed out by an administrator — please sign in again");
+  if (epoch && iatMs < epoch) {
+    throw new AuthError(401, "Signed out by an administrator — please sign in again");
+  }
+  const user = await resolveScope(session);
+  // A casino's own kill switch signs out that casino's CS desk only.
+  if (user.role === "cs_agent" && user.companyIds?.length) {
+    const epochs = await getCasinoEpochs();
+    if (user.companyIds.some((id) => (epochs[String(id)] ?? 0) > iatMs)) {
+      throw new AuthError(401, "Your casino's kill switch signed you out — please sign in again");
     }
   }
-  return resolveScope(session);
+  return user;
 }
 
 export async function requireWriteUser(): Promise<AuthedUser> {

@@ -69,3 +69,29 @@ export const KILL_RESPONSE_BODY = {
     "do_not_reconnect",
   ],
 } as const;
+
+/**
+ * Per-casino kill switches, by casino (company entity) id.
+ *
+ * The global switch above stops every casino at once. Most emergencies are one
+ * casino's — its bot compromised, its desk's logins leaked — and stopping the
+ * whole house for that was too blunt. A casino's switch refuses only the bot
+ * keys held to that casino (keys are casino-scoped, see bot-auth) and signs
+ * out only that casino's CS desk. Leaders and admins stay signed in: a leader
+ * running several casinos is usually who pressed it.
+ *
+ * A full-access key (no casino) is stopped only by the global switch.
+ */
+export const KILL_CASINOS_KEY = "kill_switch_casinos";
+export const CASINO_EPOCH_KEY = "session_epoch_casinos";
+
+export async function getCasinoKills(): Promise<Record<string, KillSwitchState>> {
+  const [row] = await db.select().from(settings).where(eq(settings.key, KILL_CASINOS_KEY));
+  return (row?.value as Record<string, KillSwitchState> | undefined) ?? {};
+}
+
+/** CS sessions at a casino minted before its epoch (ms) are dead. */
+export async function getCasinoEpochs(): Promise<Record<string, number>> {
+  const [row] = await db.select().from(settings).where(eq(settings.key, CASINO_EPOCH_KEY));
+  return (row?.value as Record<string, number> | undefined) ?? {};
+}

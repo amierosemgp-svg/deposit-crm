@@ -1,14 +1,13 @@
 "use client";
 
 /**
- * Emergency kill switch — the team's panic button.
+ * Emergency kill switch — the team's panic button, by casino.
  *
- * Ctrl+Alt+Delete anywhere in the CRM (any signed-in user) opens the
- * confirmation;
- * confirming closes the bot API with a wipe order (each agent, on its next
- * poll, is told to stop, delete its local credentials/config/data, clear its
- * browser and not reconnect), and signs out every CRM session — including the
- * admin who pressed it.
+ * The header button or Ctrl+Alt+Delete (any signed-in user) opens it. Someone
+ * with one casino confirms straight away; a leader with several picks which,
+ * and the admin may also stop every casino at once. A stopped casino's agents
+ * get a wipe order on their next poll (stop, delete local credentials/config/
+ * data, clear their browser, don't reconnect) and its CS are signed out.
  *
  * Note: on Windows, Ctrl+Alt+Delete is reserved by the OS and never reaches
  * the browser — Ctrl+Alt+Backspace works there, and the Settings card's
@@ -20,6 +19,13 @@ import { useStore } from "@/lib/store";
 import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { OctagonAlert, ShieldAlert } from "lucide-react";
 
@@ -78,125 +84,291 @@ async function wipeThisBrowser() {
   }
 }
 
-async function postKillSwitch(action: "activate" | "release") {
+type CasinoKill = KillSwitchState & { id: number; name: string };
+type KillState = { global: KillSwitchState; canGlobal: boolean; casinos: CasinoKill[] };
+/** What a kill or release is aimed at: every casino, or these. */
+type KillTarget = "all" | number[];
+
+async function fetchKillState(): Promise<KillState | null> {
+  try {
+    const res = await fetch("/api/kill-switch");
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      kill_switch?: KillSwitchState;
+      can_global?: boolean;
+      casinos?: CasinoKill[];
+    };
+    return {
+      global: data.kill_switch ?? { active: false },
+      canGlobal: !!data.can_global,
+      casinos: data.casinos ?? [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function postKillSwitch(action: "activate" | "release", scope: KillTarget) {
   const res = await fetch("/api/kill-switch", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action }),
+    body: JSON.stringify({ action, scope }),
   });
   const data = (await res.json().catch(() => null)) as
-    | { kill_switch?: KillSwitchState; error?: string }
+    | { signed_out?: boolean; error?: string }
     | null;
   if (!res.ok) throw new Error(data?.error ?? `Request failed (${res.status})`);
-  return data?.kill_switch;
+  return { signedOut: !!data?.signed_out };
 }
 
-function KillConfirm({
-  open,
-  onOpenChange,
-  active = false,
-  onReleased,
-}: {
-  open: boolean;
-  onOpenChange: (o: boolean) => void;
-  /** When true the dialog offers to RELEASE the active switch instead. */
-  active?: boolean;
-  onReleased?: () => void;
-}) {
-  if (active) {
-    return (
-      <ConfirmActionDialog
-        open={open}
-        onOpenChange={onOpenChange}
-        title="Release the kill switch?"
-        description="Re-opens the bot API so agents can reconnect. CRM sessions that were signed out stay signed out — people just log in again."
-        summary={[{ label: "Bot API", value: "Re-opened", emphasis: true }]}
-        confirmLabel="Release"
-        onConfirm={async () => {
-          try {
-            await postKillSwitch("release");
-            toast.success("Kill switch released — bot API re-opened");
-            onReleased?.();
-          } catch (e) {
-            toast.error(e instanceof Error ? e.message : "Failed to release");
-          }
-        }}
-      />
-    );
-  }
-  return (
-    <ConfirmActionDialog
-      open={open}
-      onOpenChange={onOpenChange}
-      title="EMERGENCY KILL SWITCH"
-      description="Cuts the bot agents off now: their next poll returns a stop-and-wipe order (delete local credentials, config and data; clear and close their own browsers; don't reconnect). Every CRM sign-in is invalidated, so everyone — you included — is logged out. This browser's CRM storage and cookies are cleared too; it tries to close this tab, and if the browser won't allow that it navigates away to google.com."
-      summary={[
-        { label: "Bot agents", value: "Stop + wipe on next poll" },
-        { label: "Bot local credentials/data", value: "Deleted (on the agent)" },
-        { label: "Bot browsers", value: "Closed + cache/cookies cleared" },
-        { label: "Your CRM session", value: "Signed out — log in again", emphasis: true },
-      ]}
-      confirmLabel="ACTIVATE KILL SWITCH"
-      tone="danger"
-      onConfirm={async () => {
-        try {
-          await postKillSwitch("activate");
-        } catch (e) {
-          toast.error(e instanceof Error ? e.message : "Failed to activate");
-          return;
-        }
-        await wipeThisBrowser();
-        // Try to close this tab — only works if a script opened it (bot agents,
-        // pop-outs). Browsers refuse to close a user-opened tab, so if it's
-        // still here a beat later, navigate away from the CRM entirely.
-        // replace(), not href: it overwrites this history entry so the Back
-        // button can't return to the CRM page.
-        window.close();
-        setTimeout(() => {
-          window.location.replace("https://google.com");
-        }, 150);
-      }}
-    />
-  );
+/** This browser is signed out by its own kill: clear it and leave the CRM. */
+async function leaveAfterKill() {
+  await wipeThisBrowser();
+  // Try to close this tab — only works if a script opened it (bot agents,
+  // pop-outs). Browsers refuse to close a user-opened tab, so if it's still
+  // here a beat later, navigate away from the CRM entirely. replace(), not
+  // href: it overwrites this history entry so Back can't return to the CRM.
+  window.close();
+  setTimeout(() => {
+    window.location.replace("https://google.com");
+  }, 150);
 }
 
 /**
- * Compact header button + its confirm dialog, for the top-right nav. Visible
- * to any signed-in user. Polls the switch state so it can flash red while the
- * switch is active (a running kill is something the whole team should see).
+ * The kill switch, by casino.
+ *
+ * Someone with one casino goes straight to the confirmation for it. A leader
+ * with several — and the admin, who also has "All casinos" — picks first.
+ * Each casino's own state is shown, so a stopped one can be released here too.
+ */
+function KillPanel({
+  open,
+  onOpenChange,
+  state,
+  onChanged,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  state: KillState | null;
+  onChanged: () => void;
+}) {
+  const [picked, setPicked] = useState<Set<number | "all">>(new Set());
+  const [confirm, setConfirm] = useState<{ action: "activate" | "release"; target: KillTarget } | null>(null);
+
+  const casinos = state?.casinos ?? [];
+  const single = !state?.canGlobal && casinos.length === 1 ? casinos[0] : null;
+
+  // One casino: no picker — the confirmation is the whole flow.
+  useEffect(() => {
+    if (!open || !single) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setConfirm({ action: single.active ? "release" : "activate", target: [single.id] });
+    onOpenChange(false);
+  }, [open, single, onOpenChange]);
+
+  const nameOf = (target: KillTarget) =>
+    target === "all"
+      ? "All casinos"
+      : target.map((id) => casinos.find((c) => c.id === id)?.name ?? `#${id}`).join(", ");
+
+  const toggle = (k: number | "all") =>
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      return next;
+    });
+  const pickedTarget = (): KillTarget | null =>
+    picked.has("all") ? "all" : picked.size ? ([...picked] as number[]) : null;
+
+  const run = async (action: "activate" | "release", target: KillTarget) => {
+    try {
+      const { signedOut } = await postKillSwitch(action, target);
+      if (action === "activate" && (signedOut || target === "all")) {
+        await leaveAfterKill();
+        return;
+      }
+      toast.success(
+        action === "activate"
+          ? `Kill switch on for ${nameOf(target)} — its bots are stopped, its CS signed out`
+          : `Kill switch released for ${nameOf(target)} — its bots may reconnect`,
+      );
+      setPicked(new Set());
+      onChanged();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed");
+    }
+  };
+
+  const target = confirm?.target;
+  return (
+    <>
+      <Dialog open={open && !single} onOpenChange={onOpenChange}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Kill switch — pick the casino</DialogTitle>
+            <DialogDescription>
+              A stopped casino&apos;s bots get a stop-and-wipe order on their next poll, and
+              its CS are signed out. Other casinos keep running.
+            </DialogDescription>
+          </DialogHeader>
+          <ul className="max-h-72 divide-y overflow-y-auto rounded-md border">
+            {state?.canGlobal && (
+              <li className="flex items-center gap-2 px-3 py-2 text-[13px]">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 cursor-pointer"
+                  checked={picked.has("all")}
+                  onChange={() => toggle("all")}
+                />
+                <span className="flex-1 font-semibold text-red-700 dark:text-red-400">
+                  All casinos (everyone signed out)
+                </span>
+                {state.global.active && (
+                  <span className="rounded-full bg-red-600 px-2 py-0.5 text-[10px] font-bold text-white">
+                    STOPPED
+                  </span>
+                )}
+              </li>
+            )}
+            {casinos.map((c) => (
+              <li key={c.id} className="flex items-center gap-2 px-3 py-2 text-[13px]">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 cursor-pointer"
+                  disabled={picked.has("all")}
+                  checked={picked.has(c.id) || picked.has("all")}
+                  onChange={() => toggle(c.id)}
+                />
+                <span className="flex-1">{c.name}</span>
+                {c.active && (
+                  <span className="rounded-full bg-red-600 px-2 py-0.5 text-[10px] font-bold text-white">
+                    STOPPED
+                  </span>
+                )}
+              </li>
+            ))}
+            {!casinos.length && !state?.canGlobal && (
+              <li className="px-3 py-3 text-center text-[12px] text-muted-foreground">
+                No casino to stop.
+              </li>
+            )}
+          </ul>
+          <div className="flex justify-end gap-2 pt-1">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={!pickedTarget()}
+              className="cursor-pointer"
+              onClick={() => {
+                const t = pickedTarget();
+                if (!t) return;
+                onOpenChange(false);
+                setConfirm({ action: "release", target: t });
+              }}
+            >
+              Release
+            </Button>
+            <Button
+              type="button"
+              disabled={!pickedTarget()}
+              className="cursor-pointer bg-red-600 text-white hover:bg-red-700"
+              onClick={() => {
+                const t = pickedTarget();
+                if (!t) return;
+                onOpenChange(false);
+                setConfirm({ action: "activate", target: t });
+              }}
+            >
+              <OctagonAlert className="h-3.5 w-3.5" />
+              Stop
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {confirm && target && (
+        <ConfirmActionDialog
+          open
+          onOpenChange={(o) => {
+            if (!o) setConfirm(null);
+          }}
+          title={
+            confirm.action === "activate"
+              ? `KILL SWITCH — ${nameOf(target)}`
+              : `Release the kill switch — ${nameOf(target)}?`
+          }
+          description={
+            confirm.action === "activate"
+              ? target === "all"
+                ? "Every bot gets a stop-and-wipe order on its next poll (delete local credentials, config and data; clear and close its browsers; don't reconnect), and every CRM sign-in is invalidated — you included."
+                : "This casino's bots get a stop-and-wipe order on their next poll (delete local credentials, config and data; clear and close their browsers; don't reconnect), and its CS are signed out. Other casinos keep running."
+              : "Re-opens the bot API for these casinos so their agents can reconnect. Anyone signed out stays signed out — they just log in again."
+          }
+          summary={
+            confirm.action === "activate"
+              ? [
+                  { label: "Casinos", value: nameOf(target), emphasis: true },
+                  { label: "Their bots", value: "Stop + wipe on next poll" },
+                  { label: "Signed out", value: target === "all" ? "Everyone, you included" : "Their CS" },
+                ]
+              : [
+                  { label: "Casinos", value: nameOf(target), emphasis: true },
+                  { label: "Bot API", value: "Re-opened" },
+                ]
+          }
+          confirmLabel={confirm.action === "activate" ? "STOP" : "Release"}
+          tone={confirm.action === "activate" ? "danger" : "default"}
+          onConfirm={async () => {
+            await run(confirm.action, target);
+            setConfirm(null);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+/** Polls the switch state for the header button and the settings card. */
+function useKillState(enabled: boolean) {
+  const [state, setState] = useState<KillState | null>(null);
+  const load = useCallback(async () => {
+    const s = await fetchKillState();
+    if (s) setState(s);
+  }, []);
+  useEffect(() => {
+    if (!enabled) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void load();
+    const t = setInterval(load, 15_000);
+    return () => clearInterval(t);
+  }, [enabled, load]);
+  return { state, load };
+}
+
+/** Anything this user can see stopped — flashes the header button red. */
+const anyStopped = (s: KillState | null) =>
+  !!s && (s.global.active || s.casinos.some((c) => c.active));
+
+/**
+ * Compact header button + its panel, for the top-right nav. Visible to any
+ * signed-in user. Flashes while any casino they can see is stopped.
  */
 export function KillSwitchHeaderButton() {
   const me = useStore((s) => s.me);
   const [open, setOpen] = useState(false);
-  const [active, setActive] = useState(false);
-
-  useEffect(() => {
-    if (!me) return;
-    let alive = true;
-    const check = async () => {
-      try {
-        const res = await fetch("/api/kill-switch");
-        if (!res.ok) return;
-        const data = (await res.json()) as { kill_switch?: KillSwitchState };
-        if (alive) setActive(!!data.kill_switch?.active);
-      } catch {
-        // transient; next tick retries
-      }
-    };
-    void check();
-    const t = setInterval(check, 15_000);
-    return () => {
-      alive = false;
-      clearInterval(t);
-    };
-  }, [me]);
+  const { state, load } = useKillState(!!me);
+  const active = anyStopped(state);
 
   if (!me) return null;
   return (
     <>
       <button
         type="button"
-        onClick={() => setOpen(true)}
+        onClick={() => {
+          void load();
+          setOpen(true);
+        }}
         aria-label="Emergency kill switch"
         title="Emergency kill switch (Ctrl+Alt+Delete)"
         className={
@@ -208,12 +380,7 @@ export function KillSwitchHeaderButton() {
         <OctagonAlert className="h-4 w-4 shrink-0" />
         <span className="hidden sm:inline">{active ? "Bots stopped" : "Kill switch"}</span>
       </button>
-      <KillConfirm
-        open={open}
-        onOpenChange={setOpen}
-        active={active}
-        onReleased={() => setActive(false)}
-      />
+      <KillPanel open={open} onOpenChange={setOpen} state={state} onChanged={load} />
     </>
   );
 }
@@ -222,6 +389,7 @@ export function KillSwitchHeaderButton() {
 export function KillSwitchListener() {
   const me = useStore((s) => s.me);
   const [open, setOpen] = useState(false);
+  const [state, setState] = useState<KillState | null>(null);
 
   useEffect(() => {
     if (!me) return;
@@ -235,7 +403,10 @@ export function KillSwitchListener() {
       ) {
         e.preventDefault();
         e.stopPropagation();
-        setOpen(true);
+        void fetchKillState().then((s) => {
+          setState(s);
+          setOpen(true);
+        });
       }
     };
     window.addEventListener("keydown", onKey, true);
@@ -243,33 +414,27 @@ export function KillSwitchListener() {
   }, [me]);
 
   if (!me) return null;
-  return <KillConfirm open={open} onOpenChange={setOpen} />;
+  return (
+    <KillPanel
+      open={open}
+      onOpenChange={setOpen}
+      state={state}
+      onChanged={() => void fetchKillState().then(setState)}
+    />
+  );
 }
 
-/** Settings-page card: current state, activate/release. Any signed-in user. */
+/** Settings-page card: what is stopped now, and the panel. Any signed-in user. */
 export function KillSwitchCard() {
   const me = useStore((s) => s.me);
-  const [state, setState] = useState<KillSwitchState | null>(null);
   const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-
-  const load = useCallback(async () => {
-    try {
-      const res = await fetch("/api/kill-switch");
-      if (!res.ok) return;
-      const data = (await res.json()) as { kill_switch?: KillSwitchState };
-      setState(data.kill_switch ?? { active: false });
-    } catch {
-      // leave as unknown; the card still renders the activate path
-    }
-  }, []);
-  useEffect(() => {
-    // Fetch-on-mount; setState happens after the await.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void load();
-  }, [load]);
+  const { state, load } = useKillState(!!me);
 
   if (!me) return null;
+  const stopped = [
+    ...(state?.global.active ? [{ name: "All casinos", ...state.global }] : []),
+    ...(state?.casinos.filter((c) => c.active) ?? []),
+  ];
 
   return (
     <Card className="border-red-300/60 dark:border-red-900">
@@ -278,7 +443,7 @@ export function KillSwitchCard() {
           <OctagonAlert className="h-4 w-4" />
           Emergency Kill Switch
         </CardTitle>
-        {state?.active && (
+        {stopped.length > 0 && (
           <span className="rounded-full bg-red-600 px-2 py-0.5 text-[10px] font-bold text-white">
             ACTIVE
           </span>
@@ -286,54 +451,33 @@ export function KillSwitchCard() {
       </CardHeader>
       <CardContent className="space-y-3">
         <p className="text-[12px] leading-snug text-muted-foreground">
-          Cuts every agent off with an order to stop, wipe local credentials,
-          configuration and data, and close its browser (cache and cookies
-          included) — and signs out every CRM session, yours included. Shortcut:{" "}
+          Stops a casino&apos;s bots with an order to stop, wipe local credentials,
+          configuration and data, and close their browsers — and signs out that
+          casino&apos;s CS. Other casinos keep running. Shortcut:{" "}
           <kbd className="rounded border border-border bg-muted px-1 text-[10px] font-semibold">
             Ctrl+Alt+Delete
           </kbd>
         </p>
-        {state?.active ? (
-          <div className="space-y-2">
-            <p className="flex items-center gap-1.5 text-[12px] text-red-700 dark:text-red-400">
-              <ShieldAlert className="h-3.5 w-3.5" />
-              Activated {state.activated_at?.slice(0, 16).replace("T", " ")} by{" "}
-              {state.activated_by ?? "unknown"} — the bot API is closed.
-            </p>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={busy}
-              className="cursor-pointer"
-              onClick={async () => {
-                setBusy(true);
-                try {
-                  await postKillSwitch("release");
-                  toast.success("Kill switch released — bot API re-opened");
-                  await load();
-                } catch (e) {
-                  toast.error(e instanceof Error ? e.message : "Failed");
-                } finally {
-                  setBusy(false);
-                }
-              }}
-            >
-              Release — re-open the bot API
-            </Button>
-          </div>
-        ) : (
-          <Button
-            size="sm"
-            disabled={busy}
-            onClick={() => setOpen(true)}
-            className="cursor-pointer bg-red-600 text-white hover:bg-red-700"
-          >
-            <OctagonAlert className="h-3.5 w-3.5" />
-            Activate kill switch
-          </Button>
-        )}
+        {stopped.map((s) => (
+          <p key={s.name} className="flex items-center gap-1.5 text-[12px] text-red-700 dark:text-red-400">
+            <ShieldAlert className="h-3.5 w-3.5" />
+            {s.name} stopped {s.activated_at?.slice(0, 16).replace("T", " ")} by{" "}
+            {s.activated_by ?? "unknown"}
+          </p>
+        ))}
+        <Button
+          size="sm"
+          onClick={() => {
+            void load();
+            setOpen(true);
+          }}
+          className="cursor-pointer bg-red-600 text-white hover:bg-red-700"
+        >
+          <OctagonAlert className="h-3.5 w-3.5" />
+          {stopped.length ? "Stop or release a casino" : "Stop a casino"}
+        </Button>
       </CardContent>
-      <KillConfirm open={open} onOpenChange={setOpen} />
+      <KillPanel open={open} onOpenChange={setOpen} state={state} onChanged={load} />
     </Card>
   );
 }
