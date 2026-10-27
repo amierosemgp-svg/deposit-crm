@@ -50,7 +50,8 @@ export async function POST(
 
     const parsed = bodySchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return jsonError("Provide game_name");
-    const { game_name, skip_bot = false, note } = parsed.data;
+    // By hand unless the agent is asked for — see ReferralBonusTab.
+    const { game_name, skip_bot = true, note } = parsed.data;
 
     const result = await db.transaction(async (txn) => {
       const [bonus] = await txn

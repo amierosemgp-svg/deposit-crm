@@ -43,7 +43,9 @@ const STATUS_STYLE: Record<Bonus["status"], string> = {
 export function ReferralBonusTab({ playerId }: { playerId: number }) {
   const [assigning, setAssigning] = useState<number | null>(null);
   const [game, setGame] = useState("");
-  const [skipBot, setSkipBot] = useState(false);
+  // By hand unless CS picks the agent: the agent isn't running every desk,
+  // and a bonus queued to an agent that never answers just fails.
+  const [skipBot, setSkipBot] = useState(true);
   const [busy, setBusy] = useState(false);
   const [version, setVersion] = useState(0);
 
@@ -107,7 +109,7 @@ export function ReferralBonusTab({ playerId }: { playerId: number }) {
   function startAssign(bonusId: number) {
     setAssigning(bonusId);
     setGame(uplineGames[0] ?? "");
-    setSkipBot(false);
+    setSkipBot(true);
   }
 
   async function confirmAssign(bonus: Bonus) {
