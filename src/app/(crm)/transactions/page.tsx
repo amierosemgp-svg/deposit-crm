@@ -125,36 +125,36 @@ type TabKey =
  */
 const COLUMN_KEYS = {
   deposit: [
-    "assign", "member", "product", "username", "amount", "bonuspct", "bonus",
+    "id", "assign", "member", "product", "username", "amount", "bonuspct", "bonus",
     "total", "bank", "mode", "status", "date", "time", "remark", "bankdesc",
   ],
   withdrawal: [
-    "assign", "member", "product", "username", "amount", "bank", "account",
+    "id", "assign", "member", "product", "username", "amount", "bank", "account",
     "holder", "paidfrom", "mode", "status", "date", "time", "remark2",
   ],
   freecredit: [
-    "assign", "member", "product", "username", "amount", "mode", "remark",
+    "id", "assign", "member", "product", "username", "amount", "mode", "remark",
     "status", "date", "time",
   ],
   transfer: [
-    "assign", "member", "from", "username", "to", "to_username", "amount",
+    "id", "assign", "member", "from", "username", "to", "to_username", "amount",
     "mode", "status", "date", "time", "note",
   ],
-  expense: ["assign", "date", "category", "description", "amount", "company", "paidfrom", "notes"],
+  expense: ["id", "assign", "date", "category", "description", "amount", "company", "paidfrom", "notes"],
   // Cash a leader took out of a company bank account (see Bank Accounts).
-  leaderwithdrawal: ["assign", "date", "time", "account", "amount", "takenby", "notes", "status"],
+  leaderwithdrawal: ["id", "assign", "date", "time", "account", "amount", "takenby", "notes", "status"],
   // Generated rebate payouts, every plan together — read-only, paid from here.
   rebate: [
-    "plan", "window", "member", "name", "product", "username", "deposits",
+    "id", "plan", "window", "member", "name", "product", "username", "deposits",
     "withdrawals", "loss", "pct", "amount", "status", "paidby", "paidat",
   ],
   // Settlements between leaders (super-admin only).
   leadertransfer: [
-    "assign", "date", "time", "from", "fromcasino", "fromaccount", "to", "tocasino", "toaccount",
+    "id", "assign", "date", "time", "from", "fromcasino", "fromaccount", "to", "tocasino", "toaccount",
     "amount", "note",
   ],
   // Money someone paid out of their own pocket that the company owes back.
-  claim: ["assign", "date", "claimant", "company", "amount", "reason", "paidinto", "status", "notes"],
+  claim: ["id", "assign", "date", "claimant", "company", "amount", "reason", "paidinto", "status", "notes"],
 } as const satisfies Record<TabKey, readonly string[]>;
 
 type ColKey<T extends TabKey> = (typeof COLUMN_KEYS)[T][number];
@@ -1411,8 +1411,14 @@ export default function TransactionsPage() {
       options: ASSIGN_SUGGESTIONS,
       placeholder: "yes / no",
     };
-    const order = <T extends TabKey>(tab: T, defs: Record<ColKey<T>, Def>): SheetColumn[] =>
-      (COLUMN_KEYS[tab] as readonly ColKey<T>[]).map((key) => ({ key, ...defs[key] }));
+    // Every sheet opens with the row's own number — the Ref another sheet
+    // (Staff Penalty) looks it up by. Saved rows only; never typed.
+    const idCol: Def = { label: "ID", width: 76, align: "right" };
+    const order = <T extends TabKey>(tab: T, defs: Record<Exclude<ColKey<T>, "id">, Def>): SheetColumn[] =>
+      (COLUMN_KEYS[tab] as readonly ColKey<T>[]).map((key) => ({
+        key,
+        ...(key === "id" ? idCol : (defs as Record<string, Def>)[key]),
+      }));
     return {
       deposit: order("deposit", {
         assign,
@@ -1924,6 +1930,7 @@ export default function TransactionsPage() {
           id: d.deposit_id,
           tone: depositTone(d.status),
           cells: toCells("deposit", {
+            id: String(d.deposit_id),
             assign: assignCell(d.assigned_to_user_id, d.handled_by_user_id),
             member: d.player_username ?? p?.username ?? "",
             product: d.selected_game ?? "",
@@ -1973,6 +1980,7 @@ export default function TransactionsPage() {
           id: w.withdrawal_id,
           tone: withdrawalTone(w.status),
           cells: toCells("withdrawal", {
+            id: String(w.withdrawal_id),
             assign: assignCell(w.assigned_to_user_id, w.handled_by_user_id),
             member: p?.username ?? "",
             product: w.game_name,
@@ -2034,6 +2042,7 @@ export default function TransactionsPage() {
               ? transferTone(transfer.status)
               : ("warning" as const),
           cells: toCells("freecredit", {
+            id: String(f.transaction_id),
             assign: assignCell(f.user_id),
             member: p?.username ?? "",
             product: f.game_name ?? "",
@@ -2070,6 +2079,7 @@ export default function TransactionsPage() {
           id: t.transfer_id,
           tone: transferTone(t.status),
           cells: toCells("transfer", {
+            id: String(t.transfer_id),
             assign: assignCell(t.assigned_to_user_id, t.handled_by_user_id),
             member: p?.username ?? "",
             from: t.from_game,
@@ -2111,6 +2121,7 @@ export default function TransactionsPage() {
         id: e.expense_id,
         tone: "default" as const,
         cells: toCells("expense", {
+          id: String(e.expense_id),
           assign: assignCell(e.recorded_by_user_id),
           date: sheetDate(e.expense_date),
           category: EXPENSE_CATEGORY_LABEL[e.category] ?? e.category,
@@ -2142,6 +2153,7 @@ export default function TransactionsPage() {
         // the sheet should say so at a glance.
         tone: c.status === "settled" ? ("muted" as const) : ("default" as const),
         cells: toCells("claim", {
+          id: String(c.claim_id),
           assign: assignCell(c.recorded_by_user_id),
           date: sheetDate(c.occurred_at),
           claimant: userName(c.claimed_by_user_id),
@@ -2177,6 +2189,7 @@ export default function TransactionsPage() {
           id: c.cash_out_id,
           tone: c.reversed_at ? ("muted" as const) : ("default" as const),
           cells: toCells("leaderwithdrawal", {
+            id: String(c.cash_out_id),
             assign: assignCell(c.recorded_by_user_id),
             date: sheetDate(c.occurred_at),
             time: formatClock(c.occurred_at),
@@ -2214,6 +2227,7 @@ export default function TransactionsPage() {
         id: r.payout_id,
         tone: tone(r.live_status),
         cells: toCells("rebate", {
+          id: String(r.payout_id),
           plan: `${r.plan_name} · ${BONUS_PERIOD_LABELS[r.period]}`,
           window: `${sheetDate(r.window_start)} – ${sheetDate(r.window_end)}`,
           member: r.username,
@@ -2249,6 +2263,7 @@ export default function TransactionsPage() {
         id: t.transfer_id,
         tone: "default" as const,
         cells: toCells("leadertransfer", {
+          id: String(t.transfer_id),
           assign: assignCell(t.created_by_user_id),
           date: sheetDate(t.created_at),
           time: formatClock(t.created_at),
@@ -3488,6 +3503,7 @@ export default function TransactionsPage() {
   const committedEditable = useCallback(
     (rowIndex: number, colIndex: number): boolean => {
       if (isViewer) return false;
+      if (colIndex === COL[tab].id) return false;
 
       /**
        * Any manual row's cells edit in place, whoever holds it.
@@ -5749,7 +5765,6 @@ export default function TransactionsPage() {
         focusKey={`${tab}:${hydrated}`}
         loading={rowsLoading}
         loadingMore={rowsLoadingMore}
-        showRowIds
       />
       </>
       )}
