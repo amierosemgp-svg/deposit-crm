@@ -3131,7 +3131,10 @@ export default function TransactionsPage() {
       transfer: {
         url: (id) => `/api/game-transfers/${id}`,
         manual: (id) => {
-          const t = gameTransfers.find((x) => x.transfer_id === id);
+          // The range rows too — the store holds only the newest 200.
+          const t =
+            ((rangeRows.transfer?.rows ?? []) as GameTransfer[]).find((x) => x.transfer_id === id) ??
+            gameTransfers.find((x) => x.transfer_id === id);
           return !!t && t.skip_bot === true && (t.status === "completed" || t.status === "failed");
         },
         locked: ["mode"],
@@ -3154,7 +3157,7 @@ export default function TransactionsPage() {
         },
       },
     }),
-    [freeCredits, gameTransfers],
+    [freeCredits, gameTransfers, rangeRows.transfer],
   );
 
   const editByReparse = useCallback(
@@ -3274,11 +3277,18 @@ export default function TransactionsPage() {
 
   // ---- in-place edits & workflow actions on saved rows ----
 
+  /**
+   * Every transfer the sheet can show, by id: the range rows as well as the
+   * store's slice, which holds only the newest 200 across every casino. With
+   * the slice alone, selecting an older row selected nothing, and Delete and
+   * Retry never appeared for it — the same reason depositById merges both.
+   */
   const transferByIdMap = useMemo(() => {
     const m = new Map<number, GameTransfer>();
+    for (const t of (rangeRows.transfer?.rows ?? []) as GameTransfer[]) m.set(t.transfer_id, t);
     for (const t of gameTransfers) m.set(t.transfer_id, t);
     return m;
-  }, [gameTransfers]);
+  }, [gameTransfers, rangeRows.transfer]);
   const claimById = useMemo(() => {
     const m = new Map<number, Claim>();
     for (const c of claims) m.set(c.claim_id, c);
@@ -3344,10 +3354,10 @@ export default function TransactionsPage() {
       if (tab === "deposit") return depositById.get(id)?.assigned_to_user_id ?? null;
       if (tab === "withdrawal") return withdrawalById.get(id)?.assigned_to_user_id ?? null;
       if (tab === "transfer")
-        return gameTransfers.find((t) => t.transfer_id === id)?.assigned_to_user_id ?? null;
+        return transferByIdMap.get(id)?.assigned_to_user_id ?? null;
       return undefined;                   // this sheet has no claims
     },
-    [tab, rows, depositById, withdrawalById, gameTransfers],
+    [tab, rows, depositById, withdrawalById, transferByIdMap],
   );
 
   const committedEditable = useCallback(
