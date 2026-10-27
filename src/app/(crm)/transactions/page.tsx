@@ -4184,14 +4184,16 @@ export default function TransactionsPage() {
     [me],
   );
   /**
-   * A game transfer the server will delete: manual, finished, a real move (not
-   * a credit-in), and keyed by me — or I'm a leader or the admin.
+   * A game transfer the server will delete: any failed one (it moved nothing),
+   * or a completed manual move that isn't a credit-in — and keyed by me, or
+   * I'm a leader or the admin.
    */
   const deletableTf = selectedTransfers.filter(
     (t) =>
-      t.skip_bot === true &&
-      (t.status === "completed" || t.status === "failed") &&
-      t.from_game.toLowerCase() !== t.to_game.toLowerCase(),
+      t.status === "failed" ||
+      (t.status === "completed" &&
+        t.skip_bot === true &&
+        t.from_game.toLowerCase() !== t.to_game.toLowerCase()),
   );
   const canDeleteTransfer = useCallback(
     (t: GameTransfer) =>

@@ -346,14 +346,15 @@ export async function PATCH(
  * the admin — the same rule as a free credit. Unlike a deposit, a transfer's
  * assignee is a queue marker, not ownership, so it is not what decides here.
  *
- * Manual rows only, for the reason PATCH gives: a transfer the agent ran is its
- * record of a move at the provider. A credit-in belongs to the free credit or
- * referral payout that queued it.
+ * A failed row moved nothing, so any failed row may go — the agent's too, and
+ * a credit-in the agent gave up on (a recommend bonus payout, say). Only the
+ * row is removed; whatever queued it is left as it is, by the desk's choice.
  *
- * A completed move booked four legs, so they come off first — the from-wallet
- * gets the amount back, the to-wallet gives it up, the two kiosk floats swap
- * back — exactly as marking it failed would. A failed move booked nothing, so
- * deleting one only removes the row.
+ * A completed row is held to the rules PATCH gives: manual only (an agent's
+ * transfer is its record of a move at the provider), and not a credit-in (that
+ * belongs to the free credit or referral payout that queued it). Its four legs
+ * come off first — the from-wallet gets the amount back, the to-wallet gives it
+ * up, the two kiosk floats swap back — exactly as marking it failed would.
  */
 export async function DELETE(
   _request: Request,
@@ -392,22 +393,22 @@ export async function DELETE(
             : "That transfer was keyed by someone else — they or a leader have to remove it",
         );
       }
-      if (row.skip_bot !== true) {
+      if (row.status !== "completed" && row.status !== "failed") {
+        throw new AuthError(409, `Transfer is ${row.status} — it can't be deleted until it finishes`);
+      }
+      if (row.status === "completed" && row.skip_bot !== true) {
         throw new AuthError(
           409,
           row.skip_bot === false
-            ? "That transfer is the agent's — only manual rows can be deleted"
-            : "That transfer predates the manual flag — it can't be deleted here",
+            ? "That transfer is the agent's — only manual rows can be deleted once completed"
+            : "That transfer predates the manual flag — it can't be deleted once completed",
         );
       }
-      if (row.from_game.toLowerCase() === row.to_game.toLowerCase()) {
+      if (row.status === "completed" && row.from_game.toLowerCase() === row.to_game.toLowerCase()) {
         throw new AuthError(
           409,
-          "That's a credit-in, not a transfer — remove it from the free credit or referral bonus it pays",
+          "That's a completed credit-in — remove it from the free credit or referral bonus it pays",
         );
-      }
-      if (row.status !== "completed" && row.status !== "failed") {
-        throw new AuthError(409, `Transfer is ${row.status} — it can't be deleted until it finishes`);
       }
 
       const from = await canonicalise(row.from_game, txn);
