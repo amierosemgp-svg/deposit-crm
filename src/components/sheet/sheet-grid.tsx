@@ -826,10 +826,13 @@ function LabelHeaderRow({
   widthOf,
   onResizeStart,
   onResetWidth,
+  corner,
 }: {
   columns: SheetColumn[];
   /** Sticky offset: under the letters row ("top-5") or flush ("top-0"). */
   offset: "top-0" | "top-5";
+  /** Heading over the row-number gutter, e.g. "ID". */
+  corner?: string;
   widthOf: (c: SheetColumn) => number;
   onResizeStart: (key: string, startWidth: number, e: React.MouseEvent) => void;
   onResetWidth: (key: string) => void;
@@ -838,10 +841,12 @@ function LabelHeaderRow({
     <tr className="h-7">
       <th
         className={cn(
-          "sticky left-0 z-30 border-b border-r border-border bg-emerald-700 dark:bg-emerald-800",
+          "sticky left-0 z-30 border-b border-r border-border bg-emerald-700 text-center text-[11px] font-semibold text-white dark:bg-emerald-800",
           offset,
         )}
-      />
+      >
+        {corner}
+      </th>
       {columns.map((c) => (
         <th
           key={c.key}
@@ -917,6 +922,7 @@ export function SheetGrid({
   hasMore = false,
   loadingMore = false,
   loading = false,
+  showRowIds = false,
 }: {
   columns: SheetColumn[];
   rows: SheetRow[];
@@ -1017,6 +1023,12 @@ export function SheetGrid({
   loadingMore?: boolean;
   /** The rows for what the owner is showing haven't arrived yet. */
   loading?: boolean;
+  /**
+   * Number saved rows by their own id instead of 1, 2, 3 — the number a
+   * colleague quotes ("deposit 928466") and other sheets look a row up by.
+   * Entry rows have no id yet, so their gutter only carries ✓ / !.
+   */
+  showRowIds?: boolean;
   suggestionQuery?: (
     rowIndex: number,
     colIndex: number,
@@ -1216,8 +1228,9 @@ export function SheetGrid({
    * Measuring against the header's bottom edge and the gutter's right edge
    * instead means "in view" means what the desk means by it.
    */
+  const gutterWidth = showRowIds ? 60 : 44;
   const scrollCellIntoView = useCallback((r: number, c: number) => {
-    const GUTTER = 44;
+    const GUTTER = gutterWidth;
     const attempt = () => {
       const el = containerRef.current?.querySelector(
         `[data-cell="${r}-${c}"]`,
@@ -1254,7 +1267,7 @@ export function SheetGrid({
      */
     attempt();
     requestAnimationFrame(() => void attempt());
-  }, []);
+  }, [gutterWidth]);
 
   /**
    * Pin the saved-rows scroller to its very top or bottom, and hold it there.
@@ -2552,7 +2565,7 @@ export function SheetGrid({
       >
         <table className="w-full table-fixed border-separate border-spacing-0">
           <colgroup>
-            <col style={{ width: 44 }} />
+            <col style={{ width: gutterWidth }} />
             {columns.map((c) => (
               <col key={c.key} data-col-key={c.key} style={{ width: widthOf(c) }} />
             ))}
@@ -2577,6 +2590,7 @@ export function SheetGrid({
             <LabelHeaderRow
               columns={columns}
               offset="top-5"
+              corner={showRowIds ? "ID" : undefined}
               widthOf={widthOf}
               onResizeStart={startResize}
               onResetWidth={resetWidth}
@@ -2612,7 +2626,8 @@ export function SheetGrid({
               <GridRow
                 key={row.id}
                 rIdx={r}
-                gutter={String(r + 1)}
+                gutter={showRowIds ? String(row.id) : String(r + 1)}
+                gutterTitle={showRowIds ? `ID ${row.id}` : undefined}
                 marker={null}
                 cells={row.cells}
                 columns={columns}
@@ -2691,7 +2706,7 @@ export function SheetGrid({
           >
             <table className="w-full table-fixed border-separate border-spacing-0">
           <colgroup>
-            <col style={{ width: 44 }} />
+            <col style={{ width: gutterWidth }} />
             {entryColumns.map((c) => (
               <col key={c.key} data-col-key={c.key} style={{ width: widthOf(c) }} />
             ))}
@@ -2723,7 +2738,7 @@ export function SheetGrid({
                     <GridRow
                       key={`draft-${i}`}
                       rIdx={r}
-                      gutter={String(r + 1)}
+                      gutter={showRowIds ? "" : String(r + 1)}
                       gutterTitle={status.state === "error" ? status.message : undefined}
                       marker={
                         status.state === "ready"

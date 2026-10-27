@@ -169,7 +169,21 @@ export function useEntryDock<B>({
     [pad, derive],
   );
 
-  return { drafts, onDraftsChange, draftStatus, readyCount, flushRef, saving, commit, patchRow };
+  /** Start a row from outside — the first blank one, with these cells typed. */
+  const addRow = useCallback(
+    (cells: Array<[number, string]>) =>
+      setRaw((prev) => {
+        const base = pad(derive(prev));
+        const row = blank();
+        for (const [i, v] of cells) row[i] = v;
+        const at = base.findIndex(isBlank);
+        if (at === -1) return [...base, row];
+        return base.map((r, i) => (i === at ? row : r));
+      }),
+    [pad, derive, blank, isBlank],
+  );
+
+  return { drafts, onDraftsChange, draftStatus, readyCount, flushRef, saving, commit, patchRow, addRow };
 }
 
 // ---------- cell parsing, the workbook's way ----------

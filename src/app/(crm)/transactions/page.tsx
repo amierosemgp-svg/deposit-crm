@@ -39,7 +39,7 @@ import {
 } from "@/components/sheet/sheet-grid";
 import { CompanyInfoPanel } from "@/components/sheet/company-info-panel";
 import { SalarySheet } from "@/components/staff-pay/salary-sheet";
-import { PenaltySheet } from "@/components/staff-pay/penalty-sheet";
+import { PenaltySheet, type PenaltyPrefill } from "@/components/staff-pay/penalty-sheet";
 import { LeaveSheet } from "@/components/staff-pay/leave-sheet";
 import { CreatePlayerModal } from "@/components/create-player-modal";
 import {
@@ -59,6 +59,7 @@ import {
 import {
   Ban,
   CheckCircle2,
+  CircleAlert,
   HandCoins,
   Loader2,
   Play,
@@ -770,6 +771,8 @@ export default function TransactionsPage() {
    * the toolbar and grid below instead of joining TabKey.
    */
   const [staffTab, setStaffTab] = useState<"salary" | "penalty" | "leave" | null>(null);
+  // "Staff error" on a Deposit / Free Credit row opens Staff Penalty naming it.
+  const [penaltyPrefill, setPenaltyPrefill] = useState<PenaltyPrefill | null>(null);
   // Date range over the sheet: a quick preset, or custom from/to days.
   const [preset, setPreset] = useState<RangePreset | "custom">("this_month");
   const [range, setRange] = useState<DateRange>(() => presetRange("this_month"));
@@ -1104,6 +1107,7 @@ export default function TransactionsPage() {
   const switchTab = useCallback((next: TabKey) => {
     setTab(next);
     setStaffTab(null);
+    setPenaltyPrefill(null);
     setStatusFilters(new Set());
     setSelectedIds([]);
   }, []);
@@ -4077,6 +4081,23 @@ export default function TransactionsPage() {
         : [],
     [tab, selectedNumericIds, freeCreditById],
   );
+  // One deposit or free credit picked: it can be named as a staff mistake.
+  const staffErrorSource = useMemo<Omit<PenaltyPrefill, "nonce"> | null>(() => {
+    if (selectedDeposits.length === 1 && selectedIds.length === 1) {
+      return { source: "deposit", ref: selectedDeposits[0].deposit_id };
+    }
+    if (selectedFreeCredits.length === 1 && selectedIds.length === 1) {
+      return { source: "free_credit", ref: selectedFreeCredits[0].transaction_id };
+    }
+    return null;
+  }, [selectedDeposits, selectedFreeCredits, selectedIds.length]);
+  const handleStaffError = useCallback(() => {
+    if (!staffErrorSource) return;
+    setPenaltyPrefill({ ...staffErrorSource, nonce: Date.now() });
+    setStaffTab("penalty");
+    setSelectedIds([]);
+  }, [staffErrorSource]);
+
   const selectedClaims = useMemo(
     () =>
       tab === "claim"
@@ -5402,6 +5423,7 @@ export default function TransactionsPage() {
             type="button"
             onClick={() => {
               setStaffTab(key);
+              setPenaltyPrefill(null);
               setSelectedIds([]);
             }}
             className={cn(
@@ -5419,7 +5441,7 @@ export default function TransactionsPage() {
       {staffTab === "salary" ? (
         <SalarySheet />
       ) : staffTab === "penalty" ? (
-        <PenaltySheet />
+        <PenaltySheet prefill={penaltyPrefill} />
       ) : staffTab === "leave" ? (
         <LeaveSheet />
       ) : (
@@ -5727,6 +5749,7 @@ export default function TransactionsPage() {
         focusKey={`${tab}:${hydrated}`}
         loading={rowsLoading}
         loadingMore={rowsLoadingMore}
+        showRowIds
       />
       </>
       )}
@@ -5758,6 +5781,18 @@ export default function TransactionsPage() {
                 <User className="h-3 w-3" />
                 Player
                 <ActionKbd action="viewPlayer" />
+              </Button>
+            )}
+            {staffErrorSource && (
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={handleStaffError}
+                title="Record a staff penalty for this row — the CS and credit fill in"
+                className="cursor-pointer gap-1"
+              >
+                <CircleAlert className="h-3 w-3" />
+                Staff error
               </Button>
             )}
             {can.assign && (

@@ -8,7 +8,7 @@
  * without anyone ticking it — the Status column says which salary took it.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Ban, Loader2, RefreshCw, Save, X } from "lucide-react";
 import { SheetGrid, type SheetColumn, type SheetRow } from "@/components/sheet/sheet-grid";
@@ -93,7 +93,10 @@ function sheetDateOf(iso: string): string {
   return `${d.getUTCDate()}/${d.getUTCMonth() + 1}/${d.getUTCFullYear()}`;
 }
 
-export function PenaltySheet() {
+/** A row on another sheet to record a penalty against — pre-fills the dock. */
+export type PenaltyPrefill = { source: "deposit" | "free_credit"; ref: number; nonce: number };
+
+export function PenaltySheet({ prefill = null }: { prefill?: PenaltyPrefill | null } = {}) {
   const me = useStore((s) => s.me);
   const users = useStore((s) => s.users);
   const entityName = useStore((s) => s.entityName);
@@ -294,8 +297,25 @@ export function PenaltySheet() {
     enabled: !isViewer,
   });
 
+  // Sent here by "Staff error" on a Deposit / Free Credit row: start a row
+  // naming it, and the lookup below fills in the CS, the credit and the date.
+  const { drafts, patchRow, addRow } = dock;
+  const prefilled = useRef<number | null>(null);
+  useEffect(() => {
+    if (!prefill || isViewer || prefilled.current === prefill.nonce) return;
+    prefilled.current = prefill.nonce;
+    const named = drafts.some(
+      (row) => parseSource(row[C.source] ?? "") === prefill.source && parseRef(row[C.ref] ?? "") === prefill.ref,
+    );
+    if (!named) {
+      addRow([
+        [C.source, PENALTY_SOURCE_LABEL[prefill.source]],
+        [C.ref, String(prefill.ref)],
+      ]);
+    }
+  }, [prefill, isViewer, drafts, addRow]);
+
   // Look up every ref the dock names that we haven't; fill the blanks it can.
-  const { drafts, patchRow } = dock;
   useEffect(() => {
     const wanted = new Map<string, { source: PenaltySource; ref: number }>();
     for (const row of drafts) {
