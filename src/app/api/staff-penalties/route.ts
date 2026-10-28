@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { deposits, players, salaryAdjustments, staffPenalties, transactions, withdrawals } from "@/db/schema";
+import { deposits, players, salaryAdjustments, staffPenalties, transactions, users, withdrawals } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { getSettingNumber, jsonError } from "@/lib/api-helpers";
 import { logActivity } from "@/lib/activity-log";
@@ -39,6 +39,10 @@ const createSchema = z
  * On a withdrawal — paid out wrong — nothing is unwound: the cash has left
  * the bank, and the CS bears 100% of it unless a share is given.
  *
+ * A leader can be penalised too. They are not on payroll here, so theirs is
+ * recorded (and its Staff Error bonus booked) with nothing deducted — settled
+ * outside the CRM — and filed under the casino the mistake was made in.
+ *
  * Any desk user can record one; voiding is a leader's or the admin's call.
  */
 export async function POST(request: Request) {
@@ -52,15 +56,23 @@ export async function POST(request: Request) {
       // Owning up is fine; it still goes through someone else's hands.
       throw new AuthError(403, "Ask a colleague or your leader to record a penalty against you");
     }
+    // A CS or a leader. A CS's penalty sits with their desk's casino and comes
+    // off their next salary; a leader has no salary here, so theirs is a
+    // record of what they owe, filed under the casino the mistake was made in.
     const cs = await csCasino(db, body.user_id);
-    if (!cs) return jsonError("Penalties are for CS agents — pick one");
-    if (!inCasinoScope(user, cs.casinoId)) throw new AuthError(403, "That CS is outside your organisation");
+    const leader = cs ? null : await activeLeader(body.user_id);
+    if (!cs && !leader) return jsonError("Penalties are for CS agents and leaders — pick one");
+    if (cs && !inCasinoScope(user, cs.casinoId)) throw new AuthError(403, "That CS is outside your organisation");
     if (Number.isNaN(new Date(body.occurred_at).getTime())) return jsonError("Bad date");
+
+    // The casino of the row the mistake was made on, as the checks below find it.
+    let sourceCasinoId: number | null = null;
 
     if (body.player_id != null) {
       const [player] = await db.select().from(players).where(eq(players.player_id, body.player_id));
       if (!player) return jsonError("Player not found", 404);
       if (!inCasinoScope(user, player.company_entity_id)) throw new AuthError(403, "That player is outside your organisation");
+      sourceCasinoId = player.company_entity_id;
     }
 
     if (body.source_type === "deposit" && body.source_id != null) {
@@ -72,6 +84,19 @@ export async function POST(request: Request) {
       if (dep.company_entity_id !== null && !inCasinoScope(user, dep.company_entity_id)) {
         throw new AuthError(403, "That deposit is outside your organisation");
       }
+      sourceCasinoId = dep.company_entity_id ?? sourceCasinoId;
+    }
+
+    if (body.source_type === "free_credit" && body.source_id != null) {
+      const [t] = await db
+        .select({ entity_id: transactions.entity_id })
+        .from(transactions)
+        .where(and(eq(transactions.transaction_id, body.source_id), eq(transactions.type, "game_topup")));
+      if (!t) return jsonError(`No free credit #${body.source_id}`, 404);
+      if (t.entity_id !== null && !inCasinoScope(user, t.entity_id)) {
+        throw new AuthError(403, "That free credit is outside your organisation");
+      }
+      sourceCasinoId = t.entity_id ?? sourceCasinoId;
     }
 
     if (body.source_type === "withdrawal" && body.source_id != null) {
@@ -87,10 +112,18 @@ export async function POST(request: Request) {
       if (owner && !inCasinoScope(user, owner.company_entity_id)) {
         throw new AuthError(403, "That withdrawal is outside your organisation");
       }
+      sourceCasinoId = owner?.company_entity_id ?? sourceCasinoId;
       if (w.status !== "paid") {
         return jsonError(`Withdrawal #${body.source_id} is ${w.status} — nothing has been paid out on it`, 409);
       }
     }
+
+    const casinoId = cs ? cs.casinoId : sourceCasinoId;
+    if (casinoId === null) {
+      return jsonError("A leader's penalty needs the row it was made on — give the Ref or the player");
+    }
+    if (!inCasinoScope(user, casinoId)) throw new AuthError(403, "That casino is outside your organisation");
+    const person = cs?.user ?? leader!;
 
     // A withdrawal paid out wrong is cash gone from the bank, and the CS who
     // paid it bears all of it; everything else takes the house share.
@@ -105,7 +138,7 @@ export async function POST(request: Request) {
         .insert(staffPenalties)
         .values({
           user_id: body.user_id,
-          company_entity_id: cs.casinoId,
+          company_entity_id: casinoId,
           source_type: body.source_type,
           source_id: body.source_id ?? null,
           player_id: body.player_id ?? null,
@@ -120,7 +153,8 @@ export async function POST(request: Request) {
           recorded_by_user_id: user.user_id,
         })
         .returning();
-      await txn.insert(salaryAdjustments).values({
+      // Only a CS has a salary to take it from.
+      if (cs) await txn.insert(salaryAdjustments).values({
         user_id: row.user_id,
         company_entity_id: row.company_entity_id,
         kind: "penalty",
@@ -173,14 +207,14 @@ export async function POST(request: Request) {
       category: "payroll",
       action: "staff_penalty.created",
       summary:
-        `Staff penalty: ${cs.user.full_name} — RM ${penalty.amount.toFixed(2)} ` +
+        `Staff penalty: ${person.full_name}${leader ? " (leader)" : ""} — RM ${penalty.amount.toFixed(2)} ` +
         `(${penalty.share_pct}% of RM ${penalty.loss_amount.toFixed(2)} lost: ` +
         `${penalty.credit_injected.toFixed(2)} credited, ${penalty.credit_retrieved.toFixed(2)} retrieved) — ${penalty.reason}`,
       actor: user,
       companyEntityId: penalty.company_entity_id,
       targetType: "staff_penalty",
       targetId: penalty.penalty_id,
-      targetLabel: cs.user.username,
+      targetLabel: person.username,
       context: { source_type: penalty.source_type, source_id: penalty.source_id },
     });
     return Response.json({ penalty }, { status: 201 });
@@ -189,6 +223,12 @@ export async function POST(request: Request) {
     if (e instanceof InsufficientBankBalanceError) return jsonError(e.message, 422);
     return authErrorResponse(e) ?? (console.error(e), jsonError("Server error", 500));
   }
+}
+
+/** An active company leader, or null. */
+async function activeLeader(userId: number) {
+  const [u] = await db.select().from(users).where(eq(users.user_id, userId));
+  return u && u.role === "company_leader" && u.status === "active" ? u : null;
 }
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
