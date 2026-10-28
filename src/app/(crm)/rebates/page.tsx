@@ -326,6 +326,11 @@ export default function RebatesPage() {
   const [paySkipBot, setPaySkipBot] = useState(true);
 
   function startPay(rows: RebatePayoutView[], single: boolean, windowStart: string) {
+    // Outside a monthly plan's pay days the server refuses it anyway; say why now.
+    if (showing?.pay_closed) {
+      toast.error(showing.pay_closed);
+      return;
+    }
     setPayTarget({ rows, single, windowStart });
     setPayGame(single ? (rows[0]?.game_name ?? "") : "");
     setPaySkipBot(true);
@@ -395,7 +400,7 @@ export default function RebatesPage() {
   function openCutoffs() {
     // data.cutoffs is the plan's casino's own (GET /api/rebates).
     const c = data?.cutoffs ?? DEFAULT_CUTOFFS;
-    setCutoffForm({ daily: { ...c.daily }, weekly: { ...c.weekly }, monthly: { ...c.monthly } });
+    setCutoffForm({ daily: { ...c.daily }, weekly: { ...c.weekly }, monthly: { ...c.monthly, pay_days: c.monthly.pay_days ?? null } });
     setEditingCutoffs(true);
   }
 
@@ -412,6 +417,12 @@ export default function RebatesPage() {
     }
     if (cutoffForm.monthly.day < 1 || cutoffForm.monthly.day > 31) {
       toast.error("Monthly day must be 1–31");
+      return;
+    }
+    const pd = cutoffForm.monthly.pay_days;
+    const dom = (n: number) => Number.isInteger(n) && n >= 1 && n <= 31;
+    if (pd && (!dom(pd.from) || !dom(pd.to))) {
+      toast.error("Payout days must be 1–31");
       return;
     }
     setSavingCutoffs(true);
@@ -523,6 +534,9 @@ export default function RebatesPage() {
                   Resets <span className="font-medium text-foreground">{showing?.cutoff_label ?? "…"}</span>
                   {activePlan.min_loss > 0 && (
                     <> · only losses of {formatRM(activePlan.min_loss)} or more qualify</>
+                  )}
+                  {showing?.pay_closed && (
+                    <span className="text-amber-600 dark:text-amber-400"> · {showing.pay_closed}</span>
                   )}
                 </div>
                 <div className="tabular-nums">
@@ -912,8 +926,65 @@ export default function RebatesPage() {
                 />
               </div>
             </div>
+            <div className="grid grid-cols-[88px_1fr] items-center gap-3">
+              <Label>Payout days</Label>
+              <div className="flex items-center gap-2">
+                <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    className="cursor-pointer"
+                    checked={!!cutoffForm.monthly.pay_days}
+                    disabled={!canEditCutoffs}
+                    onChange={(e) =>
+                      setCutoffForm((f) => ({
+                        ...f,
+                        monthly: { ...f.monthly, pay_days: e.target.checked ? { from: 1, to: 5 } : null },
+                      }))
+                    }
+                  />
+                  Only on
+                </label>
+                {cutoffForm.monthly.pay_days ? (
+                  <>
+                    <span className="text-xs text-muted-foreground">Day</span>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={31}
+                      value={cutoffForm.monthly.pay_days.from}
+                      disabled={!canEditCutoffs}
+                      className="w-16"
+                      onChange={(e) =>
+                        setCutoffForm((f) => ({
+                          ...f,
+                          monthly: { ...f.monthly, pay_days: { from: Number(e.target.value), to: f.monthly.pay_days?.to ?? 5 } },
+                        }))
+                      }
+                    />
+                    <span className="text-xs text-muted-foreground">to</span>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={31}
+                      value={cutoffForm.monthly.pay_days.to}
+                      disabled={!canEditCutoffs}
+                      className="w-16"
+                      onChange={(e) =>
+                        setCutoffForm((f) => ({
+                          ...f,
+                          monthly: { ...f.monthly, pay_days: { from: f.monthly.pay_days?.from ?? 1, to: Number(e.target.value) } },
+                        }))
+                      }
+                    />
+                  </>
+                ) : (
+                  <span className="text-xs text-muted-foreground">any day</span>
+                )}
+              </div>
+            </div>
             <p className="text-xs text-muted-foreground">
               A monthly day past the month&apos;s end (the 31st in April) falls on the month&apos;s last day.
+              Payout days limit when a monthly rebate can be paid, in Malaysia time; daily and weekly plans pay any day.
             </p>
           </div>
           <div className="flex justify-end gap-2">
