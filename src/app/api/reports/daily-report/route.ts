@@ -69,6 +69,11 @@ export async function GET(request: Request) {
     if (p.to) rw.push(sql`${businessDay(RB_AT)} <= ${p.to}::date`);
     if (p.companyId !== null) rw.push(sql`up.company_entity_id = ${p.companyId}`);
 
+    // The instant this row's day ends, MYT. The balance line compares each
+    // movement's own column with it, so the indexes serve the lookups; taking
+    // businessDay() of every row read whole tables once per day of the report.
+    const dayEnd = sql`((s.day + 1)::timestamp AT TIME ZONE ${BUSINESS_TZ})`;
+
     // Bank accounts whose movements make up the balance line.
     const bankScope =
       p.companyId !== null
@@ -168,33 +173,33 @@ export async function GET(request: Request) {
                 FROM bank_accounts ba WHERE ${bankScope})
              - coalesce((SELECT sum(d2.deposit_amount)::float8 FROM deposits d2
                           WHERE d2.status <> 'failed'
-                            AND ${businessDay(sql`d2.deposit_date`)} > s.day
+                            AND d2.deposit_date >= ${dayEnd}
                             AND d2.received_into_account_id IN
                                 (SELECT ba.account_id FROM bank_accounts ba WHERE ${bankScope})), 0)
              + coalesce((SELECT sum(w2.credit_pulled_amount)::float8 FROM withdrawals w2
                           WHERE w2.status = 'paid'
-                            AND ${businessDay(sql`w2.created_at`)} > s.day
+                            AND w2.created_at >= ${dayEnd}
                             AND w2.paid_from_account_id IN
                                 (SELECT ba.account_id FROM bank_accounts ba WHERE ${bankScope})), 0)
              + coalesce((SELECT sum(c2.amount)::float8 FROM bank_cash_outs c2
-                          WHERE ${businessDay(sql`c2.occurred_at`)} > s.day
+                          WHERE c2.occurred_at >= ${dayEnd}
                             AND c2.account_id IN
                                 (SELECT ba.account_id FROM bank_accounts ba WHERE ${bankScope})), 0)
              -- Expenses paid out of these accounts move the balance too, so
              -- winding back past one has to add it in like any other payment.
              + coalesce((SELECT sum(e2.amount)::float8 FROM expenses e2
-                          WHERE ${businessDay(sql`e2.expense_date`)} > s.day
+                          WHERE e2.expense_date >= ${dayEnd}
                             AND e2.paid_from_account_id IN
                                 (SELECT ba.account_id FROM bank_accounts ba WHERE ${bankScope})), 0)
              -- Salaries likewise: paid after this day took money out, and a
              -- reversal after this day put it back.
              + coalesce((SELECT sum(sp2.net_amount)::float8 FROM salary_payments sp2
-                          WHERE ${businessDay(sql`sp2.paid_at`)} > s.day
+                          WHERE sp2.paid_at >= ${dayEnd}
                             AND sp2.paid_from_account_id IN
                                 (SELECT ba.account_id FROM bank_accounts ba WHERE ${bankScope})), 0)
              - coalesce((SELECT sum(sp3.net_amount)::float8 FROM salary_payments sp3
                           WHERE sp3.status = 'reversed'
-                            AND ${businessDay(sql`sp3.reversed_at`)} > s.day
+                            AND sp3.reversed_at >= ${dayEnd}
                             AND sp3.paid_from_account_id IN
                                 (SELECT ba.account_id FROM bank_accounts ba WHERE ${bankScope})), 0)
                                                                     AS bank_balance
