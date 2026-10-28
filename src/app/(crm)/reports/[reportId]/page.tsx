@@ -56,13 +56,24 @@ const WITHDRAWAL_STATUSES: WithdrawalStatus[] = [
   "failed",
 ];
 
+// Dates are Malaysia's: before 08:00 the UTC date is still yesterday.
+const MYT_MS = 8 * 3600_000;
+const mytNow = () => new Date(Date.now() + MYT_MS);
 function todayStr() {
-  return new Date().toISOString().slice(0, 10);
+  return mytNow().toISOString().slice(0, 10);
 }
 function daysAgoStr(n: number) {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
+  const d = mytNow();
+  d.setUTCDate(d.getUTCDate() - n);
   return d.toISOString().slice(0, 10);
+}
+/** This month, the 1st to its last day — what every report opens on. */
+function monthStartStr() {
+  return todayStr().slice(0, 8) + "01";
+}
+function monthEndStr() {
+  const d = mytNow();
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
 }
 
 type Cell = { node: React.ReactNode; csv: string | number };
@@ -349,8 +360,8 @@ export default function ReportDetailPage() {
   // for the filter. Every figure comes from /api/reports/* — see ReportApi.
   const companies = useStore((s) => s.companies)();
 
-  const [dateFrom, setDateFrom] = useState(daysAgoStr(7));
-  const [dateTo, setDateTo] = useState(todayStr());
+  const [dateFrom, setDateFrom] = useState(monthStartStr);
+  const [dateTo, setDateTo] = useState(monthEndStr);
   const [companyId, setCompanyId] = useState("all");
   const [status, setStatus] = useState("all");
   const [query, setQuery] = useState("");
@@ -1264,8 +1275,11 @@ export default function ReportDetailPage() {
         ? DEPOSIT_STATUSES
         : null;
 
-  function setPreset(days: number | null) {
-    if (days === null) {
+  function setPreset(days: number | "month" | null) {
+    if (days === "month") {
+      setDateFrom(monthStartStr());
+      setDateTo(monthEndStr());
+    } else if (days === null) {
       setDateFrom("");
       setDateTo("");
     } else {
@@ -1413,6 +1427,7 @@ export default function ReportDetailPage() {
             <div className="flex gap-1 pb-0.5">
               {(
                 [
+                  ["Month", "month"],
                   ["Today", 0],
                   ["7D", 7],
                   ["30D", 30],
