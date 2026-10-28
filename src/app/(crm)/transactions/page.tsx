@@ -105,6 +105,9 @@ import {
   type RangePreset,
 } from "@/lib/date-range";
 
+/** Ids, per sheet, of the rows a live staff penalty names. */
+type StaffErrorFlags = { deposit: Set<number>; withdrawal: Set<number>; free_credit: Set<number> };
+
 type TabKey =
   | "deposit"
   | "withdrawal"
@@ -776,6 +779,27 @@ export default function TransactionsPage() {
   const [staffTab, setStaffTab] = useState<"salary" | "penalty" | "leave" | null>(null);
   // "Staff error" on a Deposit / Free Credit row opens Staff Penalty naming it.
   const [penaltyPrefill, setPenaltyPrefill] = useState<PenaltyPrefill | null>(null);
+  const [staffErrorFlags, setStaffErrorFlags] = useState<StaffErrorFlags | null>(null);
+  const loadStaffErrorFlags = useCallback(async () => {
+    try {
+      const res = await fetch("/api/staff-penalties/flags");
+      if (!res.ok) return;
+      const d = (await res.json()) as { flags: Record<keyof StaffErrorFlags, number[]> };
+      setStaffErrorFlags({
+        deposit: new Set(d.flags.deposit),
+        withdrawal: new Set(d.flags.withdrawal),
+        free_credit: new Set(d.flags.free_credit),
+      });
+    } catch {
+      // Only the yellow marking is lost; the sheets work without it.
+    }
+  }, []);
+  // On load, and each time the desk comes back from the staff sheets (where
+  // a penalty may just have been recorded or voided).
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (staffTab === null) void loadStaffErrorFlags();
+  }, [staffTab, loadStaffErrorFlags]);
   // Date range over the sheet: a quick preset, or custom from/to days.
   const [preset, setPreset] = useState<RangePreset | "custom">("this_month");
   const [range, setRange] = useState<DateRange>(() => presetRange("this_month"));
@@ -2309,7 +2333,20 @@ export default function TransactionsPage() {
     expense: expenseRows,
     claim: claimRows,
   };
-  const rows = rowsByTab[tab];
+  // Rows a staff penalty names go yellow, so the desk spots them.
+  const flagIds =
+    tab === "deposit"
+      ? staffErrorFlags?.deposit
+      : tab === "withdrawal"
+        ? staffErrorFlags?.withdrawal
+        : tab === "freecredit"
+          ? staffErrorFlags?.free_credit
+          : undefined;
+  const tabRows = rowsByTab[tab];
+  const rows = useMemo(() => {
+    if (!flagIds?.size) return tabRows;
+    return tabRows.map((r) => (flagIds.has(Number(r.id)) ? { ...r, flag: "staff_error" as const } : r));
+  }, [tabRows, flagIds]);
 
   // ---- bonus-plan typeahead for the deposit Bonus % cell ----
 
@@ -5696,7 +5733,7 @@ export default function TransactionsPage() {
             className="h-8 cursor-pointer gap-1.5"
             onClick={async () => {
               setRefreshing(true);
-              await Promise.all([refresh(), loadLedgers()]);
+              await Promise.all([refresh(), loadLedgers(), loadStaffErrorFlags()]);
               setRefreshing(false);
             }}
           >
