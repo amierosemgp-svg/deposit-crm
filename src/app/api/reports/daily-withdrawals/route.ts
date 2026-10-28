@@ -4,7 +4,7 @@ import { authErrorResponse, requireUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import {
   all,
-  businessDay,
+  inBusinessDays,
   parseReportParams,
   scopeByPlayerAsOf,
   searchAcross,
@@ -24,8 +24,7 @@ export async function GET(request: Request) {
     if ("error" in p) return jsonError(p.error);
 
     const w: SQL[] = [...scopeByPlayerAsOf(user, sql`wd.created_at`)];
-    if (p.from) w.push(sql`${businessDay(sql`wd.created_at`)} >= ${p.from}::date`);
-    if (p.to) w.push(sql`${businessDay(sql`wd.created_at`)} <= ${p.to}::date`);
+    w.push(...inBusinessDays(sql`wd.created_at`, p.from ?? null, p.to ?? null));
     if (p.companyId !== null) w.push(sql`pl.company_entity_id = ${p.companyId}`);
     if (p.status !== "all") w.push(sql`wd.status::text = ${p.status}`);
     if (p.q) {

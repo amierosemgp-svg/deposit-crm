@@ -6,6 +6,7 @@ import {
   IS_FREE_CREDIT,
   all,
   businessDay,
+  inBusinessDays,
   RB_AT,
   DEPOSIT_COUNTS,
   parseReportParams,
@@ -44,18 +45,15 @@ export async function GET(request: Request) {
       ...scopeDepositsAsOf(user, sql`d.deposit_date`),
       DEPOSIT_COUNTS,
     ];
-    if (p.from) dw.push(sql`${businessDay(sql`d.deposit_date`)} >= ${p.from}::date`);
-    if (p.to) dw.push(sql`${businessDay(sql`d.deposit_date`)} <= ${p.to}::date`);
+    dw.push(...inBusinessDays(sql`d.deposit_date`, p.from ?? null, p.to ?? null));
     if (p.companyId !== null) dw.push(sql`d.company_entity_id = ${p.companyId}`);
 
     const ww: SQL[] = [...scopeByPlayerAsOf(user, sql`wd.created_at`), WITHDRAWAL_COUNTS];
-    if (p.from) ww.push(sql`${businessDay(sql`wd.created_at`)} >= ${p.from}::date`);
-    if (p.to) ww.push(sql`${businessDay(sql`wd.created_at`)} <= ${p.to}::date`);
+    ww.push(...inBusinessDays(sql`wd.created_at`, p.from ?? null, p.to ?? null));
     if (p.companyId !== null) ww.push(sql`pl.company_entity_id = ${p.companyId}`);
 
     const fw: SQL[] = [IS_FREE_CREDIT];
-    if (p.from) fw.push(sql`${businessDay(sql`t.created_at`)} >= ${p.from}::date`);
-    if (p.to) fw.push(sql`${businessDay(sql`t.created_at`)} <= ${p.to}::date`);
+    fw.push(...inBusinessDays(sql`t.created_at`, p.from ?? null, p.to ?? null));
     if (p.companyId !== null) fw.push(sql`t.entity_id = ${p.companyId}`);
     else if (user.ownedEntityIds !== null) {
       fw.push(

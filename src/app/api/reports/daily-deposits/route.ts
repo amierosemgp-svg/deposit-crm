@@ -4,7 +4,7 @@ import { authErrorResponse, requireUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import {
   all,
-  businessDay,
+  inBusinessDays,
   NOT_POINTS_ONLY,
   parseReportParams,
   scopeDepositsAsOf,
@@ -26,8 +26,7 @@ export async function GET(request: Request) {
     if ("error" in p) return jsonError(p.error);
 
     const w: SQL[] = [...scopeDepositsAsOf(user, sql`d.deposit_date`), NOT_POINTS_ONLY];
-    if (p.from) w.push(sql`${businessDay(sql`d.deposit_date`)} >= ${p.from}::date`);
-    if (p.to) w.push(sql`${businessDay(sql`d.deposit_date`)} <= ${p.to}::date`);
+    w.push(...inBusinessDays(sql`d.deposit_date`, p.from ?? null, p.to ?? null));
     if (p.companyId !== null) w.push(sql`d.company_entity_id = ${p.companyId}`);
     if (p.status !== "all") w.push(sql`d.status::text = ${p.status}`);
     if (p.q) {

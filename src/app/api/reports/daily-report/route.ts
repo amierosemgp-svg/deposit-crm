@@ -5,7 +5,9 @@ import { jsonError } from "@/lib/api-helpers";
 import {
   IS_FREE_CREDIT,
   all,
+  BUSINESS_TZ,
   businessDay,
+  inBusinessDays,
   RB_AT,
   DEPOSIT_COUNTS,
   parseReportParams,
@@ -37,13 +39,11 @@ export async function GET(request: Request) {
     if ("error" in p) return jsonError(p.error);
 
     const dw: SQL[] = [...scopeDepositsAsOf(user, sql`d.deposit_date`), DEPOSIT_COUNTS];
-    if (p.from) dw.push(sql`${businessDay(sql`d.deposit_date`)} >= ${p.from}::date`);
-    if (p.to) dw.push(sql`${businessDay(sql`d.deposit_date`)} <= ${p.to}::date`);
+    dw.push(...inBusinessDays(sql`d.deposit_date`, p.from ?? null, p.to ?? null));
     if (p.companyId !== null) dw.push(sql`d.company_entity_id = ${p.companyId}`);
 
     const ww: SQL[] = [...scopeByPlayerAsOf(user, sql`wd.created_at`), WITHDRAWAL_COUNTS];
-    if (p.from) ww.push(sql`${businessDay(sql`wd.created_at`)} >= ${p.from}::date`);
-    if (p.to) ww.push(sql`${businessDay(sql`wd.created_at`)} <= ${p.to}::date`);
+    ww.push(...inBusinessDays(sql`wd.created_at`, p.from ?? null, p.to ?? null));
     if (p.companyId !== null) ww.push(sql`pl.company_entity_id = ${p.companyId}`);
 
     // Free credit has no table: it is a game_topup ledger row with no deposit
@@ -51,8 +51,7 @@ export async function GET(request: Request) {
     // Staff Error bonuses (a penalty's lost credit) stay out: the deposit the
     // mistake was made on is failed, which already took it off sales.
     const fw: SQL[] = [IS_FREE_CREDIT];
-    if (p.from) fw.push(sql`${businessDay(sql`t.created_at`)} >= ${p.from}::date`);
-    if (p.to) fw.push(sql`${businessDay(sql`t.created_at`)} <= ${p.to}::date`);
+    fw.push(...inBusinessDays(sql`t.created_at`, p.from ?? null, p.to ?? null));
     if (p.companyId !== null) fw.push(sql`t.entity_id = ${p.companyId}`);
     else if (user.ownedEntityIds !== null) {
       fw.push(
@@ -115,13 +114,28 @@ export async function GET(request: Request) {
         -- A member counts as new on the day of their FIRST deposit ever, not
         -- the first one inside the report's window: a player who started in
         -- July is not new again because the window opens in August.
+        -- Read as: members who deposited inside the window and never before
+        -- it. Same members as taking everyone's first deposit, but over the
+        -- window's rows rather than the whole table.
         SELECT first_day AS day, count(*)::int AS np FROM (
           SELECT d.player_id,
                  min(${businessDay(sql`d.deposit_date`)}) AS first_day
             FROM deposits d
-           WHERE ${DEPOSIT_COUNTS} AND d.player_id IS NOT NULL
+           WHERE ${all([
+             DEPOSIT_COUNTS,
+             sql`d.player_id IS NOT NULL`,
+             ...inBusinessDays(sql`d.deposit_date`, p.from ?? null, p.to ?? null),
+           ])}
            GROUP BY 1
         ) firsts
+         WHERE ${
+           p.from
+             ? sql`NOT EXISTS (
+                 SELECT 1 FROM deposits d
+                  WHERE d.player_id = firsts.player_id AND ${DEPOSIT_COUNTS}
+                    AND d.deposit_date < (${p.from}::date::timestamp AT TIME ZONE ${BUSINESS_TZ}))`
+             : sql`true`
+         }
          GROUP BY 1
       ), days AS (
         SELECT day FROM dep
