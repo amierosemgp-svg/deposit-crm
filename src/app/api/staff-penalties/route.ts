@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { deposits, players, salaryAdjustments, staffPenalties, transactions } from "@/db/schema";
+import { deposits, players, salaryAdjustments, staffPenalties, transactions, withdrawals } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { getSettingNumber, jsonError } from "@/lib/api-helpers";
 import { logActivity } from "@/lib/activity-log";
@@ -36,6 +36,8 @@ const createSchema = z
  * a Staff Error bonus: the player kept that credit, so the house gave it away.
  * On a deposit it also fails the deposit — the money never came — handing
  * the kiosk back only what was retrieved (see failDepositForStaffError).
+ * On a withdrawal — paid out wrong — nothing is unwound: the cash has left
+ * the bank, and the CS bears 100% of it unless a share is given.
  *
  * Any desk user can record one; voiding is a leader's or the admin's call.
  */
@@ -72,7 +74,29 @@ export async function POST(request: Request) {
       }
     }
 
-    const share = body.share_pct ?? (await getSettingNumber(STAFF_PENALTY_SHARE_KEY, 50));
+    if (body.source_type === "withdrawal" && body.source_id != null) {
+      const [w] = await db
+        .select({ status: withdrawals.status, player_id: withdrawals.player_id })
+        .from(withdrawals)
+        .where(eq(withdrawals.withdrawal_id, body.source_id));
+      if (!w) return jsonError(`No withdrawal #${body.source_id}`, 404);
+      const [owner] = await db
+        .select({ company_entity_id: players.company_entity_id })
+        .from(players)
+        .where(eq(players.player_id, w.player_id));
+      if (owner && !inCasinoScope(user, owner.company_entity_id)) {
+        throw new AuthError(403, "That withdrawal is outside your organisation");
+      }
+      if (w.status !== "paid") {
+        return jsonError(`Withdrawal #${body.source_id} is ${w.status} — nothing has been paid out on it`, 409);
+      }
+    }
+
+    // A withdrawal paid out wrong is cash gone from the bank, and the CS who
+    // paid it bears all of it; everything else takes the house share.
+    const share =
+      body.share_pct ??
+      (body.source_type === "withdrawal" ? 100 : await getSettingNumber(STAFF_PENALTY_SHARE_KEY, 50));
     const { loss, amount } = penaltyFigures(body.credit_injected, body.credit_retrieved, share);
     if (amount <= 0) return jsonError("That works out to RM 0 — nothing to deduct");
 
@@ -189,6 +213,13 @@ async function sourceGame(
       .from(transactions)
       .where(and(eq(transactions.transaction_id, id), eq(transactions.type, "game_topup")));
     return t?.game || null;
+  }
+  if (type === "withdrawal") {
+    const [w] = await txn
+      .select({ game: withdrawals.game_name })
+      .from(withdrawals)
+      .where(eq(withdrawals.withdrawal_id, id));
+    return w?.game || null;
   }
   return null;
 }

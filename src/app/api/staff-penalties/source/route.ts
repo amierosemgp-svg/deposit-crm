@@ -1,12 +1,12 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { deposits, players, transactions } from "@/db/schema";
+import { deposits, players, transactions, withdrawals } from "@/db/schema";
 import { AuthError, authErrorResponse, requireUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import { inCasinoScope } from "@/lib/salary";
 
 /**
- * GET /api/staff-penalties/source?type=deposit|free_credit&id=N — fill a new
+ * GET /api/staff-penalties/source?type=deposit|free_credit|withdrawal&id=N — fill a new
  * penalty from the row the mistake was made on: who handled it, what was
  * credited (deposit plus bonus — the player could spend both), the player.
  */
@@ -60,7 +60,29 @@ export async function GET(request: Request) {
         },
       });
     }
-    return jsonError("Only a deposit or a free credit can be looked up");
+    if (type === "withdrawal") {
+      const [row] = await db
+        .select({ w: withdrawals, p: players })
+        .from(withdrawals)
+        .leftJoin(players, eq(players.player_id, withdrawals.player_id))
+        .where(eq(withdrawals.withdrawal_id, id));
+      if (!row) return jsonError(`No withdrawal #${id}`, 404);
+      if (row.p && !inCasinoScope(user, row.p.company_entity_id)) {
+        throw new AuthError(403, "That withdrawal is outside your organisation");
+      }
+      // What left the bank: the payout is the credit pulled.
+      return Response.json({
+        source: {
+          user_id: row.w.handled_by_user_id ?? row.w.assigned_to_user_id ?? null,
+          credit_injected: row.w.credit_pulled_amount || row.w.requested_amount,
+          player_id: row.w.player_id,
+          player_label: row.p ? `${row.p.username} · ${row.p.full_name}` : null,
+          occurred_at: row.w.paid_at ?? row.w.created_at,
+          status: row.w.status,
+        },
+      });
+    }
+    return jsonError("Only a deposit, a free credit or a withdrawal can be looked up");
   } catch (e) {
     return authErrorResponse(e) ?? (console.error(e), jsonError("Server error", 500));
   }

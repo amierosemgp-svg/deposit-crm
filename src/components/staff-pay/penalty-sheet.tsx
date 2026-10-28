@@ -3,7 +3,7 @@
 /**
  * The Staff Penalty worksheet tab: credit lost through a CS's mistake and the
  * share they bear. Typed into the NEW ENTRIES dock like any other sheet —
- * name the deposit or free credit by its ref and the CS and what was credited
+ * name the deposit, free credit or withdrawal by its ref and the CS and what was credited
  * fill in; Lost and Penalty work themselves out. Deducted by their next salary
  * without anyone ticking it — the Status column says which salary took it.
  */
@@ -54,7 +54,9 @@ const C = { date: 0, cs: 1, casino: 2, source: 3, ref: 4, injected: 5, retrieved
 const N_COLS = 13;
 
 const SOURCES = Object.entries(PENALTY_SOURCE_LABEL) as Array<[PenaltySource, string]>;
-const LOOKS_UP = (s: PenaltySource | null) => s === "deposit" || s === "free_credit";
+const LOOKS_UP = (s: PenaltySource | null) => s === "deposit" || s === "free_credit" || s === "withdrawal";
+/** A withdrawal paid out wrong is the CS's whole loss, not the house share. */
+const WITHDRAWAL_SHARE = "100%";
 
 type SourceLookup = {
   user_id: number | null;
@@ -62,7 +64,7 @@ type SourceLookup = {
   player_id: number | null;
   player_label: string | null;
   occurred_at: string;
-  /** The deposit's status; null for a free credit. */
+  /** The deposit's or withdrawal's status; null for a free credit. */
   status: string | null;
 };
 type LookupEntry = { source: SourceLookup } | { error: string };
@@ -96,7 +98,7 @@ function sheetDateOf(iso: string): string {
 }
 
 /** A row on another sheet to record a penalty against — pre-fills the dock. */
-export type PenaltyPrefill = { source: "deposit" | "free_credit"; ref: number; nonce: number };
+export type PenaltyPrefill = { source: "deposit" | "free_credit" | "withdrawal"; ref: number; nonce: number };
 
 export function PenaltySheet({ prefill = null }: { prefill?: PenaltyPrefill | null } = {}) {
   const me = useStore((s) => s.me);
@@ -218,7 +220,9 @@ export function PenaltySheet({ prefill = null }: { prefill?: PenaltyPrefill | nu
         else if (l.wanted && l.entry && "source" in l.entry && l.entry.source.player_label) {
           // Saving fails a completed deposit (the money never came) — say so first.
           const fails = l.source === "deposit" && l.entry.source.status === "completed";
-          next[C.status] = `Player ${l.entry.source.player_label}${fails ? " · deposit will be failed" : ""}`;
+          const unpaid = l.source === "withdrawal" && l.entry.source.status !== "paid";
+          const note = fails ? " · deposit will be failed" : unpaid ? ` · withdrawal is ${l.entry.source.status}, not paid` : "";
+          next[C.status] = `Player ${l.entry.source.player_label}${note}`;
         } else if (cs) next[C.status] = "Pending — next salary";
         return next;
       }),
@@ -262,7 +266,7 @@ export function PenaltySheet({ prefill = null }: { prefill?: PenaltyPrefill | nu
       const f = figures(row);
       if (!f) {
         if (parseAmount((row[C.share] ?? "").replace("%", "")) === null) return { ok: false, error: "Share — a percent, like 50%" };
-        return { ok: false, error: "Credited — what went into the player's account" };
+        return { ok: false, error: "Credited — what went into the player's account, or what a withdrawal paid out" };
       }
       if (f.ret < 0 || f.ret >= f.inj) return { ok: false, error: "Retrieved has to be less than what was credited" };
       if (f.pct < 0 || f.pct > 100) return { ok: false, error: "Share is a percent, 0–100" };
@@ -315,6 +319,7 @@ export function PenaltySheet({ prefill = null }: { prefill?: PenaltyPrefill | nu
       addRow([
         [C.source, PENALTY_SOURCE_LABEL[prefill.source]],
         [C.ref, String(prefill.ref)],
+        ...(prefill.source === "withdrawal" ? [[C.share, WITHDRAWAL_SHARE] as [number, string]] : []),
       ]);
     }
   }, [prefill, isViewer, drafts, addRow]);
@@ -358,6 +363,8 @@ export function PenaltySheet({ prefill = null }: { prefill?: PenaltyPrefill | nu
             const next = [...row];
             if (!next[C.injected].trim()) next[C.injected] = String(src.credit_injected);
             if (next[C.date] === todaySheetDate()) next[C.date] = sheetDateOf(src.occurred_at);
+            // Still on the house share the dock started it with → the CS's whole loss.
+            if (key.startsWith("withdrawal:") && next[C.share].trim() === `${sharePct}%`) next[C.share] = WITHDRAWAL_SHARE;
             return next;
           },
         );
@@ -366,7 +373,7 @@ export function PenaltySheet({ prefill = null }: { prefill?: PenaltyPrefill | nu
     return () => {
       live = false;
     };
-  }, [drafts, lookupOf, patchRow]);
+  }, [drafts, lookupOf, patchRow, sharePct]);
 
   /**
    * The CS who keyed the row, once both the lookup and the staff list are in.

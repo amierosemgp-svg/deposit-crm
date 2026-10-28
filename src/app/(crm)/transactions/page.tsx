@@ -4128,7 +4128,7 @@ export default function TransactionsPage() {
         : [],
     [tab, selectedNumericIds, freeCreditById],
   );
-  // One deposit or free credit picked: it can be named as a staff mistake.
+  // One deposit, free credit or withdrawal picked: it can be named as a staff mistake.
   const staffErrorSource = useMemo<Omit<PenaltyPrefill, "nonce"> | null>(() => {
     if (selectedDeposits.length === 1 && selectedIds.length === 1) {
       return { source: "deposit", ref: selectedDeposits[0].deposit_id };
@@ -4136,8 +4136,11 @@ export default function TransactionsPage() {
     if (selectedFreeCredits.length === 1 && selectedIds.length === 1) {
       return { source: "free_credit", ref: selectedFreeCredits[0].transaction_id };
     }
+    if (selectedWithdrawals.length === 1 && selectedIds.length === 1) {
+      return { source: "withdrawal", ref: selectedWithdrawals[0].withdrawal_id };
+    }
     return null;
-  }, [selectedDeposits, selectedFreeCredits, selectedIds.length]);
+  }, [selectedDeposits, selectedFreeCredits, selectedWithdrawals, selectedIds.length]);
   const handleStaffError = useCallback(() => {
     if (!staffErrorSource) return;
     setPenaltyPrefill({ ...staffErrorSource, nonce: Date.now() });
