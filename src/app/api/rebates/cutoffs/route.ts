@@ -15,7 +15,15 @@ const schema = z.object({
   cutoffs: z.object({
     daily: z.object({ time: TIME }),
     weekly: z.object({ weekday: z.number().int().min(0).max(6), time: TIME }),
-    monthly: z.object({ day: z.number().int().min(1).max(31), time: TIME }),
+    monthly: z.object({
+      day: z.number().int().min(1).max(31),
+      time: TIME,
+      // Days a monthly rebate may be paid out; null = any day.
+      pay_days: z
+        .object({ from: z.number().int().min(1).max(31), to: z.number().int().min(1).max(31) })
+        .nullable()
+        .optional(),
+    }),
   }),
 });
 

@@ -7,6 +7,7 @@ import { jsonError } from "@/lib/api-helpers";
 import { logActivity } from "@/lib/activity-log";
 import { issueFreeCredit } from "@/lib/free-credit";
 import { formatShortDate } from "@/lib/format";
+import { loadRebateCutoffs, rebatePayClosed, type RebateCutoffs } from "@/lib/rebates";
 
 const schema = z.object({
   payouts: z
@@ -28,7 +29,8 @@ const schema = z.object({
  * POST /api/rebates/pay — pay pending rebate rows as free credits, one row at
  * a time so a single bad login doesn't stop the rest. Each success flips the
  * row to "paid" with the credit's transfer/ledger ids; each failure is
- * reported back against its payout id and the row stays pending.
+ * reported back against its payout id and the row stays pending. A monthly
+ * plan pays only on its casino's pay days (the 1st–5th, say), if it has any.
  */
 export async function POST(request: Request) {
   try {
@@ -43,6 +45,13 @@ export async function POST(request: Request) {
     const failed: Array<{ payout_id: number; error: string }> = [];
     const planNames = new Set<string>();
     let companyEntityId: number | null = null;
+    // Pay days are the plan's casino's; read once per casino, not per row.
+    const now = new Date();
+    const cutoffCache = new Map<number | null, Promise<RebateCutoffs>>();
+    const cutoffsOf = (casinoId: number | null) => {
+      if (!cutoffCache.has(casinoId)) cutoffCache.set(casinoId, loadRebateCutoffs(casinoId));
+      return cutoffCache.get(casinoId)!;
+    };
 
     for (const item of parsed.data.payouts) {
       try {
@@ -64,6 +73,8 @@ export async function POST(request: Request) {
           }
           if (payout.status === "paid") throw new AuthError(409, "Already paid");
           if (payout.status === "skipped") throw new AuthError(409, "Skipped — unskip it first");
+          const closed = plan.period && rebatePayClosed(plan.period, await cutoffsOf(plan.company_entity_id), now);
+          if (closed) throw new AuthError(409, closed);
 
           const gameName = item.game_name ?? payout.game_name;
           if (!gameName) {
