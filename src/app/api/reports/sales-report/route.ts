@@ -6,6 +6,7 @@ import {
   IS_FREE_CREDIT,
   all,
   businessDay,
+  inBusinessDays,
   RB_AT,
   DEPOSIT_COUNTS,
   parseReportParams,
@@ -34,19 +35,28 @@ export async function GET(request: Request) {
     const p = parseReportParams(request.url);
     if ("error" in p) return jsonError(p.error);
 
-    const dw: SQL[] = [...scopeDepositsAsOf(user, sql`d.deposit_date`), DEPOSIT_COUNTS];
-    if (p.from) dw.push(sql`${businessDay(sql`d.deposit_date`)} >= ${p.from}::date`);
-    if (p.to) dw.push(sql`${businessDay(sql`d.deposit_date`)} <= ${p.to}::date`);
+    // Date bounds go on the columns themselves (inBusinessDays) so the indexes
+    // serve them: wrapped in businessDay() a month of deposits read all 850k
+    // rows, about a minute; bounded, it takes milliseconds.
+    const dw: SQL[] = [
+      ...scopeDepositsAsOf(user, sql`d.deposit_date`),
+      DEPOSIT_COUNTS,
+      ...inBusinessDays(sql`d.deposit_date`, p.from, p.to),
+    ];
     if (p.companyId !== null) dw.push(sql`d.company_entity_id = ${p.companyId}`);
 
-    const ww: SQL[] = [...scopeByPlayerAsOf(user, sql`wd.created_at`), WITHDRAWAL_COUNTS];
-    if (p.from) ww.push(sql`${businessDay(sql`wd.created_at`)} >= ${p.from}::date`);
-    if (p.to) ww.push(sql`${businessDay(sql`wd.created_at`)} <= ${p.to}::date`);
+    const ww: SQL[] = [
+      ...scopeByPlayerAsOf(user, sql`wd.created_at`),
+      WITHDRAWAL_COUNTS,
+      ...inBusinessDays(sql`wd.created_at`, p.from, p.to),
+    ];
     if (p.companyId !== null) ww.push(sql`pl.company_entity_id = ${p.companyId}`);
 
-    const fw: SQL[] = [IS_FREE_CREDIT, sql`t.entity_id IS NOT NULL`];
-    if (p.from) fw.push(sql`${businessDay(sql`t.created_at`)} >= ${p.from}::date`);
-    if (p.to) fw.push(sql`${businessDay(sql`t.created_at`)} <= ${p.to}::date`);
+    const fw: SQL[] = [
+      IS_FREE_CREDIT,
+      sql`t.entity_id IS NOT NULL`,
+      ...inBusinessDays(sql`t.created_at`, p.from, p.to),
+    ];
     if (p.companyId !== null) fw.push(sql`t.entity_id = ${p.companyId}`);
     else if (user.ownedEntityIds !== null) {
       fw.push(
@@ -86,6 +96,10 @@ export async function GET(request: Request) {
      * belongs to on the sheet.
      */
     const byDay = new URL(request.url).searchParams.get("group") === "day";
+    // New players means finding every member's first deposit ever — a pass
+    // over the whole deposits table. The dashboard has no use for it and
+    // asks with ?np=0 to skip it.
+    const withNp = new URL(request.url).searchParams.get("np") !== "0";
     const key = (companyColumn: SQL, dateColumn: SQL) =>
       byDay ? sql`${businessDay(dateColumn)}::text` : sql`${companyColumn}::text`;
 
@@ -122,6 +136,9 @@ export async function GET(request: Request) {
          WHERE ${all(rw)} AND up.company_entity_id IS NOT NULL
          GROUP BY 1
       ), np AS (
+        ${
+          withNp
+            ? sql`
         -- New in the period: members whose first deposit ever falls inside it.
         -- By day, a member is new on the day they first deposited, so the days
         -- sum back to the company's figure with nobody counted twice.
@@ -146,6 +163,9 @@ export async function GET(request: Request) {
                : sql``
            }
          GROUP BY 1
+`
+            : sql`SELECT NULL::text AS k, 0 AS np WHERE false`
+        }
       ), ids AS (
         SELECT k FROM dep
         UNION SELECT k FROM wdr

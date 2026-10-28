@@ -146,6 +146,7 @@ export default function DashboardPage() {
       if (dateFrom) qs.set("from", dateFrom);
       if (dateTo) qs.set("to", dateTo);
       if (selectedCompanyId != null) qs.set("company", String(selectedCompanyId));
+      qs.set("np", "0"); // new players — a full-table pass the cards never show
       const res = await fetch(`/api/reports/sales-report?${qs}`).catch(() => null);
       if (!live || !res?.ok) return;
       const body = (await res.json()) as { rows: SalesRow[] };
@@ -316,12 +317,16 @@ export default function DashboardPage() {
             Welcome back{firstName ? `, ${firstName}` : ""} 👋
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            {today.toLocaleDateString("en-US", {
-              weekday: "long",
-              day: "numeric",
-              month: "long",
-              year: "numeric",
-            })}
+            {/* The server's clock and zone are not the viewer's (the page can
+                be rendered at build time), so this text may differ on hydration. */}
+            <span suppressHydrationWarning>
+              {today.toLocaleDateString("en-US", {
+                weekday: "long",
+                day: "numeric",
+                month: "long",
+                year: "numeric",
+              })}
+            </span>
             {activeCompany && (
               <>
                 {" "}
@@ -589,7 +594,7 @@ export default function DashboardPage() {
         <StatTile
           title="Active Players"
           value={totals ? totals.ap.toLocaleString() : "…"}
-          sub={`deposited ${rangeLabel}`}
+          sub={totals ? `deposited ${rangeLabel}` : "Loading…"}
           icon={Users}
         />
       </div>
