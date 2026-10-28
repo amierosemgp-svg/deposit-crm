@@ -179,7 +179,7 @@ export async function freeCreditAllowance(
                       WHERE d.company_entity_id = c.id
                         AND d.status <> 'failed'
                         AND d.bank_name <> ${POINTS_ONLY_BANK}
-                        AND (d.deposit_date AT TIME ZONE 'Asia/Kuala_Lumpur')::date >= m.d), 0)::float8
+                        AND d.deposit_date >= m.since), 0)::float8
              AS deposits,
            coalesce((SELECT sum(t.amount) FROM transactions t
                       WHERE t.entity_id = c.id
@@ -188,10 +188,14 @@ export async function freeCreditAllowance(
                         -- allowance; it is never refused for it.
                         AND t.details->>'action' IN ('free_credit', 'staff_error')
                         AND coalesce(t.details->>'failed', 'false') <> 'true'
-                        AND (t.created_at AT TIME ZONE 'Asia/Kuala_Lumpur')::date >= m.d), 0)::float8
+                        AND t.created_at >= m.since), 0)::float8
              AS issued
       FROM (VALUES ${ids}) AS c(id)
-      CROSS JOIN (SELECT date_trunc('month', (now() AT TIME ZONE 'Asia/Kuala_Lumpur'))::date AS d) m
+      -- The month's start as an instant too, so the bounds sit on the columns
+      -- and the indexes serve them; casting each row to a date read every
+      -- deposit the company ever took, once per company.
+      CROSS JOIN (SELECT d, (d::timestamp AT TIME ZONE 'Asia/Kuala_Lumpur') AS since
+                    FROM (SELECT date_trunc('month', (now() AT TIME ZONE 'Asia/Kuala_Lumpur'))::date AS d) x) m
   `)).rows as unknown as {
     company_entity_id: number;
     month: string;

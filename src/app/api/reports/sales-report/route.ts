@@ -5,6 +5,7 @@ import { jsonError } from "@/lib/api-helpers";
 import {
   IS_FREE_CREDIT,
   all,
+  BUSINESS_TZ,
   businessDay,
   inBusinessDays,
   RB_AT,
@@ -151,10 +152,24 @@ export async function GET(request: Request) {
                  d.player_id, d.company_entity_id,
                  ${businessDay(sql`d.deposit_date`)} AS first_day
             FROM deposits d
-           WHERE d.status <> 'failed' AND d.player_id IS NOT NULL
+           WHERE ${all([
+             sql`d.status <> 'failed'`,
+             sql`d.player_id IS NOT NULL`,
+             ...inBusinessDays(sql`d.deposit_date`, p.from ?? null, p.to ?? null),
+           ])}
            ORDER BY d.player_id, d.deposit_date
         ) f
-         WHERE (${p.from ?? null}::date IS NULL OR f.first_day >= ${p.from ?? null}::date)
+         -- Their first in the window is their first ever when nothing came
+         -- before it — read over the window's rows, not the whole table.
+         WHERE ${
+           p.from
+             ? sql`NOT EXISTS (
+                 SELECT 1 FROM deposits d
+                  WHERE d.player_id = f.player_id AND d.status <> 'failed'
+                    AND d.deposit_date < (${p.from}::date::timestamp AT TIME ZONE ${BUSINESS_TZ}))`
+             : sql`true`
+         }
+           AND (${p.from ?? null}::date IS NULL OR f.first_day >= ${p.from ?? null}::date)
            AND (${p.to ?? null}::date IS NULL OR f.first_day <= ${p.to ?? null}::date)
            AND f.company_entity_id IS NOT NULL
            ${

@@ -7,6 +7,7 @@ import {
   IS_STAFF_ERROR,
   all,
   businessDay,
+  inBusinessDays,
   parseReportParams,
   scopeByPlayerAsOf,
   scopeDepositsAsOf,
@@ -68,8 +69,7 @@ export async function GET(request: Request) {
         sql`d.bonus_amount <> 0`,
         ...scopeDepositsAsOf(user, sql`d.deposit_date`),
       ];
-      if (from) w.push(sql`${businessDay(sql`d.deposit_date`)} >= ${from}::date`);
-      if (to) w.push(sql`${businessDay(sql`d.deposit_date`)} <= ${to}::date`);
+      w.push(...inBusinessDays(sql`d.deposit_date`, from ?? null, to ?? null));
       if (companyId !== null) w.push(sql`d.company_entity_id = ${companyId}`);
       if (status !== "all") w.push(sql`d.status::text = ${status}`);
       if (q) {
@@ -166,8 +166,7 @@ export async function GET(request: Request) {
               )})`,
             ]),
       ];
-      if (from) w.push(sql`${businessDay(sql`t.created_at`)} >= ${from}::date`);
-      if (to) w.push(sql`${businessDay(sql`t.created_at`)} <= ${to}::date`);
+      w.push(...inBusinessDays(sql`t.created_at`, from ?? null, to ?? null));
       if (companyId !== null) w.push(sql`t.entity_id = ${companyId}`);
       if (q) {
         w.push(
@@ -218,8 +217,7 @@ export async function GET(request: Request) {
               )})`,
             ]),
       ];
-      if (from) w.push(sql`${businessDay(sql`t.created_at`)} >= ${from}::date`);
-      if (to) w.push(sql`${businessDay(sql`t.created_at`)} <= ${to}::date`);
+      w.push(...inBusinessDays(sql`t.created_at`, from ?? null, to ?? null));
       if (companyId !== null) w.push(sql`t.entity_id = ${companyId}`);
       if (q) {
         w.push(
