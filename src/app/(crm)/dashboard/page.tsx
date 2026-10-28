@@ -26,17 +26,28 @@ import {
   ArrowDownRight,
 } from "lucide-react";
 
+// Dates are Malaysia's: before 08:00 the UTC date is still yesterday.
+const MYT_MS = 8 * 3600_000;
+const mytNow = () => new Date(Date.now() + MYT_MS);
 function todayStr() {
-  return new Date().toISOString().slice(0, 10);
+  return mytNow().toISOString().slice(0, 10);
 }
 function daysAgoStr(n: number) {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
+  const d = mytNow();
+  d.setUTCDate(d.getUTCDate() - n);
   return d.toISOString().slice(0, 10);
+}
+/** This month, the 1st to its last day — what the dashboard opens on. */
+function monthStartStr() {
+  return todayStr().slice(0, 8) + "01";
+}
+function monthEndStr() {
+  const d = mytNow();
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
 }
 function inRange(iso: string | null | undefined, from: string, to: string) {
   if (!iso) return false;
-  const day = iso.slice(0, 10);
+  const day = new Date(Date.parse(iso) + MYT_MS).toISOString().slice(0, 10);
   if (from && day < from) return false;
   if (to && day > to) return false;
   return true;
@@ -73,18 +84,42 @@ function EmptyRow({
 
 const PENDING_DEPOSIT_STATUSES = new Set(["pending_match", "matched", "pending"]);
 
+/** One company's row of the sales report — the figures the money cards add up. */
+type SalesRow = {
+  company_id: string;
+  deposits: number;
+  deposit_count: number;
+  ap: number;
+  bonus: number;
+  free_credit: number;
+  withdrawals: number;
+  withdrawal_count: number;
+  recommend: number;
+  sales: number;
+};
+type Totals = Omit<SalesRow, "company_id">;
+const NO_TOTALS: Totals = {
+  deposits: 0,
+  deposit_count: 0,
+  ap: 0,
+  bonus: 0,
+  free_credit: 0,
+  withdrawals: 0,
+  withdrawal_count: 0,
+  recommend: 0,
+  sales: 0,
+};
+
 export default function DashboardPage() {
   const me = useStore((s) => s.me);
   const hydrated = useStore((s) => s.hydrated);
   const deposits = useStore((s) => s.deposits);
   const withdrawals = useStore((s) => s.withdrawals);
-  const playerCounts = useStore((s) => s.playerCounts);
   const players = useStore((s) => s.players);
   const hydratePlayers = useStore((s) => s.hydratePlayers);
   const entities = useStore((s) => s.entities);
   const boAccounts = useStore((s) => s.boAccounts);
   const bankAccounts = useStore((s) => s.bankAccounts);
-  const referralBonuses = useStore((s) => s.referralBonuses);
   const botHealth = useStore((s) => s.botHealth);
   const banksFn = useStore((s) => s.banks);
   const userName = useStore((s) => s.userName);
@@ -93,8 +128,36 @@ export default function DashboardPage() {
   const companyInScope = useStore((s) => s.companyInScope);
 
   const today = new Date();
-  const [dateFrom, setDateFrom] = useState(todayStr());
-  const [dateTo, setDateTo] = useState(todayStr());
+  const [dateFrom, setDateFrom] = useState(monthStartStr);
+  const [dateTo, setDateTo] = useState(monthEndStr);
+
+  /**
+   * The money cards, summed by the server: the sales report's rows for the
+   * range, one per company. They used to be added up here from /api/state,
+   * which carries only the newest 500 deposits and withdrawals across every
+   * casino — a few days at most — so any longer range came out short. Reading
+   * the report also means the dashboard and the Sales Report always agree.
+   */
+  const [salesRows, setSalesRows] = useState<SalesRow[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    const load = async () => {
+      const qs = new URLSearchParams();
+      if (dateFrom) qs.set("from", dateFrom);
+      if (dateTo) qs.set("to", dateTo);
+      if (selectedCompanyId != null) qs.set("company", String(selectedCompanyId));
+      const res = await fetch(`/api/reports/sales-report?${qs}`).catch(() => null);
+      if (!live || !res?.ok) return;
+      const body = (await res.json()) as { rows: SalesRow[] };
+      if (live) setSalesRows(body.rows);
+    };
+    void load();
+    const timer = setInterval(load, 60_000);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
+  }, [dateFrom, dateTo, selectedCompanyId]);
 
   const scopedDeposits = useMemo(
     () => deposits.filter((d) => companyInScope(d.company_entity_id)),
@@ -104,8 +167,8 @@ export default function DashboardPage() {
   /**
    * The members this page names, fetched.
    *
-   * Only the rows on screen — the recent deposits and withdrawals and the
-   * uplines of any recommend bonus — never the roster.
+   * Only the rows on screen — the recent deposits and withdrawals — never
+   * the roster.
    */
   const playerMap = useMemo(
     () => new Map(players.map((p) => [p.player_id, p])),
@@ -115,10 +178,9 @@ export default function DashboardPage() {
     const ids = [
       ...deposits.map((d) => d.player_id),
       ...withdrawals.map((w) => w.player_id),
-      ...referralBonuses.map((b) => b.upline_player_id),
     ];
     if (ids.length) void hydratePlayers(ids);
-  }, [deposits, withdrawals, referralBonuses, hydratePlayers]);
+  }, [deposits, withdrawals, hydratePlayers]);
 
   // The company rides on the withdrawal now — see /api/state.
   const scopedWithdrawals = useMemo(
@@ -126,30 +188,23 @@ export default function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [withdrawals, selectedCompanyId, selectedLeaderId],
   );
-  /** Members in scope, counted by the server rather than tallied here. */
-  const memberTotal = useMemo(
-    () =>
-      playerCounts
-        .filter((c) => companyInScope(c.company_entity_id))
-        .reduce((n, c) => n + c.members, 0),
+  // A leader's pick is a set of companies, so the rows are narrowed here.
+  // Every figure sums across companies — active players too, since a member
+  // sits under one company.
+  const totals = useMemo<Totals | null>(() => {
+    if (!salesRows) return null;
+    const t = { ...NO_TOTALS };
+    for (const r of salesRows) {
+      if (!companyInScope(Number(r.company_id))) continue;
+      for (const k of Object.keys(t) as (keyof Totals)[]) t[k] += Number(r[k] ?? 0);
+    }
+    return t;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [playerCounts, selectedCompanyId, selectedLeaderId],
-  );
+  }, [salesRows, selectedCompanyId, selectedLeaderId]);
   const scopedBoAccounts = useMemo(
     () => boAccounts.filter((b) => companyInScope(b.company_entity_id)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [boAccounts, selectedCompanyId, selectedLeaderId],
-  );
-  // Recommend bonuses are paid to the *upline*, so they are scoped by that
-  // player's company — and they never appear on a deposit row, which is why
-  // the profit line below has to add them separately.
-  const scopedReferralBonuses = useMemo(
-    () =>
-      referralBonuses.filter((b) =>
-        companyInScope(playerMap.get(b.upline_player_id)?.company_entity_id),
-      ),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [referralBonuses, playerMap, selectedCompanyId, selectedLeaderId],
   );
   const scopedBankAccounts = useMemo(
     () => bankAccounts.filter((a) => companyInScope(a.entity_id)),
@@ -157,7 +212,8 @@ export default function DashboardPage() {
     [bankAccounts, selectedCompanyId, selectedLeaderId],
   );
 
-  // --- Range-scoped money (deposits by deposit_date, withdrawals by created_at) ---
+  // --- Recent rows (deposits by deposit_date, withdrawals by created_at) ---
+  // Only the two lists below; the money cards read `totals`.
   const rangeDeposits = scopedDeposits.filter((d) =>
     inRange(d.deposit_date, dateFrom, dateTo),
   );
@@ -165,52 +221,11 @@ export default function DashboardPage() {
     inRange(w.created_at, dateFrom, dateTo),
   );
 
-  const completedDeposits = rangeDeposits.filter((d) => d.status === "completed");
-  const depositsTotal = completedDeposits.reduce(
-    (sum, d) => sum + d.total_amount,
-    0,
-  );
-  const paidWithdrawals = rangeWithdrawals.filter((w) => w.status === "paid");
-  const withdrawalsTotal = paidWithdrawals.reduce(
-    (sum, w) => sum + w.credit_pulled_amount,
-    0,
-  );
-
-  // Profit counts REALISED money only — what actually arrived and what actually
-  // left — so it reconciles with the two cards beside it.
-  //
-  // It previously summed every non-failed row at its *requested* figure, which
-  // was wrong three ways at once: a withdrawal paid at 30 against a request of
-  // 100 was booked as 100; a withdrawal still awaiting payment was booked as
-  // money already gone; and a `withdraw_all` request, which carries
-  // requested_amount = 0 until the agent reports back, was booked as zero no
-  // matter how much left the wallet. Deposits had the mirror problem, counting
-  // unconfirmed pending_match rows as income.
-  const grossDeposits = completedDeposits.reduce(
-    (sum, d) => sum + d.deposit_amount,
-    0,
-  );
-  const grossBonuses = completedDeposits.reduce(
-    (sum, d) => sum + d.bonus_amount,
-    0,
-  );
-  // What was actually paid out, which is the same figure the Withdrawals card
-  // shows — never requested_amount.
-  const grossWithdrawals = withdrawalsTotal;
-  // Recommend bonuses are real money out and live in their own table, keyed on
-  // the upline rather than on a deposit. Dated when credited; cancelled ones
-  // were written off and never paid.
-  const recommendBonuses = scopedReferralBonuses
-    .filter((b) => b.status === "assigned" && b.assigned_at)
-    .filter((b) => inRange(b.assigned_at!, dateFrom, dateTo))
-    .reduce((sum, b) => sum + b.bonus_amount, 0);
-  // Deposits − withdrawals − bonuses. Operational expenses are deliberately
-  // out: this figure is about the gaming book, and mixing running costs into
-  // it made a trading result and a P&L the same number without saying so.
-  // Both bonus kinds count — a deposit's own, and the recommend bonus paid to
-  // an upline — because both are money given back to players.
-  const profit =
-    grossDeposits - grossWithdrawals - grossBonuses - recommendBonuses;
+  // Profit is the report's sales: deposits − withdrawals − everything given
+  // back to players (deposit bonuses, free credit, recommend bonuses).
+  // Operational expenses stay out — this is the gaming book, not the P&L.
+  const givenAway = totals ? totals.bonus + totals.free_credit + totals.recommend : 0;
+  const profit = totals?.sales ?? 0;
 
   // Live states (not range-bound)
   const pendingDeposits = scopedDeposits.filter((d) =>
@@ -281,9 +296,14 @@ export default function DashboardPage() {
 
   const firstName = me?.full_name.split(" ")[0];
   const rangeLabel =
-    dateFrom === dateTo ? "in range" : `${dateFrom} → ${dateTo}`;
+    dateFrom === dateTo ? `on ${dateFrom}` : `${dateFrom} → ${dateTo}`;
 
-  function setPreset(days: number) {
+  function setPreset(days: number | "month") {
+    if (days === "month") {
+      setDateFrom(monthStartStr());
+      setDateTo(monthEndStr());
+      return;
+    }
     setDateFrom(daysAgoStr(days));
     setDateTo(todayStr());
   }
@@ -339,6 +359,7 @@ export default function DashboardPage() {
           <div className="flex gap-1 pb-0.5">
             {(
               [
+                ["Month", "month"],
                 ["Today", 0],
                 ["7D", 7],
                 ["30D", 30],
@@ -360,28 +381,29 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         <StatTile
           title="Deposits"
-          value={formatRM(depositsTotal)}
-          sub={`${completedDeposits.length} completed ${rangeLabel}`}
+          value={totals ? formatRM(totals.deposits) : "…"}
+          sub={totals ? `${totals.deposit_count} deposits ${rangeLabel}` : "Loading…"}
           icon={Wallet}
           tone="success"
         />
         <StatTile
           title="Withdrawals"
-          value={formatRM(withdrawalsTotal)}
-          sub={`${paidWithdrawals.length} paid out ${rangeLabel}`}
+          value={totals ? formatRM(totals.withdrawals) : "…"}
+          sub={totals ? `${totals.withdrawal_count} paid out ${rangeLabel}` : "Loading…"}
           icon={Banknote}
         />
         <StatTile
           title="Profit"
-          value={formatRM(profit)}
-          // Spelled out because the figure is a difference of five numbers and
-          // an unexplained negative is indistinguishable from a bug — which is
-          // exactly how the old one read.
-          sub={`${formatRM(grossDeposits)} in − ${formatRM(grossWithdrawals)} out${
-            grossBonuses + recommendBonuses > 0
-              ? ` − ${formatRM(grossBonuses + recommendBonuses)} bonus`
-              : ""
-          }`}
+          value={totals ? formatRM(profit) : "…"}
+          // Spelled out because the figure is a difference of several numbers
+          // and an unexplained negative is indistinguishable from a bug.
+          sub={
+            totals
+              ? `${formatRM(totals.deposits)} in − ${formatRM(totals.withdrawals)} out${
+                  givenAway > 0 ? ` − ${formatRM(givenAway)} bonus` : ""
+                }`
+              : "Loading…"
+          }
           icon={TrendingUp}
           tone={profit >= 0 ? "success" : "danger"}
           valueClassName={profit >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}
@@ -566,8 +588,8 @@ export default function DashboardPage() {
         />
         <StatTile
           title="Active Players"
-          value={String(memberTotal)}
-          sub="members on file"
+          value={totals ? totals.ap.toLocaleString() : "…"}
+          sub={`deposited ${rangeLabel}`}
           icon={Users}
         />
       </div>
