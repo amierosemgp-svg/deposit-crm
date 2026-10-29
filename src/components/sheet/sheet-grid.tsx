@@ -137,6 +137,11 @@ export type SheetRow = {
   id: string | number;
   cells: string[];
   tone?: SheetRowTone;
+  /**
+   * Painted, unlike tone: a row a staff penalty names is yellow, so the desk
+   * can spot the mistake among hundreds of rows.
+   */
+  flag?: "staff_error";
 };
 
 export type DraftStatus =
@@ -255,6 +260,7 @@ const GridRow = memo(function GridRow({
   gutter,
   gutterTitle,
   marker,
+  flag,
   cells,
   columns,
   isDraft,
@@ -273,6 +279,7 @@ const GridRow = memo(function GridRow({
   gutter: string;
   gutterTitle?: string;
   marker: "ready" | "error" | null;
+  flag?: SheetRow["flag"];
   cells: string[];
   columns: SheetColumn[];
   isDraft: boolean;
@@ -303,14 +310,16 @@ const GridRow = memo(function GridRow({
       className={cn(
         "h-7",
         firstDraft && "border-t-2 border-t-emerald-600 dark:border-t-emerald-500",
+        flag === "staff_error" && "bg-yellow-200/70 dark:bg-yellow-400/20",
       )}
     >
       <td
-        title={gutterTitle}
+        title={flag === "staff_error" ? "Staff error — a staff penalty names this row" : gutterTitle}
         className={cn(
           "sticky left-0 z-10 select-none border-b border-r border-border bg-muted px-1 text-center text-[11px] tabular-nums text-muted-foreground",
           marker === "ready" && "text-emerald-600",
           marker === "error" && "bg-red-100 font-semibold text-red-600 dark:bg-red-950",
+          flag === "staff_error" && "bg-yellow-300 font-semibold text-yellow-900 dark:bg-yellow-600/60 dark:text-yellow-50",
         )}
       >
         {marker === "ready" ? "✓" : marker === "error" ? "!" : gutter}
@@ -2614,6 +2623,7 @@ export function SheetGrid({
                 rIdx={r}
                 gutter={String(r + 1)}
                 marker={null}
+                flag={row.flag}
                 cells={row.cells}
                 columns={columns}
                 isDraft={false}

@@ -3,7 +3,7 @@
 /**
  * The Staff Penalty worksheet tab: credit lost through a CS's mistake and the
  * share they bear. Typed into the NEW ENTRIES dock like any other sheet —
- * name the deposit or free credit by its ref and the CS and what was credited
+ * name the deposit, free credit or withdrawal by its ref and the CS and what was credited
  * fill in; Lost and Penalty work themselves out. Deducted by their next salary
  * without anyone ticking it — the Status column says which salary took it.
  */
@@ -54,7 +54,9 @@ const C = { date: 0, cs: 1, casino: 2, source: 3, ref: 4, injected: 5, retrieved
 const N_COLS = 13;
 
 const SOURCES = Object.entries(PENALTY_SOURCE_LABEL) as Array<[PenaltySource, string]>;
-const LOOKS_UP = (s: PenaltySource | null) => s === "deposit" || s === "free_credit";
+const LOOKS_UP = (s: PenaltySource | null) => s === "deposit" || s === "free_credit" || s === "withdrawal";
+/** A withdrawal paid out wrong is the CS's whole loss, not the house share. */
+const WITHDRAWAL_SHARE = "100%";
 
 type SourceLookup = {
   user_id: number | null;
@@ -62,7 +64,7 @@ type SourceLookup = {
   player_id: number | null;
   player_label: string | null;
   occurred_at: string;
-  /** The deposit's status; null for a free credit. */
+  /** The deposit's or withdrawal's status; null for a free credit. */
   status: string | null;
 };
 type LookupEntry = { source: SourceLookup } | { error: string };
@@ -96,7 +98,10 @@ function sheetDateOf(iso: string): string {
 }
 
 /** A row on another sheet to record a penalty against — pre-fills the dock. */
-export type PenaltyPrefill = { source: "deposit" | "free_credit"; ref: number; nonce: number };
+export type PenaltyPrefill = { source: "deposit" | "free_credit" | "withdrawal"; ref: number; nonce: number };
+
+/** A leader is not on payroll here: their penalty is settled outside it. */
+const LEADER_STATUS = "Leader — settle outside payroll";
 
 export function PenaltySheet({ prefill = null }: { prefill?: PenaltyPrefill | null } = {}) {
   const me = useStore((s) => s.me);
@@ -149,20 +154,49 @@ export function PenaltySheet({ prefill = null }: { prefill?: PenaltyPrefill | nu
 
   // ---- lookups the dock types against ----
 
-  const pickable = useMemo(
-    () => staff.filter((s) => s.status === "active" && s.user_id !== selfId),
-    [staff, selfId],
+  /**
+   * Who a penalty can name: the CS on payroll, and the leaders. A leader has
+   * no salary here, so theirs is recorded with nothing deducted (see the API).
+   */
+  type Person = Pick<StaffRow, "user_id" | "username" | "full_name"> & {
+    /** The CS's casino; null for a leader, whose penalty takes the row's. */
+    company_entity_id: number | null;
+    leader: boolean;
+  };
+  const leaderIds = useMemo(
+    () => new Set(users.filter((u) => u.role === "company_leader").map((u) => u.user_id)),
+    [users],
+  );
+  const pickable = useMemo<Person[]>(
+    () => [
+      ...staff
+        .filter((s) => s.status === "active" && s.user_id !== selfId)
+        .map((s) => ({ ...s, leader: false })),
+      ...users
+        .filter((u) => u.role === "company_leader" && u.status === "active")
+        .map((u) => ({
+          user_id: u.user_id,
+          username: u.username,
+          full_name: u.full_name,
+          company_entity_id: null,
+          leader: true,
+        })),
+    ],
+    [staff, selfId, users],
   );
   const csOptions = useMemo(
     () =>
       pickable
         .slice()
         .sort((a, b) => a.full_name.localeCompare(b.full_name))
-        .map((s) => ({ value: s.full_name, hint: `${s.username} · ${entityName(s.company_entity_id)}` })),
+        .map((s) => ({
+          value: s.full_name,
+          hint: s.leader ? `${s.username} · leader` : `${s.username} · ${entityName(s.company_entity_id)}`,
+        })),
     [pickable, entityName],
   );
   const resolveCs = useCallback(
-    (cell: string): StaffRow | null => {
+    (cell: string): Person | null => {
       const v = cell.trim().toLowerCase();
       if (!v) return null;
       return (
@@ -207,7 +241,7 @@ export function PenaltySheet({ prefill = null }: { prefill?: PenaltyPrefill | nu
         const next = [...row];
         for (const c of [C.casino, C.lost, C.amount, C.status, C.by]) next[c] = "";
         const cs = resolveCs(row[C.cs] ?? "");
-        if (cs) next[C.casino] = entityName(cs.company_entity_id);
+        if (cs && cs.company_entity_id !== null) next[C.casino] = entityName(cs.company_entity_id);
         const f = figures(row);
         if (f && f.lost > 0) {
           next[C.lost] = fmtAmount(f.lost);
@@ -218,8 +252,10 @@ export function PenaltySheet({ prefill = null }: { prefill?: PenaltyPrefill | nu
         else if (l.wanted && l.entry && "source" in l.entry && l.entry.source.player_label) {
           // Saving fails a completed deposit (the money never came) — say so first.
           const fails = l.source === "deposit" && l.entry.source.status === "completed";
-          next[C.status] = `Player ${l.entry.source.player_label}${fails ? " · deposit will be failed" : ""}`;
-        } else if (cs) next[C.status] = "Pending — next salary";
+          const unpaid = l.source === "withdrawal" && l.entry.source.status !== "paid";
+          const note = fails ? " · deposit will be failed" : unpaid ? ` · withdrawal is ${l.entry.source.status}, not paid` : "";
+          next[C.status] = `Player ${l.entry.source.player_label}${note}`;
+        } else if (cs) next[C.status] = cs.leader ? LEADER_STATUS : "Pending — next salary";
         return next;
       }),
     [resolveCs, entityName, lookupOf],
@@ -253,16 +289,16 @@ export function PenaltySheet({ prefill = null }: { prefill?: PenaltyPrefill | nu
       if (l.wanted && l.entry && "error" in l.entry) return { ok: false, error: l.entry.error };
 
       const csCell = (row[C.cs] ?? "").trim();
-      if (!csCell) return { ok: false, error: "Who — pick the CS" };
+      if (!csCell) return { ok: false, error: "Who — pick the CS or leader" };
       const cs = resolveCs(csCell);
       if (!cs) {
         const isSelf = selfId != null && staff.some((s) => s.user_id === selfId && [s.full_name, s.username].some((n) => n.toLowerCase() === csCell.toLowerCase()));
-        return { ok: false, error: isSelf ? "Ask a colleague or your leader to record a penalty against you" : `No CS called "${csCell}" — pick from the list` };
+        return { ok: false, error: isSelf ? "Ask a colleague or your leader to record a penalty against you" : `No CS or leader called "${csCell}" — pick from the list` };
       }
       const f = figures(row);
       if (!f) {
         if (parseAmount((row[C.share] ?? "").replace("%", "")) === null) return { ok: false, error: "Share — a percent, like 50%" };
-        return { ok: false, error: "Credited — what went into the player's account" };
+        return { ok: false, error: "Credited — what went into the player's account, or what a withdrawal paid out" };
       }
       if (f.ret < 0 || f.ret >= f.inj) return { ok: false, error: "Retrieved has to be less than what was credited" };
       if (f.pct < 0 || f.pct > 100) return { ok: false, error: "Share is a percent, 0–100" };
@@ -315,6 +351,7 @@ export function PenaltySheet({ prefill = null }: { prefill?: PenaltyPrefill | nu
       addRow([
         [C.source, PENALTY_SOURCE_LABEL[prefill.source]],
         [C.ref, String(prefill.ref)],
+        ...(prefill.source === "withdrawal" ? [[C.share, WITHDRAWAL_SHARE] as [number, string]] : []),
       ]);
     }
   }, [prefill, isViewer, drafts, addRow]);
@@ -358,6 +395,8 @@ export function PenaltySheet({ prefill = null }: { prefill?: PenaltyPrefill | nu
             const next = [...row];
             if (!next[C.injected].trim()) next[C.injected] = String(src.credit_injected);
             if (next[C.date] === todaySheetDate()) next[C.date] = sheetDateOf(src.occurred_at);
+            // Still on the house share the dock started it with → the CS's whole loss.
+            if (key.startsWith("withdrawal:") && next[C.share].trim() === `${sharePct}%`) next[C.share] = WITHDRAWAL_SHARE;
             return next;
           },
         );
@@ -366,7 +405,7 @@ export function PenaltySheet({ prefill = null }: { prefill?: PenaltyPrefill | nu
     return () => {
       live = false;
     };
-  }, [drafts, lookupOf, patchRow]);
+  }, [drafts, lookupOf, patchRow, sharePct]);
 
   /**
    * The CS who keyed the row, once both the lookup and the staff list are in.
@@ -398,7 +437,7 @@ export function PenaltySheet({ prefill = null }: { prefill?: PenaltyPrefill | nu
 
   const columns: SheetColumn[] = [
     { key: "date", label: "Date", width: 92, align: "center", entry: true, required: true, placeholder: todaySheetDate() },
-    { key: "cs", label: "CS", width: 160, entry: true, required: true, options: csOptions, placeholder: "fills from Ref" },
+    { key: "cs", label: "CS / Leader", width: 160, entry: true, required: true, options: csOptions, placeholder: "fills from Ref" },
     { key: "casino", label: "Casino", width: 130 },
     { key: "source", label: "Mistake On", width: 110, entry: true, required: true, options: SOURCES.map(([, l]) => l) },
     { key: "ref", label: "Ref", width: 70, align: "right", entry: true, placeholder: "#" },
@@ -439,12 +478,14 @@ export function PenaltySheet({ prefill = null }: { prefill?: PenaltyPrefill | nu
               ? "Void"
               : st === "deducted"
                 ? `Deducted · ${monthLabel(deductedIn.get(p.penalty_id) ?? "")} salary`
-                : "Pending — next salary";
+                : leaderIds.has(p.user_id)
+                  ? LEADER_STATUS
+                  : "Pending — next salary";
           cells[C.by] = nameOf(p.recorded_by_user_id);
           return { id: p.penalty_id, tone: st === "void" ? "muted" : st === "deducted" ? "default" : "warning", cells };
         })
         .filter((r) => !q || r.cells.some((c) => c.toLowerCase().includes(q))),
-    [data, companyInScope, statusFilter, statusOf, nameOf, entityName, deductedIn, q],
+    [data, companyInScope, statusFilter, statusOf, nameOf, entityName, deductedIn, leaderIds, q],
   );
 
   // The CS behind the selection, saved rows and NEW ENTRIES rows alike —
@@ -453,16 +494,17 @@ export function PenaltySheet({ prefill = null }: { prefill?: PenaltyPrefill | nu
     const ids = new Set<number>();
     for (const id of selectedIds) {
       const uid = data?.penalties.find((p) => p.penalty_id === Number(id))?.user_id;
-      if (uid) ids.add(uid);
+      // A leader has no CS profile (no pay, no hours) to open.
+      if (uid && !leaderIds.has(uid)) ids.add(uid);
     }
     if (!isViewer) {
       for (const i of selectedDrafts) {
         const cs = resolveCs(dock.drafts[i]?.[C.cs] ?? "");
-        if (cs) ids.add(cs.user_id);
+        if (cs && !cs.leader) ids.add(cs.user_id);
       }
     }
     return ids.size === 1 ? [...ids][0] : null;
-  }, [selectedIds, selectedDrafts, data, isViewer, dock.drafts, resolveCs]);
+  }, [selectedIds, selectedDrafts, data, isViewer, dock.drafts, resolveCs, leaderIds]);
   useCsProfileShortcut(profileFor ? null : selectedCs, setProfileFor);
 
   const one = selectedIds.length === 1 ? Number(selectedIds[0]) : null;

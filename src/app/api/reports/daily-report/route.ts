@@ -5,7 +5,9 @@ import { jsonError } from "@/lib/api-helpers";
 import {
   IS_FREE_CREDIT,
   all,
+  BUSINESS_TZ,
   businessDay,
+  inBusinessDays,
   RB_AT,
   DEPOSIT_COUNTS,
   parseReportParams,
@@ -37,13 +39,11 @@ export async function GET(request: Request) {
     if ("error" in p) return jsonError(p.error);
 
     const dw: SQL[] = [...scopeDepositsAsOf(user, sql`d.deposit_date`), DEPOSIT_COUNTS];
-    if (p.from) dw.push(sql`${businessDay(sql`d.deposit_date`)} >= ${p.from}::date`);
-    if (p.to) dw.push(sql`${businessDay(sql`d.deposit_date`)} <= ${p.to}::date`);
+    dw.push(...inBusinessDays(sql`d.deposit_date`, p.from ?? null, p.to ?? null));
     if (p.companyId !== null) dw.push(sql`d.company_entity_id = ${p.companyId}`);
 
     const ww: SQL[] = [...scopeByPlayerAsOf(user, sql`wd.created_at`), WITHDRAWAL_COUNTS];
-    if (p.from) ww.push(sql`${businessDay(sql`wd.created_at`)} >= ${p.from}::date`);
-    if (p.to) ww.push(sql`${businessDay(sql`wd.created_at`)} <= ${p.to}::date`);
+    ww.push(...inBusinessDays(sql`wd.created_at`, p.from ?? null, p.to ?? null));
     if (p.companyId !== null) ww.push(sql`pl.company_entity_id = ${p.companyId}`);
 
     // Free credit has no table: it is a game_topup ledger row with no deposit
@@ -51,8 +51,7 @@ export async function GET(request: Request) {
     // Staff Error bonuses (a penalty's lost credit) stay out: the deposit the
     // mistake was made on is failed, which already took it off sales.
     const fw: SQL[] = [IS_FREE_CREDIT];
-    if (p.from) fw.push(sql`${businessDay(sql`t.created_at`)} >= ${p.from}::date`);
-    if (p.to) fw.push(sql`${businessDay(sql`t.created_at`)} <= ${p.to}::date`);
+    fw.push(...inBusinessDays(sql`t.created_at`, p.from ?? null, p.to ?? null));
     if (p.companyId !== null) fw.push(sql`t.entity_id = ${p.companyId}`);
     else if (user.ownedEntityIds !== null) {
       fw.push(
@@ -69,6 +68,11 @@ export async function GET(request: Request) {
     if (p.from) rw.push(sql`${businessDay(RB_AT)} >= ${p.from}::date`);
     if (p.to) rw.push(sql`${businessDay(RB_AT)} <= ${p.to}::date`);
     if (p.companyId !== null) rw.push(sql`up.company_entity_id = ${p.companyId}`);
+
+    // The instant this row's day ends, MYT. The balance line compares each
+    // movement's own column with it, so the indexes serve the lookups; taking
+    // businessDay() of every row read whole tables once per day of the report.
+    const dayEnd = sql`((s.day + 1)::timestamp AT TIME ZONE ${BUSINESS_TZ})`;
 
     // Bank accounts whose movements make up the balance line.
     const bankScope =
@@ -115,13 +119,28 @@ export async function GET(request: Request) {
         -- A member counts as new on the day of their FIRST deposit ever, not
         -- the first one inside the report's window: a player who started in
         -- July is not new again because the window opens in August.
+        -- Read as: members who deposited inside the window and never before
+        -- it. Same members as taking everyone's first deposit, but over the
+        -- window's rows rather than the whole table.
         SELECT first_day AS day, count(*)::int AS np FROM (
           SELECT d.player_id,
                  min(${businessDay(sql`d.deposit_date`)}) AS first_day
             FROM deposits d
-           WHERE ${DEPOSIT_COUNTS} AND d.player_id IS NOT NULL
+           WHERE ${all([
+             DEPOSIT_COUNTS,
+             sql`d.player_id IS NOT NULL`,
+             ...inBusinessDays(sql`d.deposit_date`, p.from ?? null, p.to ?? null),
+           ])}
            GROUP BY 1
         ) firsts
+         WHERE ${
+           p.from
+             ? sql`NOT EXISTS (
+                 SELECT 1 FROM deposits d
+                  WHERE d.player_id = firsts.player_id AND ${DEPOSIT_COUNTS}
+                    AND d.deposit_date < (${p.from}::date::timestamp AT TIME ZONE ${BUSINESS_TZ}))`
+             : sql`true`
+         }
          GROUP BY 1
       ), days AS (
         SELECT day FROM dep
@@ -154,33 +173,33 @@ export async function GET(request: Request) {
                 FROM bank_accounts ba WHERE ${bankScope})
              - coalesce((SELECT sum(d2.deposit_amount)::float8 FROM deposits d2
                           WHERE d2.status <> 'failed'
-                            AND ${businessDay(sql`d2.deposit_date`)} > s.day
+                            AND d2.deposit_date >= ${dayEnd}
                             AND d2.received_into_account_id IN
                                 (SELECT ba.account_id FROM bank_accounts ba WHERE ${bankScope})), 0)
              + coalesce((SELECT sum(w2.credit_pulled_amount)::float8 FROM withdrawals w2
                           WHERE w2.status = 'paid'
-                            AND ${businessDay(sql`w2.created_at`)} > s.day
+                            AND w2.created_at >= ${dayEnd}
                             AND w2.paid_from_account_id IN
                                 (SELECT ba.account_id FROM bank_accounts ba WHERE ${bankScope})), 0)
              + coalesce((SELECT sum(c2.amount)::float8 FROM bank_cash_outs c2
-                          WHERE ${businessDay(sql`c2.occurred_at`)} > s.day
+                          WHERE c2.occurred_at >= ${dayEnd}
                             AND c2.account_id IN
                                 (SELECT ba.account_id FROM bank_accounts ba WHERE ${bankScope})), 0)
              -- Expenses paid out of these accounts move the balance too, so
              -- winding back past one has to add it in like any other payment.
              + coalesce((SELECT sum(e2.amount)::float8 FROM expenses e2
-                          WHERE ${businessDay(sql`e2.expense_date`)} > s.day
+                          WHERE e2.expense_date >= ${dayEnd}
                             AND e2.paid_from_account_id IN
                                 (SELECT ba.account_id FROM bank_accounts ba WHERE ${bankScope})), 0)
              -- Salaries likewise: paid after this day took money out, and a
              -- reversal after this day put it back.
              + coalesce((SELECT sum(sp2.net_amount)::float8 FROM salary_payments sp2
-                          WHERE ${businessDay(sql`sp2.paid_at`)} > s.day
+                          WHERE sp2.paid_at >= ${dayEnd}
                             AND sp2.paid_from_account_id IN
                                 (SELECT ba.account_id FROM bank_accounts ba WHERE ${bankScope})), 0)
              - coalesce((SELECT sum(sp3.net_amount)::float8 FROM salary_payments sp3
                           WHERE sp3.status = 'reversed'
-                            AND ${businessDay(sql`sp3.reversed_at`)} > s.day
+                            AND sp3.reversed_at >= ${dayEnd}
                             AND sp3.paid_from_account_id IN
                                 (SELECT ba.account_id FROM bank_accounts ba WHERE ${bankScope})), 0)
                                                                     AS bank_balance

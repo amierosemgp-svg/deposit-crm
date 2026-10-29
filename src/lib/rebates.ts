@@ -35,8 +35,12 @@ export type RebateCutoffs = {
   daily: { time: string };
   /** 0 = Sunday … 6 = Saturday. */
   weekly: { weekday: number; time: string };
-  /** 1–31; a day past the month's end clamps to its last day. */
-  monthly: { day: number; time: string };
+  /**
+   * day: 1–31; a day past the month's end clamps to its last day.
+   * pay_days: the days of the month a monthly rebate may be paid out on, say
+   * the 1st to the 5th; null pays any day. `to` before `from` wraps the month.
+   */
+  monthly: { day: number; time: string; pay_days?: { from: number; to: number } | null };
 };
 
 export const REBATE_CUTOFFS_KEY = "rebate_cutoffs";
@@ -61,6 +65,11 @@ export function parseRebateCutoffs(raw: unknown): RebateCutoffs {
   const monthly = (r.monthly ?? {}) as Record<string, unknown>;
   const weekday = Number(weekly.weekday);
   const day = Number(monthly.day);
+  const pd = (monthly.pay_days ?? null) as Record<string, unknown> | null;
+  const domOk = (n: number) => Number.isInteger(n) && n >= 1 && n <= 31;
+  const payDays = pd && domOk(Number(pd.from)) && domOk(Number(pd.to))
+    ? { from: Number(pd.from), to: Number(pd.to) }
+    : null;
   return {
     daily: { time: cleanTime(daily.time, DEFAULT_REBATE_CUTOFFS.daily.time) },
     weekly: {
@@ -72,6 +81,7 @@ export function parseRebateCutoffs(raw: unknown): RebateCutoffs {
     monthly: {
       day: Number.isInteger(day) && day >= 1 && day <= 31 ? day : DEFAULT_REBATE_CUTOFFS.monthly.day,
       time: cleanTime(monthly.time, DEFAULT_REBATE_CUTOFFS.monthly.time),
+      pay_days: payDays,
     },
   };
 }
@@ -107,7 +117,8 @@ export const WEEKDAY_NAMES = [
 export function describeCutoff(period: BonusPeriod, c: RebateCutoffs): string {
   if (period === "daily") return `daily at ${c.daily.time}`;
   if (period === "weekly") return `weekly, ${WEEKDAY_NAMES[c.weekly.weekday]} ${c.weekly.time}`;
-  return `monthly, day ${c.monthly.day} at ${c.monthly.time}`;
+  const pay = c.monthly.pay_days ? `, pays out ${describePayDays(c.monthly.pay_days)}` : "";
+  return `monthly, day ${c.monthly.day} at ${c.monthly.time}${pay}`;
 }
 
 // ---- window arithmetic (business time) ------------------------------------
@@ -124,6 +135,34 @@ function hm(time: string): [number, number] {
 
 function daysInMonth(local: Date): number {
   return new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth() + 1, 0)).getUTCDate();
+}
+
+/**
+ * Why a rebate can't be paid out today, or null when it can: a monthly plan
+ * pays only on its casino's pay days, in business time. A pay day past the
+ * month's end (the 31st in April) counts as the last day.
+ */
+export function rebatePayClosed(period: BonusPeriod, c: RebateCutoffs, now = new Date()): string | null {
+  const pd = c.monthly.pay_days;
+  if (period !== "monthly" || !pd) return null;
+  const local = toLocal(now);
+  const last = daysInMonth(local);
+  const from = Math.min(pd.from, last);
+  const to = Math.min(pd.to, last);
+  const day = local.getUTCDate();
+  const open = from <= to ? day >= from && day <= to : day >= from || day <= to;
+  return open ? null : `Monthly rebates pay out on ${describePayDays(pd)} — today is the ${ordinal(day)}`;
+}
+
+/** "day 1–5" / "day 5". */
+export function describePayDays(pd: { from: number; to: number }): string {
+  return pd.from === pd.to ? `day ${pd.from}` : `day ${pd.from}–${pd.to}`;
+}
+
+function ordinal(n: number): string {
+  const v = n % 100;
+  const suffix = v >= 11 && v <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] ?? "th";
+  return `${n}${suffix}`;
 }
 
 /** The cutoff that falls in the same day / week / month as `local`. */
@@ -656,6 +695,8 @@ export type RebatePlanData = {
   plan: BonusPlan;
   cutoffs: RebateCutoffs;
   cutoff_label: string;
+  /** Why Pay is shut today (outside a monthly plan's pay days); null = open. */
+  pay_closed: string | null;
   current_window: { start: string; end: string };
   /** Recent closed windows plus any older generated ones, newest first. */
   windows: RebateWindowRow[];
@@ -733,6 +774,7 @@ export async function rebatePlanData(
     plan,
     cutoffs,
     cutoff_label: describeCutoff(period, cutoffs),
+    pay_closed: rebatePayClosed(period, cutoffs),
     current_window: { start: current.start.toISOString(), end: current.end.toISOString() },
     windows,
     payouts_for: payoutsFor,

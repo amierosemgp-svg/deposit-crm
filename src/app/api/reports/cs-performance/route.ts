@@ -4,7 +4,7 @@ import { authErrorResponse, requireUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
 import {
   all,
-  businessDay,
+  inBusinessDays,
   parseReportParams,
   scopeByPlayerAsOf,
   scopeDepositsAsOf,
@@ -29,8 +29,7 @@ export async function GET(request: Request) {
       ...scopeDepositsAsOf(user, sql`d.deposit_date`),
       sql`d.handled_by_user_id IS NOT NULL`,
     ];
-    if (p.from) dw.push(sql`${businessDay(sql`d.deposit_date`)} >= ${p.from}::date`);
-    if (p.to) dw.push(sql`${businessDay(sql`d.deposit_date`)} <= ${p.to}::date`);
+    dw.push(...inBusinessDays(sql`d.deposit_date`, p.from ?? null, p.to ?? null));
     if (p.companyId !== null) dw.push(sql`d.company_entity_id = ${p.companyId}`);
     if (p.status !== "all") dw.push(sql`d.status::text = ${p.status}`);
     if (p.q) {
@@ -48,8 +47,7 @@ export async function GET(request: Request) {
       ...scopeByPlayerAsOf(user, sql`wd.created_at`),
       sql`wd.handled_by_user_id IS NOT NULL`,
     ];
-    if (p.from) ww.push(sql`${businessDay(sql`wd.created_at`)} >= ${p.from}::date`);
-    if (p.to) ww.push(sql`${businessDay(sql`wd.created_at`)} <= ${p.to}::date`);
+    ww.push(...inBusinessDays(sql`wd.created_at`, p.from ?? null, p.to ?? null));
     if (p.companyId !== null) ww.push(sql`pl.company_entity_id = ${p.companyId}`);
     if (p.status !== "all") ww.push(sql`wd.status::text = ${p.status}`);
     if (p.q) {
