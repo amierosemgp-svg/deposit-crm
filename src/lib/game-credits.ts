@@ -85,6 +85,12 @@ export async function moveGameCredit(
     /** Null with `all` — the whole source balance, whatever it turns out to be. */
     amount: number | null;
     all?: boolean;
+    /**
+     * The player won since the CRM last saw the wallet: CS moved more than the
+     * cached balance holds. The source is emptied (never below zero) and the
+     * full amount lands in the destination — the gap is the win.
+     */
+    allowWin?: boolean;
     nowIso: string;
   },
 ): Promise<number> {
@@ -103,7 +109,7 @@ export async function moveGameCredit(
       `Nothing to transfer from ${fromGame} (balance ${fromBalance.toFixed(2)})`,
     );
   }
-  if (fromBalance < moved) {
+  if (fromBalance < moved && !input.allowWin) {
     throw new InsufficientCreditError(
       `Insufficient ${fromGame} balance (${fromBalance.toFixed(2)} available, ${moved.toFixed(2)} needed)`,
     );
@@ -114,7 +120,7 @@ export async function moveGameCredit(
   await txn
     .update(gameCredits)
     .set({
-      current_balance: +(fromBalance - moved).toFixed(2),
+      current_balance: Math.max(0, +(fromBalance - moved).toFixed(2)),
       last_updated_at: nowIso,
     })
     .where(

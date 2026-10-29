@@ -96,14 +96,20 @@ export async function POST(request: Request) {
       // comes back as a failed transfer with a reason, which is the honest
       // outcome — better than refusing here on a figure that may be stale.
       const amount = transferAll ? 0 : body.amount!;
-      if (!transferAll && fromBalance < amount) {
+      const skipBot = body.skip_bot ?? true;
+      // A manual move may exceed the cached balance: CS read the real figure
+      // off the back-office, and the gap is what the player won since the CRM
+      // last saw the wallet (the CRM never hears about wins). The agent's
+      // queued move still has to fit, as it reads the provider itself.
+      if (!transferAll && !skipBot && fromBalance < amount) {
         throw new AuthError(
           422,
           `Insufficient ${fromGame} balance (${fromBalance.toFixed(2)})`,
         );
       }
-
-      const skipBot = body.skip_bot ?? true;
+      const win = skipBot && !transferAll && amount > fromBalance
+        ? +(amount - fromBalance).toFixed(2)
+        : 0;
       const nowIso = new Date().toISOString();
 
       // Manual: the move already happened in the back-office, so book it now.
@@ -120,6 +126,7 @@ export async function POST(request: Request) {
             toLogin,
             amount,
             all: transferAll,
+            allowWin: true,
             nowIso,
           });
         } catch (e) {
@@ -198,6 +205,7 @@ export async function POST(request: Request) {
           from: fromGame,
           to: toGame,
           transfer_all: transferAll,
+          ...(win ? { win, from_balance_before: fromBalance } : {}),
           // What we believed the source held when CS asked — context for the
           // figure the agent later reports, not an instruction.
           cached_from_balance: fromBalance,
