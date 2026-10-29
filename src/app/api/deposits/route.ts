@@ -5,7 +5,7 @@ import { bankAccounts, deposits, players, transactions } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { assertNotArchived, jsonError } from "@/lib/api-helpers";
 import { canOverrideEligibility, resolveBonusForDeposit } from "@/lib/bonus";
-import { completeManualDeposit } from "@/lib/deposit-complete";
+import { canBookDeposit, completeManualDeposit } from "@/lib/deposit-complete";
 import { InsufficientKioskCreditError } from "@/lib/kiosk-credit";
 
 const createSchema = z.object({
@@ -106,10 +106,17 @@ export async function POST(request: Request) {
      * player's game credit, the company's kiosk float, total_deposits — lands
      * here rather than waiting for a click that only ever confirmed the past.
      *
-     * A deposit with no game chosen can't be topped up anywhere, so it still
-     * waits at "pending" exactly as POST /:id/approve would refuse it.
+     * A deposit with no game but a bank account (unclaimed money, say) is
+     * bank-only: it completes too, booking the bank alone. With neither it
+     * can't be booked anywhere, so it still waits at "pending" exactly as
+     * POST /:id/approve would refuse it.
      */
-    const autoComplete = skipBot && !!body.selected_game;
+    const autoComplete =
+      skipBot &&
+      canBookDeposit({
+        selected_game: body.selected_game,
+        received_into_account_id: body.received_into_account_id,
+      });
     const status = autoComplete
       ? ("processing" as const)
       : skipBot

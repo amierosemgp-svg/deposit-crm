@@ -27,6 +27,10 @@ type DepositRow = typeof deposits.$inferSelect;
  * The caller owns the transaction and must have locked `row` if it wasn't
  * created inside it. Throws InsufficientKioskCreditError when the float can't
  * cover the top-up — the one failure a caller may reasonably want to absorb.
+ *
+ * A bank-only deposit — an account named but no game, such as money that came
+ * in with nobody claiming it (UC0001) — books the bank and total_deposits and
+ * nothing else: no kiosk, no wallet, no recommend bonus.
  */
 export async function completeManualDeposit(
   txn: Txn,
@@ -47,8 +51,8 @@ export async function completeManualDeposit(
 ): Promise<DepositRow> {
   const { row, userId } = input;
   const nowIso = input.nowIso ?? new Date().toISOString();
-  if (!row.player_id || !row.selected_game) {
-    throw new Error("completeManualDeposit needs a player and a game");
+  if (!row.player_id || !canBookDeposit(row)) {
+    throw new Error("completeManualDeposit needs a player and a game or bank account");
   }
 
   // The float pays for the top-up. Silently skipped when the company keeps no
@@ -86,24 +90,28 @@ export async function completeManualDeposit(
   // Same two rules as the agent's completion path: one canonical spelling per
   // game, and never add a delta on top of a balance the agent has already read
   // off the provider.
-  const gameName = await canonicalise(row.selected_game, txn);
-  const [pl] = await txn
-    .select({ game_accounts: players.game_accounts })
-    .from(players)
-    .where(eq(players.player_id, row.player_id));
-  const gameUsername = resolveGameLogin(
-    pl?.game_accounts ?? null,
-    gameName,
-    row.selected_game_username,
-  );
-  const alreadySynced = await balanceSyncedSince(txn, {
-    playerId: row.player_id,
-    gameName,
-    gameUsername,
-    sinceIso: input.syncCutoffIso ?? row.approved_at ?? row.updated_at ?? row.created_at,
-  });
+  const gameName = row.selected_game ? await canonicalise(row.selected_game, txn) : null;
+  let gameUsername = "";
+  let alreadySynced: Awaited<ReturnType<typeof balanceSyncedSince>> = null;
+  if (gameName) {
+    const [pl] = await txn
+      .select({ game_accounts: players.game_accounts })
+      .from(players)
+      .where(eq(players.player_id, row.player_id));
+    gameUsername = resolveGameLogin(
+      pl?.game_accounts ?? null,
+      gameName,
+      row.selected_game_username,
+    );
+    alreadySynced = await balanceSyncedSince(txn, {
+      playerId: row.player_id,
+      gameName,
+      gameUsername,
+      sinceIso: input.syncCutoffIso ?? row.approved_at ?? row.updated_at ?? row.created_at,
+    });
+  }
 
-  if (!alreadySynced) {
+  if (gameName && !alreadySynced) {
     await txn
       .insert(gameCredits)
       .values({
@@ -150,7 +158,9 @@ export async function completeManualDeposit(
       source: "manual",
       game_username: gameUsername,
       action: "manual_complete",
-      ...(alreadySynced
+      ...(!gameName
+        ? { balance_credited: false, bank_only: true }
+        : alreadySynced
         ? {
             balance_credited: false,
             reason: "agent had already synced the provider balance",
@@ -162,10 +172,20 @@ export async function completeManualDeposit(
   });
 
   // Inside the same transaction, so a bonus can't survive a rollback.
-  if (!pointsOnly) await maybeCreateReferralBonus(txn, row.deposit_id);
+  // A bank-only row topped nobody up, so there is nothing to reward either.
+  if (!pointsOnly && gameName) await maybeCreateReferralBonus(txn, row.deposit_id);
 
   return updated;
 }
+
+/**
+ * Whether a deposit has enough to be completed: a game to top up, or failing
+ * that a bank account the money landed in (a bank-only row).
+ */
+export const canBookDeposit = (row: {
+  selected_game: string | null | undefined;
+  received_into_account_id: number | null | undefined;
+}) => !!row.selected_game || (row.received_into_account_id ?? null) !== null;
 
 /**
  * Re-book a deposit that was already completed, after CS corrected the row.

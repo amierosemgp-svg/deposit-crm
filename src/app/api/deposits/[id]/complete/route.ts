@@ -3,7 +3,7 @@ import { db } from "@/db";
 import { deposits } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
-import { completeManualDeposit } from "@/lib/deposit-complete";
+import { canBookDeposit, completeManualDeposit } from "@/lib/deposit-complete";
 import { InsufficientKioskCreditError } from "@/lib/kiosk-credit";
 
 /**
@@ -43,8 +43,8 @@ export async function POST(
       if (row.status !== "processing") {
         throw new AuthError(409, `Deposit is "${row.status}", approve it first`);
       }
-      if (!row.player_id || !row.selected_game) {
-        throw new AuthError(422, "A player and game are required to complete");
+      if (!row.player_id || !canBookDeposit(row)) {
+        throw new AuthError(422, "A player and a game or bank account are required to complete");
       }
 
       return completeManualDeposit(txn, { row, userId: user.user_id });

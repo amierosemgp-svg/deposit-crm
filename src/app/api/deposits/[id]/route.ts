@@ -9,6 +9,7 @@ import { canOverrideEligibility, resolveBonusForDeposit } from "@/lib/bonus";
 import { InsufficientBankBalanceError } from "@/lib/bank-balance";
 import { bonusOn } from "@/lib/bonus-math";
 import {
+  canBookDeposit,
   completeManualDeposit,
   rebookCompletedDeposit,
   reverseCompletedDeposit,
@@ -432,8 +433,16 @@ export async function PATCH(
           );
         }
       }
-      if (willBook && (!playerId || !nextGame)) {
-        throw new AuthError(422, "A player and game are required to complete");
+      const nextAccount =
+        "received_into_account_id" in bankPatch
+          ? (bankPatch.received_into_account_id as number)
+          : row.received_into_account_id;
+      if (
+        willBook &&
+        (!playerId ||
+          !canBookDeposit({ selected_game: nextGame, received_into_account_id: nextAccount }))
+      ) {
+        throw new AuthError(422, "A player and a game or bank account are required to complete");
       }
 
       /**

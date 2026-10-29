@@ -4,6 +4,7 @@ import { deposits, transactions } from "@/db/schema";
 import { canActOnClaim } from "@/lib/claims";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
+import { canBookDeposit } from "@/lib/deposit-complete";
 
 /**
  * POST /api/deposits/:id/approve — Approve & dispatch to the agent.
@@ -53,8 +54,8 @@ export async function POST(
       if (!row.player_id) {
         throw new AuthError(422, "Assign a player before approving");
       }
-      if (!row.selected_game) {
-        throw new AuthError(422, "Select a game before approving");
+      if (!canBookDeposit(row)) {
+        throw new AuthError(422, "Select a game (or the bank it landed in) before approving");
       }
 
       const nowIso = new Date().toISOString();
