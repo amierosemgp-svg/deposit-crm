@@ -26,6 +26,7 @@ import {
   CREDIT_CONFLICT_TARGET,
   creditWhere,
   resolveGameLogin,
+  transferWinNote,
 } from "@/lib/game-credits";
 
 const bodySchema = z.object({
@@ -121,6 +122,8 @@ export async function PATCH(
       // the agent's own once it reports one; persisted onto the row below so
       // the ledger and the CRM show the real number, not the placeholder.
       let moved = row.transfer_amount;
+      // Set when the move exceeded the CRM wallet — see transferWinNote.
+      let winNote: string | null = null;
 
       // Claiming: mark that the agent has started, and restart the stall clock so
       // the 5-minute sweep measures from "work began", not "CS asked".
@@ -224,12 +227,10 @@ export async function PATCH(
               `Nothing to transfer from ${row.from_game} (balance ${fromBalance.toFixed(2)})`,
             );
           }
-          if (fromBalance < moved) {
-            throw new BotError(
-              422,
-              `Insufficient ${row.from_game} balance (${fromBalance.toFixed(2)} available, ${moved.toFixed(2)} needed)`,
-            );
-          }
+          // More than the CRM holds is the player's win since the CRM last saw
+          // the wallet (it never hears about wins): the source empties to 0 and
+          // the full figure lands in the destination, with a note saying so.
+          winNote = transferWinNote(moved, fromBalance);
 
           // Write back under the spelling already on file, so a case variant in
           // the transfer row can't fork the balance the index now forbids.
@@ -238,7 +239,7 @@ export async function PATCH(
           await txn
             .update(gameCredits)
             .set({
-              current_balance: +(fromBalance - moved).toFixed(2),
+              current_balance: Math.max(0, +(fromBalance - moved).toFixed(2)),
               last_updated_at: nowIso,
             })
             .where(
@@ -318,7 +319,7 @@ export async function PATCH(
           completed_at: nowIso,
           // Keep the reason on the row itself, not just buried in the audit
           // trail — CS reads it off the transfer list.
-          note: body.note ?? null,
+          note: [winNote, body.note?.trim() || null].filter(Boolean).join(" · ") || null,
           // A transfer that somehow reached here without a start time still
           // gets one, so the UI never shows an end without a start.
           started_at: row.started_at ?? row.created_at,
@@ -364,6 +365,7 @@ export async function PATCH(
           api_key_label: auth.label,
           note: body.note ?? null,
           ...(row.transfer_all ? { transfer_all: true } : {}),
+          ...(winNote ? { win_note: winNote } : {}),
           // Present when the agent's figure differed from the one requested.
           ...(body.status === "completed" && moved !== row.transfer_amount
             ? { requested_amount: row.transfer_amount, reported_amount: moved }

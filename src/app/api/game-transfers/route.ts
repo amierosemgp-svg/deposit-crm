@@ -10,6 +10,7 @@ import {
   InsufficientCreditError,
   moveGameCredit,
   resolveGameLogin,
+  transferWinNote,
 } from "@/lib/game-credits";
 import { InsufficientKioskCreditError, moveKioskCredit } from "@/lib/kiosk-credit";
 
@@ -97,19 +98,11 @@ export async function POST(request: Request) {
       // outcome — better than refusing here on a figure that may be stale.
       const amount = transferAll ? 0 : body.amount!;
       const skipBot = body.skip_bot ?? true;
-      // A manual move may exceed the cached balance: CS read the real figure
-      // off the back-office, and the gap is what the player won since the CRM
-      // last saw the wallet (the CRM never hears about wins). The agent's
-      // queued move still has to fit, as it reads the provider itself.
-      if (!transferAll && !skipBot && fromBalance < amount) {
-        throw new AuthError(
-          422,
-          `Insufficient ${fromGame} balance (${fromBalance.toFixed(2)})`,
-        );
-      }
-      const win = skipBot && !transferAll && amount > fromBalance
-        ? +(amount - fromBalance).toFixed(2)
-        : 0;
+      // No balance check, manual or queued: CS reads the real figure off the
+      // back-office, and more than the cached balance is what the player won
+      // since the CRM last saw the wallet (it never hears about wins). The
+      // row's note says so, and the source empties to 0 when it is booked.
+      const winNote = transferAll ? null : transferWinNote(amount, fromBalance);
       const nowIso = new Date().toISOString();
 
       // Manual: the move already happened in the back-office, so book it now.
@@ -184,7 +177,11 @@ export async function POST(request: Request) {
           started_at: nowIso,
           ...(skipBot ? { completed_at: nowIso } : {}),
           handled_by_user_id: user.user_id,
-          ...(skipBot ? { note: "Moved by CS in the back-office" } : {}),
+          ...(skipBot
+            ? { note: ["Moved by CS in the back-office", winNote].filter(Boolean).join(" · ") }
+            : winNote
+              ? { note: winNote }
+              : {}),
           ...(body.assign_to_me
             ? { assigned_to_user_id: user.user_id, assigned_at: nowIso }
             : {}),
@@ -205,7 +202,7 @@ export async function POST(request: Request) {
           from: fromGame,
           to: toGame,
           transfer_all: transferAll,
-          ...(win ? { win, from_balance_before: fromBalance } : {}),
+          ...(winNote ? { win_note: winNote } : {}),
           // What we believed the source held when CS asked — context for the
           // figure the agent later reports, not an instruction.
           cached_from_balance: fromBalance,

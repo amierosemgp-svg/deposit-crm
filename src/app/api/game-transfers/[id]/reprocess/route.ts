@@ -3,7 +3,7 @@ import { db } from "@/db";
 import { gameCredits, gameTransfers, players, transactions } from "@/db/schema";
 import { AuthError, authErrorResponse, requireWriteUser } from "@/lib/auth";
 import { jsonError } from "@/lib/api-helpers";
-import { creditWhere, resolveGameLogin } from "@/lib/game-credits";
+import { creditWhere, resolveGameLogin, transferWinNote } from "@/lib/game-credits";
 import { MAX_TRANSFER_ATTEMPTS } from "@/lib/types";
 
 /**
@@ -78,14 +78,9 @@ export async function POST(
         .from(gameCredits)
         .where(creditWhere(t.player_id, t.from_game, fromLogin));
       const fromBalance = fromCredit?.current_balance ?? 0;
-      // A transfer_all transfer carries no figure to check against — it is a
-      // "whatever is in there" instruction, re-issued as one.
-      if (!t.transfer_all && fromBalance < t.transfer_amount) {
-        throw new AuthError(
-          422,
-          `Insufficient ${t.from_game} balance (${fromBalance.toFixed(2)}) — the transfer needs ${t.transfer_amount.toFixed(2)}`,
-        );
-      }
+      // No balance check: more than the CRM holds is the player's win (see
+      // POST /api/game-transfers), noted on the row again below.
+      const winNote = t.transfer_all ? null : transferWinNote(t.transfer_amount, fromBalance);
 
       const nowIso = new Date().toISOString();
       const [updated] = await txn
@@ -97,7 +92,7 @@ export async function POST(
           attempt_count: 1,
           started_at: nowIso,
           completed_at: null,
-          note: null,
+          note: winNote,
           // The old snapshot is from before the failure and is now misleading.
           from_game_balance_before: fromBalance,
           // A failed transfer_all attempt may have had a figure written onto it

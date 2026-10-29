@@ -166,6 +166,16 @@ export async function moveGameCredit(
 export class InsufficientCreditError extends Error {}
 
 /**
+ * The note a transfer carries when it moved more than the CRM wallet held —
+ * the player won in the back-office since the CRM last saw the balance. Null
+ * when the move fit.
+ */
+export const transferWinNote = (moved: number, fromBalance: number): string | null =>
+  moved > fromBalance
+    ? `Win ${(moved - fromBalance).toFixed(2)} (CRM had ${fromBalance.toFixed(2)})`
+    : null;
+
+/**
  * Add to or take from one wallet, and report where it ended up.
  *
  * For corrections rather than transactions: re-booking a deposit that was
