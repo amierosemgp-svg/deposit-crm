@@ -6,6 +6,7 @@
  * name the deposit, free credit or withdrawal by its ref and the CS and what was credited
  * fill in; Lost and Penalty work themselves out. Deducted by their next salary
  * without anyone ticking it — the Status column says which salary took it.
+ * Until then a saved row corrects in place, like the other sheets.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -488,6 +489,55 @@ export function PenaltySheet({ prefill = null }: { prefill?: PenaltyPrefill | nu
     [data, companyInScope, statusFilter, statusOf, nameOf, entityName, deductedIn, leaderIds, q],
   );
 
+  // ---- correcting a saved row ----
+
+  /** The columns a saved penalty corrects in place; Ref and Mistake On stay — a wrong row is a void and a new one. */
+  const EDITABLE = useMemo(() => new Set<number>([C.date, C.cs, C.injected, C.retrieved, C.share, C.reason]), []);
+  const penaltyAt = useCallback(
+    (rowIndex: number) => data?.penalties.find((p) => p.penalty_id === Number(rows[rowIndex]?.id)),
+    [data, rows],
+  );
+  const committedEditable = useCallback(
+    (rowIndex: number, colIndex: number) => {
+      if (isViewer || !EDITABLE.has(colIndex)) return false;
+      const p = penaltyAt(rowIndex);
+      // Pending only (a salary froze the rest), and never a CS on their own.
+      return !!p && statusOf(p) === "pending" && p.user_id !== selfId;
+    },
+    [isViewer, EDITABLE, penaltyAt, statusOf, selfId],
+  );
+  const onCommittedEdit = useCallback(
+    async (rowIndex: number, colIndex: number, value: string) => {
+      const p = penaltyAt(rowIndex);
+      if (!p || value === rows[rowIndex]?.cells[colIndex]) return;
+      let patch: Record<string, unknown>;
+      if (colIndex === C.date) {
+        const date = parseSheetDate(value);
+        if (!date) return void toast.error(`Bad date "${value.trim()}" (use 31/8/2026)`);
+        patch = { occurred_at: `${date}T12:00:00+08:00` };
+      } else if (colIndex === C.cs) {
+        const cs = resolveCs(value);
+        if (!cs) return void toast.error(`No CS or leader called "${value.trim()}" — pick from the list`);
+        patch = { user_id: cs.user_id };
+      } else if (colIndex === C.injected || colIndex === C.retrieved) {
+        const n = parseAmount(value);
+        if (n === null || n < 0) return void toast.error(`Bad amount "${value.trim()}"`);
+        patch = colIndex === C.injected ? { credit_injected: n } : { credit_retrieved: n };
+      } else if (colIndex === C.share) {
+        const n = parseAmount(value.replace("%", ""));
+        if (n === null || n < 0 || n > 100) return void toast.error("Share is a percent, 0–100");
+        patch = { share_pct: n };
+      } else {
+        if (!value.trim()) return void toast.error("What Happened — a line on the mistake");
+        patch = { reason: value.trim() };
+      }
+      const res = await send(`/api/staff-penalties/${p.penalty_id}`, "PATCH", patch);
+      if (!res.ok) toast.error(res.error);
+      await reload();
+    },
+    [penaltyAt, rows, resolveCs, reload],
+  );
+
   // The CS behind the selection, saved rows and NEW ENTRIES rows alike —
   // only when it's one person.
   const selectedCs = useMemo(() => {
@@ -589,6 +639,8 @@ export function PenaltySheet({ prefill = null }: { prefill?: PenaltyPrefill | nu
           draftStatus={isViewer ? noDraftStatus : dock.draftStatus}
           flushRef={isViewer ? undefined : dock.flushRef}
           readOnly={isViewer}
+          committedEditable={committedEditable}
+          onCommittedEdit={(r, c, v) => void onCommittedEdit(r, c, v)}
           onSelectedRowsChange={setSelectedIds}
           onSelectedDraftsChange={setSelectedDrafts}
           focusKey={`penalty:${!!data}`}
