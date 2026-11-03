@@ -48,6 +48,9 @@ import {
  *
  * `paused` keeps a casino out of the morning email, with the reason. It can
  * still be run by hand with ?company=<key>.
+ *
+ * `emailTo` are people who get this casino's report alone, in an email of its
+ * own with only its PDF — on top of TALLY_EMAIL_TO, who get every casino.
  */
 export type TallyCompany = {
   key: string; // ?company=<key> runs just this one
@@ -58,6 +61,7 @@ export type TallyCompany = {
     | { monthly: (month: string, year: number) => { words: string[]; like: string } };
   requireBonus?: boolean;
   paused?: string;
+  emailTo?: string[];
 };
 
 /**
@@ -79,6 +83,7 @@ export const TALLY_COMPANIES: TallyCompany[] = [
     entity: { id: 30 },
     sheet: monthlyFile(["Poker"], "Poker City"),
     requireBonus: true,
+    emailTo: ["ttthoseh@gmail.com"],
   },
   {
     key: "fishingstar",
@@ -96,8 +101,9 @@ export const TALLY_COMPANIES: TallyCompany[] = [
     key: "genting",
     name: "Genting Casino",
     entity: { names: ["Genting Casino", "Genting"] },
-    sheet: monthlyFile(["Genting"], "Genting Casino"),
-    paused: "no deposits in the CRM yet",
+    // "Casino" too: "Genting" alone also finds UncleGenting's and Gentingkaya's files.
+    sheet: monthlyFile(["Genting", "Casino"], "Genting Casino"),
+    emailTo: ["genting99168@gmail.com"],
   },
 ];
 
