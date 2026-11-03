@@ -83,6 +83,7 @@ export const TALLY_COMPANIES: TallyCompany[] = [
     entity: { id: 30 },
     sheet: monthlyFile(["Poker"], "Poker City"),
     requireBonus: true,
+    emailTo: ["ttthoseh@gmail.com"],
   },
   {
     key: "fishingstar",
