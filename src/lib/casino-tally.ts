@@ -96,6 +96,7 @@ export const TALLY_COMPANIES: TallyCompany[] = [
     name: "Robin Hood",
     entity: { names: ["Robin Hood"] },
     sheet: monthlyFile(["Robin"], "RobinHood"),
+    emailTo: ["ivangoh0826@gmail.com", "legowin2688@gmail.com"],
   },
   {
     key: "genting",
