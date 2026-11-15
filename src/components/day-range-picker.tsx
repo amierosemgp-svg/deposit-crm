@@ -11,31 +11,30 @@ const DAYS = Array.from({ length: 31 }, (_, i) => i + 1);
  * A range of days of the month, picked on a 1–31 grid. A range may wrap past
  * the month's end (day 28 to day 3). A day past a short month's end (the 31st
  * in April) falls on its last day — the same rule the server applies.
- * The first click picks the start, the second the end.
+ * The first click picks the start, the second the end. No range at all
+ * (null) means every day; "Any day" in the popup clears it.
  */
 export function DayRangePicker({
-  from,
-  to,
+  value,
   label,
   hint,
   disabled,
   onChange,
 }: {
-  from: number;
-  to: number;
+  value: { from: number; to: number } | null;
   label: string;
   hint: string;
   disabled?: boolean;
-  onChange: (range: { from: number; to: number }) => void;
+  onChange: (range: { from: number; to: number } | null) => void;
 }) {
   const [open, setOpen] = useState(false);
   // The start picked while waiting for the end.
   const [pending, setPending] = useState<number | null>(null);
 
-  const start = pending ?? from;
-  const end = pending !== null ? null : to;
+  const start = pending ?? value?.from ?? null;
+  const end = pending !== null ? null : (value?.to ?? null);
   const inRange = (d: number) =>
-    end === null ? false : start <= end ? d >= start && d <= end : d >= start || d <= end;
+    start === null || end === null ? false : start <= end ? d >= start && d <= end : d >= start || d <= end;
 
   function pick(d: number) {
     if (pending === null) {
@@ -92,8 +91,21 @@ export function DayRangePicker({
             </div>
             <p className="mt-2 text-xs text-muted-foreground">
               {label}
-              {Math.max(start, end ?? 0) > 28 && " (the month's last day in shorter months)"}
+              {Math.max(start ?? 0, end ?? 0) > 28 && " (the month's last day in shorter months)"}
             </p>
+            {value && (
+              <button
+                type="button"
+                onClick={() => {
+                  onChange(null);
+                  setPending(null);
+                  setOpen(false);
+                }}
+                className="mt-2 w-full cursor-pointer rounded-md border border-input py-1.5 text-xs hover:bg-muted"
+              >
+                Any day
+              </button>
+            )}
           </Popover.Popup>
         </Popover.Positioner>
       </Popover.Portal>

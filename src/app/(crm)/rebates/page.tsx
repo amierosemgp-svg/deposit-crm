@@ -900,47 +900,53 @@ export default function RebatesPage() {
                   }
                 />
               </div>
+              <Label>Monthly</Label>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">Day</span>
+                <Input
+                  type="number"
+                  min={1}
+                  max={31}
+                  value={cutoffForm.monthly.day}
+                  disabled={!canEditCutoffs}
+                  className="w-20"
+                  onChange={(e) =>
+                    setCutoffForm((f) => ({
+                      ...f,
+                      monthly: { ...f.monthly, day: Number(e.target.value) },
+                    }))
+                  }
+                />
+                <Input
+                  type="time"
+                  value={cutoffForm.monthly.time}
+                  disabled={!canEditCutoffs}
+                  onChange={(e) =>
+                    setCutoffForm((f) => ({ ...f, monthly: { ...f.monthly, time: e.target.value } }))
+                  }
+                />
+              </div>
             </div>
             <div className="grid grid-cols-[88px_1fr] items-center gap-3">
               <Label>Payout days</Label>
-              <div className="flex items-center gap-2">
-                <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
-                  <input
-                    type="checkbox"
-                    className="cursor-pointer"
-                    checked={!!cutoffForm.monthly.pay_days}
-                    disabled={!canEditCutoffs}
-                    onChange={(e) =>
-                      setCutoffForm((f) => ({
-                        ...f,
-                        monthly: { ...f.monthly, pay_days: e.target.checked ? { from: 1, to: 5 } : null },
-                      }))
-                    }
-                  />
-                  Only on
-                </label>
-                {cutoffForm.monthly.pay_days ? (
-                  <DayRangePicker
-                    from={cutoffForm.monthly.pay_days.from}
-                    to={cutoffForm.monthly.pay_days.to}
-                    label={
-                      cutoffForm.monthly.pay_days.from === cutoffForm.monthly.pay_days.to
-                        ? `Day ${cutoffForm.monthly.pay_days.from} only`
-                        : `Day ${cutoffForm.monthly.pay_days.from} – day ${cutoffForm.monthly.pay_days.to}`
-                    }
-                    hint="Pick the first pay day, then the last."
-                    disabled={!canEditCutoffs}
-                    onChange={(pay_days) =>
-                      setCutoffForm((f) => ({ ...f, monthly: { ...f.monthly, pay_days } }))
-                    }
-                  />
-                ) : (
-                  <span className="text-xs text-muted-foreground">any day</span>
-                )}
-              </div>
+              <DayRangePicker
+                value={cutoffForm.monthly.pay_days ?? null}
+                label={
+                  !cutoffForm.monthly.pay_days
+                    ? "Any day"
+                    : cutoffForm.monthly.pay_days.from === cutoffForm.monthly.pay_days.to
+                      ? `Day ${cutoffForm.monthly.pay_days.from} only`
+                      : `Day ${cutoffForm.monthly.pay_days.from} – day ${cutoffForm.monthly.pay_days.to}`
+                }
+                hint="Pick the first pay day, then the last."
+                disabled={!canEditCutoffs}
+                onChange={(pay_days) =>
+                  setCutoffForm((f) => ({ ...f, monthly: { ...f.monthly, pay_days } }))
+                }
+              />
             </div>
             <p className="text-xs text-muted-foreground">
-              A pay day past the month&apos;s end (the 31st in April) falls on the month&apos;s last day.
+              A monthly day past the month&apos;s end (the 31st in April) falls on the month&apos;s last day.
               Payout days limit when a monthly rebate can be paid, in Malaysia time; daily and weekly plans pay any day.
             </p>
           </div>
