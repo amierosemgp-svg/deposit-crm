@@ -24,7 +24,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { ListLoading } from "@/components/list-loading";
 import { PlayerNameLink } from "@/components/player-name-link";
-import { MonthlyWindowPicker } from "@/components/monthly-window-picker";
+import { DayRangePicker, monthlyWindow } from "@/components/day-range-picker";
 import {
   Dialog,
   DialogContent,
@@ -902,12 +902,15 @@ export default function RebatesPage() {
               </div>
               <Label>Monthly</Label>
               <div className="flex items-center gap-2">
-                <MonthlyWindowPicker
-                  day={cutoffForm.monthly.day}
-                  time={cutoffForm.monthly.time}
+                <DayRangePicker
+                  from={cutoffForm.monthly.day}
+                  to={monthlyWindow(cutoffForm.monthly.day, cutoffForm.monthly.time).to}
+                  label={monthlyWindow(cutoffForm.monthly.day, cutoffForm.monthly.time).label}
+                  hint="Pick the day each month's window opens. It closes when the next one opens."
+                  fixedEnd
                   disabled={!canEditCutoffs}
-                  onChange={(day) =>
-                    setCutoffForm((f) => ({ ...f, monthly: { ...f.monthly, day } }))
+                  onChange={({ from }) =>
+                    setCutoffForm((f) => ({ ...f, monthly: { ...f.monthly, day: from } }))
                   }
                 />
                 <Input
@@ -940,38 +943,20 @@ export default function RebatesPage() {
                   Only on
                 </label>
                 {cutoffForm.monthly.pay_days ? (
-                  <>
-                    <span className="text-xs text-muted-foreground">Day</span>
-                    <Input
-                      type="number"
-                      min={1}
-                      max={31}
-                      value={cutoffForm.monthly.pay_days.from}
-                      disabled={!canEditCutoffs}
-                      className="w-16"
-                      onChange={(e) =>
-                        setCutoffForm((f) => ({
-                          ...f,
-                          monthly: { ...f.monthly, pay_days: { from: Number(e.target.value), to: f.monthly.pay_days?.to ?? 5 } },
-                        }))
-                      }
-                    />
-                    <span className="text-xs text-muted-foreground">to</span>
-                    <Input
-                      type="number"
-                      min={1}
-                      max={31}
-                      value={cutoffForm.monthly.pay_days.to}
-                      disabled={!canEditCutoffs}
-                      className="w-16"
-                      onChange={(e) =>
-                        setCutoffForm((f) => ({
-                          ...f,
-                          monthly: { ...f.monthly, pay_days: { from: f.monthly.pay_days?.from ?? 1, to: Number(e.target.value) } },
-                        }))
-                      }
-                    />
-                  </>
+                  <DayRangePicker
+                    from={cutoffForm.monthly.pay_days.from}
+                    to={cutoffForm.monthly.pay_days.to}
+                    label={
+                      cutoffForm.monthly.pay_days.from === cutoffForm.monthly.pay_days.to
+                        ? `Day ${cutoffForm.monthly.pay_days.from} only`
+                        : `Day ${cutoffForm.monthly.pay_days.from} – day ${cutoffForm.monthly.pay_days.to}`
+                    }
+                    hint="Pick the first pay day, then the last."
+                    disabled={!canEditCutoffs}
+                    onChange={(pay_days) =>
+                      setCutoffForm((f) => ({ ...f, monthly: { ...f.monthly, pay_days } }))
+                    }
+                  />
                 ) : (
                   <span className="text-xs text-muted-foreground">any day</span>
                 )}
