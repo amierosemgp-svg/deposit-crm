@@ -24,6 +24,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { ListLoading } from "@/components/list-loading";
 import { PlayerNameLink } from "@/components/player-name-link";
+import { MonthlyWindowPicker } from "@/components/monthly-window-picker";
 import {
   Dialog,
   DialogContent,
@@ -901,25 +902,19 @@ export default function RebatesPage() {
               </div>
               <Label>Monthly</Label>
               <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground">Day</span>
-                <Input
-                  type="number"
-                  min={1}
-                  max={31}
-                  value={cutoffForm.monthly.day}
+                <MonthlyWindowPicker
+                  day={cutoffForm.monthly.day}
+                  time={cutoffForm.monthly.time}
                   disabled={!canEditCutoffs}
-                  className="w-20"
-                  onChange={(e) =>
-                    setCutoffForm((f) => ({
-                      ...f,
-                      monthly: { ...f.monthly, day: Number(e.target.value) },
-                    }))
+                  onChange={(day) =>
+                    setCutoffForm((f) => ({ ...f, monthly: { ...f.monthly, day } }))
                   }
                 />
                 <Input
                   type="time"
                   value={cutoffForm.monthly.time}
                   disabled={!canEditCutoffs}
+                  className="w-28 shrink-0"
                   onChange={(e) =>
                     setCutoffForm((f) => ({ ...f, monthly: { ...f.monthly, time: e.target.value } }))
                   }
