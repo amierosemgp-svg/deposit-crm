@@ -1,33 +1,26 @@
 "use client";
 
 import { useState } from "react";
-import { Popover } from "@base-ui/react/popover";
-import { CalendarRange, ChevronDownIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const DAYS = Array.from({ length: 31 }, (_, i) => i + 1);
 
 /**
- * A range of days of the month, picked on a 1–31 grid. A range may wrap past
- * the month's end (day 28 to day 3). A day past a short month's end (the 31st
- * in April) falls on its last day — the same rule the server applies.
+ * A range of days of the month, picked straight on a 1–31 grid. A range may
+ * wrap past the month's end (day 28 to day 3). A day past a short month's end
+ * (the 31st in April) falls on its last day — the same rule the server applies.
  * The first click picks the start, the second the end. No range at all
- * (null) means every day; "Any day" in the popup clears it.
+ * (null) means every day; "Any day" clears it.
  */
 export function DayRangePicker({
   value,
-  label,
-  hint,
   disabled,
   onChange,
 }: {
   value: { from: number; to: number } | null;
-  label: string;
-  hint: string;
   disabled?: boolean;
   onChange: (range: { from: number; to: number } | null) => void;
 }) {
-  const [open, setOpen] = useState(false);
   // The start picked while waiting for the end.
   const [pending, setPending] = useState<number | null>(null);
 
@@ -42,73 +35,58 @@ export function DayRangePicker({
     } else {
       onChange({ from: pending, to: d });
       setPending(null);
-      setOpen(false);
     }
   }
 
+  const status =
+    pending !== null
+      ? `From day ${pending} — now pick the last day`
+      : !value
+        ? "Any day — pick the first pay day, then the last"
+        : value.from === value.to
+          ? `Day ${value.from} only`
+          : `Day ${value.from} – day ${value.to}`;
+
   return (
-    <Popover.Root
-      open={open}
-      onOpenChange={(o) => {
-        setOpen(o);
-        if (!o) setPending(null);
-      }}
-    >
-      <Popover.Trigger
-        disabled={disabled}
-        className="flex h-8 min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-lg border border-input bg-transparent py-2 pr-2 pl-2.5 text-left text-sm whitespace-nowrap outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30 dark:hover:bg-input/50"
-      >
-        <CalendarRange className="size-4 shrink-0 text-muted-foreground" />
-        <span className="flex-1 truncate">{label}</span>
-        <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" />
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Positioner sideOffset={4} align="start" className="isolate z-[60]">
-          <Popover.Popup className="w-64 rounded-lg bg-popover p-3 text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-none">
-            <p className="mb-2 text-xs text-muted-foreground">
-              {pending !== null ? `From day ${pending} — now pick the last day.` : hint}
-            </p>
-            <div className="grid grid-cols-7 gap-1">
-              {DAYS.map((d) => {
-                const isStart = d === start;
-                const isEnd = end !== null && d === end && !isStart;
-                return (
-                  <button
-                    key={d}
-                    type="button"
-                    onClick={() => pick(d)}
-                    className={cn(
-                      "h-8 cursor-pointer rounded-md text-xs tabular-nums transition-colors hover:bg-muted",
-                      inRange(d) && "bg-primary/10",
-                      isStart && "bg-primary font-medium text-primary-foreground hover:bg-primary/90",
-                      isEnd && "bg-primary/25 font-medium ring-1 ring-primary ring-inset",
-                    )}
-                  >
-                    {d}
-                  </button>
-                );
-              })}
-            </div>
-            <p className="mt-2 text-xs text-muted-foreground">
-              {label}
-              {Math.max(start ?? 0, end ?? 0) > 28 && " (the month's last day in shorter months)"}
-            </p>
-            {value && (
-              <button
-                type="button"
-                onClick={() => {
-                  onChange(null);
-                  setPending(null);
-                  setOpen(false);
-                }}
-                className="mt-2 w-full cursor-pointer rounded-md border border-input py-1.5 text-xs hover:bg-muted"
-              >
-                Any day
-              </button>
-            )}
-          </Popover.Popup>
-        </Popover.Positioner>
-      </Popover.Portal>
-    </Popover.Root>
+    <div className={cn("space-y-2", disabled && "pointer-events-none opacity-50")}>
+      <div className="grid grid-cols-7 gap-1">
+        {DAYS.map((d) => {
+          const isStart = d === start;
+          const isEnd = end !== null && d === end && !isStart;
+          return (
+            <button
+              key={d}
+              type="button"
+              disabled={disabled}
+              onClick={() => pick(d)}
+              className={cn(
+                "h-7 cursor-pointer rounded-md text-xs tabular-nums transition-colors hover:bg-muted",
+                inRange(d) && "bg-primary/10",
+                isStart && "bg-primary font-medium text-primary-foreground hover:bg-primary/90",
+                isEnd && "bg-primary/25 font-medium ring-1 ring-primary ring-inset",
+              )}
+            >
+              {d}
+            </button>
+          );
+        })}
+      </div>
+      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+        <span>{status}</span>
+        {(value || pending !== null) && (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => {
+              setPending(null);
+              onChange(null);
+            }}
+            className="cursor-pointer underline-offset-2 hover:text-foreground hover:underline"
+          >
+            Any day
+          </button>
+        )}
+      </div>
+    </div>
   );
 }

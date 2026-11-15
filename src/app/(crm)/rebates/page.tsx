@@ -142,6 +142,7 @@ export default function RebatesPage() {
   const entityName = useStore((s) => s.entityName);
   const userName = useStore((s) => s.userName);
   const playerById = useStore((s) => s.playerById);
+  const updateBonusPlan = useStore((s) => s.updateBonusPlan);
 
   const isViewer = me?.role === "viewer";
   const isAdmin = me?.role === "super_admin";
@@ -397,11 +398,14 @@ export default function RebatesPage() {
   const [editingCutoffs, setEditingCutoffs] = useState(false);
   const [cutoffForm, setCutoffForm] = useState<RebateCutoffs>(DEFAULT_CUTOFFS);
   const [savingCutoffs, setSavingCutoffs] = useState(false);
+  // The period the plan on screen runs on — the ticked row.
+  const [planPeriod, setPlanPeriod] = useState<"daily" | "weekly" | "monthly">("weekly");
 
   function openCutoffs() {
     // data.cutoffs is the plan's casino's own (GET /api/rebates).
     const c = data?.cutoffs ?? DEFAULT_CUTOFFS;
     setCutoffForm({ daily: { ...c.daily }, weekly: { ...c.weekly }, monthly: { ...c.monthly, pay_days: c.monthly.pay_days ?? null } });
+    setPlanPeriod(activePlan?.period ?? "weekly");
     setEditingCutoffs(true);
   }
 
@@ -427,6 +431,14 @@ export default function RebatesPage() {
       return;
     }
     setSavingCutoffs(true);
+    if (activePlan && activePlan.period !== planPeriod) {
+      const moved = await updateBonusPlan(activePlan.plan_id, { period: planPeriod });
+      if (!moved.ok) {
+        setSavingCutoffs(false);
+        toast.error(moved.error ?? `Could not switch ${activePlan.name} to ${planPeriod}`);
+        return;
+      }
+    }
     const res = await fetch("/api/rebates/cutoffs", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -445,6 +457,20 @@ export default function RebatesPage() {
   }
 
   // ---- render ----
+
+  /** A cutoff row's label, ticked when the plan on screen runs on that period. */
+  const periodCheck = (period: "daily" | "weekly" | "monthly", label: string) => (
+    <label className="flex cursor-pointer items-center gap-2 text-sm font-medium">
+      <input
+        type="checkbox"
+        className="cursor-pointer"
+        checked={planPeriod === period}
+        disabled={!canEditCutoffs}
+        onChange={() => setPlanPeriod(period)}
+      />
+      {label}
+    </label>
+  );
 
   const showing = data && activePlan && data.plan.plan_id === activePlan.plan_id ? data : null;
   const payGames = payTarget?.single
@@ -863,21 +889,21 @@ export default function RebatesPage() {
           </DialogDescription>
           <div className="space-y-4 py-2">
             <div className="grid grid-cols-[88px_1fr] items-center gap-3">
-              <Label>Daily</Label>
+              {periodCheck("daily", "Daily")}
               <Input
                 type="time"
                 value={cutoffForm.daily.time}
-                disabled={!canEditCutoffs}
+                disabled={!canEditCutoffs || planPeriod !== "daily"}
                 onChange={(e) => setCutoffForm((f) => ({ ...f, daily: { time: e.target.value } }))}
               />
-              <Label>Weekly</Label>
+              {periodCheck("weekly", "Weekly")}
               <div className="flex gap-2">
                 <Select
                   value={String(cutoffForm.weekly.weekday)}
                   onValueChange={(v) =>
                     setCutoffForm((f) => ({ ...f, weekly: { ...f.weekly, weekday: Number(v) } }))
                   }
-                  disabled={!canEditCutoffs}
+                  disabled={!canEditCutoffs || planPeriod !== "weekly"}
                   items={WEEKDAY_ITEMS}
                 >
                   <SelectTrigger className="w-[150px] cursor-pointer">
@@ -894,21 +920,21 @@ export default function RebatesPage() {
                 <Input
                   type="time"
                   value={cutoffForm.weekly.time}
-                  disabled={!canEditCutoffs}
+                  disabled={!canEditCutoffs || planPeriod !== "weekly"}
                   onChange={(e) =>
                     setCutoffForm((f) => ({ ...f, weekly: { ...f.weekly, time: e.target.value } }))
                   }
                 />
               </div>
-              <Label>Monthly</Label>
+              {periodCheck("monthly", "Monthly")}
               <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground">Day</span>
+                <span className={cn("text-xs text-muted-foreground", planPeriod !== "monthly" && "opacity-50")}>Day</span>
                 <Input
                   type="number"
                   min={1}
                   max={31}
                   value={cutoffForm.monthly.day}
-                  disabled={!canEditCutoffs}
+                  disabled={!canEditCutoffs || planPeriod !== "monthly"}
                   className="w-20"
                   onChange={(e) =>
                     setCutoffForm((f) => ({
@@ -920,26 +946,18 @@ export default function RebatesPage() {
                 <Input
                   type="time"
                   value={cutoffForm.monthly.time}
-                  disabled={!canEditCutoffs}
+                  disabled={!canEditCutoffs || planPeriod !== "monthly"}
                   onChange={(e) =>
                     setCutoffForm((f) => ({ ...f, monthly: { ...f.monthly, time: e.target.value } }))
                   }
                 />
               </div>
             </div>
-            <div className="grid grid-cols-[88px_1fr] items-center gap-3">
-              <Label>Payout days</Label>
+            <div className="grid grid-cols-[88px_1fr] items-start gap-3">
+              <Label className={cn("pt-1.5", planPeriod !== "monthly" && "opacity-50")}>Payout days</Label>
               <DayRangePicker
                 value={cutoffForm.monthly.pay_days ?? null}
-                label={
-                  !cutoffForm.monthly.pay_days
-                    ? "Any day"
-                    : cutoffForm.monthly.pay_days.from === cutoffForm.monthly.pay_days.to
-                      ? `Day ${cutoffForm.monthly.pay_days.from} only`
-                      : `Day ${cutoffForm.monthly.pay_days.from} – day ${cutoffForm.monthly.pay_days.to}`
-                }
-                hint="Pick the first pay day, then the last."
-                disabled={!canEditCutoffs}
+                disabled={!canEditCutoffs || planPeriod !== "monthly"}
                 onChange={(pay_days) =>
                   setCutoffForm((f) => ({ ...f, monthly: { ...f.monthly, pay_days } }))
                 }
