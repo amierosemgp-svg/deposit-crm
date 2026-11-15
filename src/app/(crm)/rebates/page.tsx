@@ -24,7 +24,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { ListLoading } from "@/components/list-loading";
 import { PlayerNameLink } from "@/components/player-name-link";
-import { DayRangePicker, monthlyWindow } from "@/components/day-range-picker";
+import { DayRangePicker } from "@/components/day-range-picker";
 import {
   Dialog,
   DialogContent,
@@ -900,29 +900,6 @@ export default function RebatesPage() {
                   }
                 />
               </div>
-              <Label>Monthly</Label>
-              <div className="flex items-center gap-2">
-                <DayRangePicker
-                  from={cutoffForm.monthly.day}
-                  to={monthlyWindow(cutoffForm.monthly.day, cutoffForm.monthly.time).to}
-                  label={monthlyWindow(cutoffForm.monthly.day, cutoffForm.monthly.time).label}
-                  hint="Pick the day each month's window opens. It closes when the next one opens."
-                  fixedEnd
-                  disabled={!canEditCutoffs}
-                  onChange={({ from }) =>
-                    setCutoffForm((f) => ({ ...f, monthly: { ...f.monthly, day: from } }))
-                  }
-                />
-                <Input
-                  type="time"
-                  value={cutoffForm.monthly.time}
-                  disabled={!canEditCutoffs}
-                  className="w-28 shrink-0"
-                  onChange={(e) =>
-                    setCutoffForm((f) => ({ ...f, monthly: { ...f.monthly, time: e.target.value } }))
-                  }
-                />
-              </div>
             </div>
             <div className="grid grid-cols-[88px_1fr] items-center gap-3">
               <Label>Payout days</Label>
@@ -963,7 +940,7 @@ export default function RebatesPage() {
               </div>
             </div>
             <p className="text-xs text-muted-foreground">
-              A monthly day past the month&apos;s end (the 31st in April) falls on the month&apos;s last day.
+              A pay day past the month&apos;s end (the 31st in April) falls on the month&apos;s last day.
               Payout days limit when a monthly rebate can be paid, in Malaysia time; daily and weekly plans pay any day.
             </p>
           </div>

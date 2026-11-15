@@ -11,26 +11,20 @@ const DAYS = Array.from({ length: 31 }, (_, i) => i + 1);
  * A range of days of the month, picked on a 1–31 grid. A range may wrap past
  * the month's end (day 28 to day 3). A day past a short month's end (the 31st
  * in April) falls on its last day — the same rule the server applies.
- *
- * `fixedEnd` is for a range whose end follows from its start, like the
- * monthly rebate window: one click picks the start. Otherwise the first click
- * picks the start and the second the end.
+ * The first click picks the start, the second the end.
  */
 export function DayRangePicker({
   from,
   to,
   label,
   hint,
-  fixedEnd,
   disabled,
   onChange,
 }: {
   from: number;
-  /** "end" = the month's last day. */
-  to: number | "end";
+  to: number;
   label: string;
   hint: string;
-  fixedEnd?: boolean;
   disabled?: boolean;
   onChange: (range: { from: number; to: number }) => void;
 }) {
@@ -39,15 +33,12 @@ export function DayRangePicker({
   const [pending, setPending] = useState<number | null>(null);
 
   const start = pending ?? from;
-  const end = pending !== null ? null : to === "end" ? 31 : to;
+  const end = pending !== null ? null : to;
   const inRange = (d: number) =>
     end === null ? false : start <= end ? d >= start && d <= end : d >= start || d <= end;
 
   function pick(d: number) {
-    if (fixedEnd) {
-      onChange({ from: d, to: d });
-      setOpen(false);
-    } else if (pending === null) {
+    if (pending === null) {
       setPending(d);
     } else {
       onChange({ from: pending, to: d });
@@ -108,15 +99,4 @@ export function DayRangePicker({
       </Popover.Portal>
     </Popover.Root>
   );
-}
-
-/**
- * The day a monthly window opening on `day` at `time` closes on. Windows run
- * back to back, so it closes where the next one opens: at midnight that is
- * the end of the day before, any other time the same day next month.
- */
-export function monthlyWindow(day: number, time: string): { to: number | "end"; label: string } {
-  if (time !== "00:00") return { to: day, label: `Day ${day} ${time} – day ${day} ${time} next month` };
-  if (day === 1) return { to: "end", label: "Day 1 – end of month" };
-  return { to: day - 1, label: `Day ${day} – day ${day - 1} next month` };
 }
